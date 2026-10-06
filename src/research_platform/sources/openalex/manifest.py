@@ -148,7 +148,11 @@ def _resolve_snapshot_date(
     if parsed_manifest is not None and parsed_context is not None:
         if parsed_manifest != parsed_context:
             raise ValueError("OpenAlex Works manifest snapshot date conflicts with context")
-    return parsed_manifest or parsed_context  # type: ignore[return-value]
+    if parsed_manifest is not None:
+        return parsed_manifest
+    if parsed_context is None:
+        raise ValueError("OpenAlex Works manifest requires a snapshot date")
+    return parsed_context
 
 
 def _calendar_date(value: object) -> date:
@@ -214,7 +218,10 @@ def _optional_count(mapping: Mapping[str, Any], field: str) -> int | None:
 def _updated_date_from_uri(file_uri: str) -> date | None:
     if not isinstance(file_uri, str):
         return None
-    parts = urlsplit(file_uri).path.split("/")
+    try:
+        parts = urlsplit(file_uri).path.split("/")
+    except ValueError:
+        raise ValueError("OpenAlex Works manifest file URI is invalid") from None
     partitions = [part.removeprefix("updated_date=") for part in parts if part.startswith("updated_date=")]
     if not partitions:
         return None

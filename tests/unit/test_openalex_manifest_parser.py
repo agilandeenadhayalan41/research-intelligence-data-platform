@@ -58,13 +58,26 @@ def test_empty_manifest_validates_and_uses_caller_context() -> None:
     ) == ()
 
 
-def test_empty_manifest_does_not_bypass_invalid_context() -> None:
-    with pytest.raises(ValueError, match="dates"):
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("snapshot_date", 1736899200),
+        ("entity", "authors"),
+        ("content_format", "csv"),
+    ],
+)
+def test_empty_manifest_does_not_bypass_invalid_context(field: str, value: Any) -> None:
+    context = {
+        "snapshot_date": "2025-01-15",
+        "entity": "works",
+        "content_format": "jsonl",
+    }
+    context[field] = value
+
+    with pytest.raises(ValueError):
         parse_openalex_works_manifest(
             {"files": []},
-            snapshot_date=1736899200,  # type: ignore[arg-type]
-            entity="works",
-            content_format="jsonl",
+            **context,  # type: ignore[arg-type]
         )
 
 
@@ -234,6 +247,7 @@ def test_unsupported_manifest_context_is_rejected(field: str, value: str) -> Non
         "s3://openalex/data/jsonl/works/part_0000.gz?unsafe",
         "s3://openalex/data/jsonl/works/updated_date=2025-02-30/part_0000.gz",
         "s3://openalex/data/jsonl/works/updated_date=2025-01-13/updated_date=2025-01-14/part_0000.gz",
+        "s3://[invalid/data/jsonl/works/part_0000.gz",
     ],
 )
 def test_unsafe_or_inconsistent_uris_are_rejected(file_uri: str) -> None:
