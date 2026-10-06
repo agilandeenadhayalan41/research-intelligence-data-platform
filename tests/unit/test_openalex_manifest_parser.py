@@ -1,4 +1,5 @@
 import builtins
+import copy
 import json
 import socket
 from datetime import date
@@ -47,6 +48,49 @@ def test_parse_manifest_content_and_multiple_update_partitions() -> None:
     assert {asset.record_count for asset in assets} == {2, 3}
 
 
+def test_valid_parquet_manifest_returns_exact_metadata() -> None:
+    manifest = {
+        "date": "2025-02-01",
+        "format": "parquet",
+        "entity": "works",
+        "files": [
+            {
+                "url": "s3://openalex/data/parquet/works/updated_date=2025-01-31/part_0002.parquet",
+                "meta": {"content_length": 2048, "record_count": 9},
+            }
+        ],
+    }
+
+    assert parse_openalex_works_manifest(manifest) == (
+        OpenAlexAssetMetadata(
+            source="openalex",
+            snapshot_date=date(2025, 2, 1),
+            entity="works",
+            content_format="parquet",
+            file_uri="s3://openalex/data/parquet/works/updated_date=2025-01-31/part_0002.parquet",
+            updated_date=date(2025, 1, 31),
+            byte_size=2048,
+            record_count=9,
+        ),
+    )
+
+
+def test_mapping_json_text_and_utf8_bytes_are_equivalent() -> None:
+    manifest = works_manifest()
+    encoded = json.dumps(manifest, ensure_ascii=False).encode("utf-8")
+
+    assert parse_openalex_works_manifest(manifest) == parse_openalex_works_manifest(
+        encoded.decode("utf-8")
+    )
+    assert parse_openalex_works_manifest(manifest) == parse_openalex_works_manifest(encoded)
+
+
+@pytest.mark.parametrize("content", ["{", b"\xff"])
+def test_invalid_json_and_invalid_utf8_are_rejected(content: str | bytes) -> None:
+    with pytest.raises(ValueError):
+        parse_openalex_works_manifest(content)
+
+
 def test_empty_manifest_validates_and_uses_caller_context() -> None:
     manifest = {"files": []}
 
@@ -92,6 +136,55 @@ def test_missing_optional_file_metadata_remains_unknown() -> None:
     assert asset.byte_size is None
     assert asset.record_count is None
     assert asset.updated_date is None
+
+
+def test_explicit_none_zero_and_partial_optional_metadata_are_distinct() -> None:
+    manifest = works_manifest()
+    manifest["files"] = [
+        {
+            "url": "s3://openalex/data/jsonl/works/part_0000.gz",
+            "meta": {"content_length": None, "record_count": 0},
+        },
+        {
+            "url": "s3://openalex/data/jsonl/works/part_0001.gz",
+            "meta": {"content_length": 0},
+        },
+        {
+            "url": "s3://openalex/data/jsonl/works/part_0002.gz",
+            "meta": {"record_count": None},
+        },
+    ]
+
+    assets = parse_openalex_works_manifest(manifest)
+    by_uri = {asset.file_uri: asset for asset in assets}
+
+    first = by_uri["s3://openalex/data/jsonl/works/part_0000.gz"]
+    second = by_uri["s3://openalex/data/jsonl/works/part_0001.gz"]
+    third = by_uri["s3://openalex/data/jsonl/works/part_0002.gz"]
+
+    assert (first.byte_size, first.record_count) == (None, 0)
+    assert (second.byte_size, second.record_count) == (0, None)
+    assert (third.byte_size, third.record_count) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("field", "context_field", "context_value"),
+    [
+        ("entity", "entity", "works"),
+        ("format", "content_format", "jsonl"),
+    ],
+)
+@pytest.mark.parametrize("has_file", [False, True])
+def test_present_null_entity_and_format_headers_are_rejected(
+    field: str, context_field: str, context_value: str, has_file: bool
+) -> None:
+    manifest = works_manifest()
+    manifest[field] = None
+    if not has_file:
+        manifest["files"] = []
+
+    with pytest.raises(ValueError):
+        parse_openalex_works_manifest(manifest, **{context_field: context_value})
 
 
 def test_manifest_header_and_context_must_agree() -> None:
@@ -248,6 +341,8 @@ def test_unsupported_manifest_context_is_rejected(field: str, value: str) -> Non
         "s3://openalex/data/jsonl/works/updated_date=2025-02-30/part_0000.gz",
         "s3://openalex/data/jsonl/works/updated_date=2025-01-13/updated_date=2025-01-14/part_0000.gz",
         "s3://[invalid/data/jsonl/works/part_0000.gz",
+        "\x00s3://openalex/data/jsonl/works/part_0000.gz",
+        "s3://openalex/data/jsonl/works/part_\x01_0000.gz",
     ],
 )
 def test_unsafe_or_inconsistent_uris_are_rejected(file_uri: str) -> None:
@@ -304,3 +399,12 @@ def test_parser_has_no_network_or_file_side_effects(
 
     assert parse_openalex_works_manifest(works_manifest())
     assert list(tmp_path.iterdir()) == []
+
+
+def test_parser_does_not_mutate_mapping_input() -> None:
+    manifest = works_manifest()
+    original = copy.deepcopy(manifest)
+
+    parse_openalex_works_manifest(manifest)
+
+    assert manifest == original

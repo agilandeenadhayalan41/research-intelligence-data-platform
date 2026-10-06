@@ -181,6 +181,7 @@ permissions. It needs no cloud secrets, database service, or public data downloa
 - No LLM, ML, GenAI, NLP, or knowledge graph implementation is included.
 - Future public sources include AACT/ClinicalTrials, FDA, grants, and patents.
 
-**Next recommended task:** design and test OpenAlex source discovery/manifests
-using tiny public or synthetic fixtures, specifying stable asset identities and
-provenance/replay rules before implementing any downloads or raw landing.
+The OpenAlex Works manifest parser and its metadata/identity contract are
+implemented as offline boundaries. Manifest acquisition, connector integration,
+downloads, and runtime ingestion remain deferred; this README does not prescribe a
+next roadmap task.

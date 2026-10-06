@@ -67,6 +67,8 @@ def parse_openalex_works_manifest(
         file_uri = entry.get("url", _MISSING)
         if not isinstance(file_uri, str):
             raise ValueError("OpenAlex Works manifest file URL must be a string")
+        if any(ord(character) < 32 or ord(character) == 127 for character in file_uri):
+            raise ValueError("OpenAlex Works manifest file URI contains control characters")
 
         raw_metadata = entry.get("meta", {})
         if raw_metadata is None:
@@ -172,11 +174,11 @@ def _calendar_date(value: object) -> date:
 
 def _resolve_entity(manifest: Mapping[str, Any], context_entity: str | None) -> str:
     manifest_entity = manifest.get("entity", _MISSING)
-    for value in (manifest_entity, context_entity):
-        if value is not _MISSING and value is not None:
-            if not isinstance(value, str) or value != "works":
-                raise ValueError("only the OpenAlex works entity is supported")
-    if manifest_entity is _MISSING or manifest_entity is None:
+    if manifest_entity is not _MISSING and manifest_entity != "works":
+        raise ValueError("only the OpenAlex works entity is supported")
+    if context_entity is not None and context_entity != "works":
+        raise ValueError("only the OpenAlex works entity is supported")
+    if manifest_entity is _MISSING:
         manifest_entity = context_entity
     elif context_entity is not None and manifest_entity != context_entity:
         raise ValueError("OpenAlex Works manifest entity conflicts with context")
@@ -189,11 +191,17 @@ def _resolve_content_format(
     manifest: Mapping[str, Any], context_format: str | None
 ) -> str:
     manifest_format = manifest.get("format", _MISSING)
-    for value in (manifest_format, context_format):
-        if value is not _MISSING and value is not None:
-            if not isinstance(value, str) or value not in {"jsonl", "parquet"}:
-                raise ValueError("unsupported OpenAlex Works manifest format")
-    if manifest_format is _MISSING or manifest_format is None:
+    if manifest_format is not _MISSING and (
+        not isinstance(manifest_format, str)
+        or manifest_format not in {"jsonl", "parquet"}
+    ):
+        raise ValueError("unsupported OpenAlex Works manifest format")
+    if context_format is not None and (
+        not isinstance(context_format, str)
+        or context_format not in {"jsonl", "parquet"}
+    ):
+        raise ValueError("unsupported OpenAlex Works manifest format")
+    if manifest_format is _MISSING:
         manifest_format = context_format
     elif context_format is not None and manifest_format != context_format:
         raise ValueError("OpenAlex Works manifest format conflicts with context")
