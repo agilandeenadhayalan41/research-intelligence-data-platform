@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import io
 import json
+import math
 import re
 import socket
 import time
@@ -129,6 +130,8 @@ class _BoundedStream(io.RawIOBase):
         self._max_bytes = max_bytes
         self._expected_bytes = expected_bytes
         self._actual_bytes = 0
+        self._eof = False
+        self._response_closed = False
 
     def readable(self) -> bool:
         return True
@@ -136,6 +139,8 @@ class _BoundedStream(io.RawIOBase):
     def readinto(self, buffer: bytearray | memoryview) -> int:
         if self.closed:
             raise ValueError("I/O operation on closed stream")
+        if self._eof:
+            return 0
         view = memoryview(buffer).cast("B")
         if not view:
             return 0
@@ -153,7 +158,7 @@ class _BoundedStream(io.RawIOBase):
             raise OpenAlexNetworkError("OpenAlex payload stream failed") from None
         if not data:
             self._check_declared_length()
-            self.close()
+            self._finish()
             return 0
         view[: len(data)] = data
         self._actual_bytes += len(data)
@@ -174,7 +179,7 @@ class _BoundedStream(io.RawIOBase):
             self.close()
             raise OpenAlexSizeLimitError("OpenAlex payload exceeds the configured byte limit")
         self._check_declared_length()
-        self.close()
+        self._finish()
 
     def _check_declared_length(self) -> None:
         if self._expected_bytes is not None and self._actual_bytes < self._expected_bytes:
@@ -184,9 +189,18 @@ class _BoundedStream(io.RawIOBase):
     def close(self) -> None:
         if not self.closed:
             try:
-                self._response.close()
+                self._close_response()
             finally:
                 super().close()
+
+    def _finish(self) -> None:
+        self._eof = True
+        self._close_response()
+
+    def _close_response(self) -> None:
+        if not self._response_closed:
+            self._response_closed = True
+            self._response.close()
 
 
 class OpenAlexConnector(SourceConnector):
@@ -204,11 +218,21 @@ class OpenAlexConnector(SourceConnector):
     ) -> None:
         if content_format not in _FORMATS:
             raise OpenAlexFormatError("OpenAlex content format must be jsonl or parquet")
-        if isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+        if (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+        ):
             raise ValueError("timeout_seconds must be positive")
         if type(max_attempts) is not int or max_attempts < 1:
             raise ValueError("max_attempts must be a positive integer")
-        if isinstance(retry_backoff_seconds, bool) or retry_backoff_seconds < 0:
+        if (
+            isinstance(retry_backoff_seconds, bool)
+            or not isinstance(retry_backoff_seconds, (int, float))
+            or not math.isfinite(retry_backoff_seconds)
+            or retry_backoff_seconds < 0
+        ):
             raise ValueError("retry_backoff_seconds must be non-negative")
         self._selection_config = SampleSelectionConfig.model_validate(
             sample_selection.model_dump()
@@ -230,6 +254,8 @@ class OpenAlexConnector(SourceConnector):
 
     def fetch(self, asset: SourceAsset) -> BinaryIO:
         content_format = _validate_source_asset(asset)
+        if content_format != self._content_format:
+            raise OpenAlexFormatError("OpenAlex source URI format differs from the configured format")
         response = self._request(asset.uri)
         try:
             _raise_for_status(response)
@@ -318,7 +344,7 @@ class OpenAlexConnector(SourceConnector):
                     response.close()
                     self._sleep(attempt)
                     continue
-                if status == 404 or status >= 400:
+                if status != 200:
                     raise OpenAlexEndpointUnavailableError(
                         f"OpenAlex endpoint returned HTTP {status}"
                     )
@@ -382,7 +408,7 @@ def _validate_source_asset(asset: SourceAsset) -> str:
         raise OpenAlexEndpointUnavailableError("OpenAlex source URI is invalid") from None
     parts = path.split("/")
     if (
-        len(parts) < 6
+        len(parts) < 5
         or parts[0] != ""
         or parts[1] != "data"
         or parts[2] not in _FORMATS
@@ -413,7 +439,7 @@ def _parse_content_length(value: str | None) -> int | None:
 def _raise_for_status(response: _Response) -> None:
     if response.status in {401, 403}:
         raise OpenAlexAccessDeniedError("OpenAlex denied anonymous public access")
-    if response.status == 404 or response.status >= 400:
+    if response.status != 200:
         raise OpenAlexEndpointUnavailableError(
             f"OpenAlex endpoint returned HTTP {response.status}"
         )
@@ -444,5 +470,5 @@ def _read_bounded(response: _Response, max_bytes: int) -> bytes:
                 raise OpenAlexSizeLimitError("OpenAlex Works manifest exceeds its byte limit")
     except (TimeoutError, socket.timeout):
         raise OpenAlexTimeoutError("OpenAlex manifest request timed out") from None
-    except OSError:
+    except (OSError, http.client.HTTPException):
         raise OpenAlexNetworkError("OpenAlex manifest request failed") from None
