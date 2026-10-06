@@ -1,0 +1,1 @@
+"""Public source connector contracts."""

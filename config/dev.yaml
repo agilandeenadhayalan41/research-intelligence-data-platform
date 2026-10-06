@@ -1,0 +1,6 @@
+# Local-only placeholder, not a deployed development environment.
+environment: dev
+storage:
+  backend: local
+warehouse:
+  analytical: duckdb

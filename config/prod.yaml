@@ -1,0 +1,6 @@
+# Local-only placeholder. Never connect to production during development.
+environment: prod
+storage:
+  backend: local
+warehouse:
+  analytical: duckdb

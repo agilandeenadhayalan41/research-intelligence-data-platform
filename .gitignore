@@ -218,3 +218,26 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Platform secrets and local datasets
+.env.*
+!.env.example
+*service-account*.json
+*service_account*.json
+credentials*.json
+secrets/
+*.pem
+*.key
+data/landing/*
+!data/landing/.gitkeep
+data/manifests/*
+!data/manifests/.gitkeep
+data/sample/*
+!data/sample/.gitkeep
+*.parquet
+*.arrow
+*.duckdb
+*.duckdb.wal
+*.jsonl
+*.jsonl.gz
+node_modules/
