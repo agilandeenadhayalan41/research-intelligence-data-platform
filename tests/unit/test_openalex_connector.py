@@ -186,6 +186,15 @@ def test_fetch_streams_chunks_and_closes_on_caller_eof() -> None:
     stream.close()
 
 
+def test_closing_an_abandoned_stream_releases_the_response() -> None:
+    response = FakeResponse(b"unread")
+    stream = connector(FakeClient(response)).fetch(asset())
+
+    stream.close()
+
+    assert response.closed
+
+
 @pytest.mark.parametrize(
     ("headers", "body"),
     [
@@ -251,13 +260,15 @@ def test_fetch_rejects_response_with_unexpected_content_type() -> None:
 
 def test_timeout_retry_and_transient_status_retries_are_bounded() -> None:
     retried = FakeResponse(manifest())
-    client = FakeClient(TimeoutError(), FakeResponse(b"", status=503), retried)
+    transient = FakeResponse(b"", status=503)
+    client = FakeClient(TimeoutError(), transient, retried)
     adapter = connector(client)
 
     assert list(adapter.discover()) == [asset()]
     assert len(client.calls) == 3
     assert all(call[1] == 2 for call in client.calls)
     assert all(call[2] == {"Accept-Encoding": "identity"} for call in client.calls)
+    assert transient.closed
     assert retried.closed
 
 

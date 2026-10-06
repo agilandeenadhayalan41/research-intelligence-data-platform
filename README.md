@@ -9,11 +9,11 @@ access or proprietary data.
 This repository currently provides Python packaging, validated YAML configuration,
 typed adapter contracts and fail-fast skeletons, structured JSON logging,
 provenance metadata, a pure OpenAlex Works manifest parser and deterministic
-size-bounded metadata sample selector, local PostgreSQL Compose tooling, offline
-tests, and CI.
-**No ingestion, network requests, database connections, or cloud provisioning are
-implemented.** All adapter operations raise `NotImplementedError`; constructing an
-adapter or loading configuration has no service side effects.
+size-bounded metadata sample selector, bounded anonymous OpenAlex snapshot manifest
+discovery and file streaming, local PostgreSQL Compose tooling, offline tests, and
+CI. The OpenAlex connector is the only implemented runtime network adapter; storage
+and warehouse adapters remain fail-fast skeletons. Constructing an adapter or
+loading configuration has no service side effects.
 
 ## Architecture
 
@@ -56,17 +56,37 @@ semantics are defined by the ObjectStore contract but are not implemented yet.
 | `OpenAlexAssetMetadata` | Validates one current-layout OpenAlex snapshot file description |
 | `parse_openalex_works_manifest()` | Purely parses caller-provided current Works manifest content; no discovery or downloads |
 | `select_openalex_works_sample()` | Selects bounded eligible metadata only; no object reads/writes or downloads |
+| `OpenAlexConnector` | Anonymous manifest-only discovery plus size-limited streaming retrieval |
 | `ObjectStore` | `put_if_absent()` requires provenance and never overwrites; `open()` is read-only |
 | `Warehouse` | `query()` accepts bound parameters and returns a PyArrow table |
 
-Skeletons: OpenAlex connector; local/GCS object stores; PostgreSQL, BigQuery, and
-DuckDB warehouses. Cloud SDKs and PostgreSQL drivers are deliberately deferred.
+Skeletons: local/GCS object stores; PostgreSQL, BigQuery, and DuckDB warehouses.
+Cloud SDKs and PostgreSQL drivers are deliberately deferred.
 DuckDB is available as a development dependency for offline analytical tests.
 Warehouse SQL and parameter conventions remain backend-specific; the interface
 does not promise portable SQL. Writes/migrations need later explicit contracts.
 The OpenAlex Works manifest parser, snapshot metadata model, identity and duplicate
 rules, and bounded sample-selection contract are specified in
 [the OpenAlex discovery and manifest contract](docs/architecture/openalex-manifest-contract.md).
+
+The connector defaults to the current Works JSON Lines manifest at
+`https://openalex.s3.amazonaws.com/data/jsonl/works/manifest.json`. Public OpenAlex
+documentation describes the `openalex` S3 bucket and anonymous access (AWS CLI
+examples use `--no-sign-request`); this adapter uses anonymous HTTPS only and never
+uses AWS credential discovery. `jsonl` is gzip-compressed `.gz`; Parquet is
+Snappy-compressed `.parquet`. Discovery reads a manifest capped at 1,000,000 bytes,
+then applies the existing selector (default one file, 25,000,000 bytes). Fetching
+streams from the fixed public bucket and independently enforces actual returned
+bytes. The [architecture contract](docs/architecture/openalex-manifest-contract.md)
+records the live connectivity observation and any environment limitation.
+
+The network check is opt-in and reads only the bounded Works manifest:
+
+```bash
+python -m research_platform.sources.openalex.connectivity
+```
+
+It is not invoked by tests or `make test`.
 
 ## Local development
 
@@ -139,7 +159,7 @@ config/                  Local and future environment YAML templates
 src/research_platform/
   common/                Structured logging
   config/                Configuration models and loader
-  sources/openalex/      Public source connector skeleton
+  sources/openalex/      Public OpenAlex manifest parser and bounded connector
   ingestion/             Reserved: future orchestration
   storage/               Immutable ObjectStore contract; local/GCS skeletons
   warehouse/             Warehouse contract; PostgreSQL/BigQuery/DuckDB skeletons
@@ -167,11 +187,12 @@ introduced yet.
 
 ## Tests and CI
 
-`pytest` covers configuration/environment validation, adapter contracts and
-fail-fast behavior, provenance, JSON logging, and an offline DuckDB/PyArrow
-interoperability smoke test using synthetic data. GitHub Actions runs install,
+`pytest` covers configuration/environment validation, adapter contracts, bounded
+OpenAlex connector behavior with synthetic responses, provenance, JSON logging, and
+an offline DuckDB/PyArrow interoperability smoke test. GitHub Actions runs install,
 checks, tests, and wheel packaging on Python 3.12 with read-only repository
-permissions. It needs no cloud secrets, database service, or public data downloads.
+permissions. It needs no cloud secrets, database service, or public data downloads;
+the opt-in connectivity check is not part of CI.
 
 ## Security and deferred work
 
@@ -184,7 +205,7 @@ permissions. It needs no cloud secrets, database service, or public data downloa
 - No LLM, ML, GenAI, NLP, or knowledge graph implementation is included.
 - Future public sources include AACT/ClinicalTrials, FDA, grants, and patents.
 
-The OpenAlex Works manifest parser and its metadata/identity contract are
-implemented as offline boundaries. Manifest acquisition, connector integration,
-downloads, and runtime ingestion remain deferred; this README does not prescribe a
-next roadmap task.
+The OpenAlex Works manifest parser and bounded selector remain offline boundaries.
+The connector acquires only the selected-format Works manifest and provides
+caller-owned bounded streams; it does not write raw data or connect to storage,
+warehouses, or other runtime services.

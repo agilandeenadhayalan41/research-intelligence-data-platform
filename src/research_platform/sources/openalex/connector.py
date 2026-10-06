@@ -10,6 +10,7 @@ import re
 import socket
 import time
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import BinaryIO, Protocol
 from urllib.parse import urlsplit
 
@@ -153,6 +154,12 @@ class _BoundedStream(io.RawIOBase):
         except (TimeoutError, socket.timeout):
             self.close()
             raise OpenAlexTimeoutError("OpenAlex payload stream timed out") from None
+        except http.client.IncompleteRead:
+            self.close()
+            raise OpenAlexTruncatedError("OpenAlex payload response ended unexpectedly") from None
+        except http.client.HTTPException:
+            self.close()
+            raise OpenAlexNetworkError("OpenAlex payload stream failed") from None
         except OSError:
             self.close()
             raise OpenAlexNetworkError("OpenAlex payload stream failed") from None
@@ -172,6 +179,12 @@ class _BoundedStream(io.RawIOBase):
         except (TimeoutError, socket.timeout):
             self.close()
             raise OpenAlexTimeoutError("OpenAlex payload stream timed out") from None
+        except http.client.IncompleteRead:
+            self.close()
+            raise OpenAlexTruncatedError("OpenAlex payload response ended unexpectedly") from None
+        except http.client.HTTPException:
+            self.close()
+            raise OpenAlexNetworkError("OpenAlex payload stream failed") from None
         except OSError:
             self.close()
             raise OpenAlexNetworkError("OpenAlex payload stream failed") from None
@@ -247,6 +260,10 @@ class OpenAlexConnector(SourceConnector):
     def manifest_uri(self) -> str:
         return f"s3://{_S3_BUCKET}{_FORMATS[self._content_format][0]}"
 
+    @property
+    def public_manifest_endpoint(self) -> str:
+        return f"https://{_PUBLIC_HOST}{_FORMATS[self._content_format][0]}"
+
     def discover(self) -> Iterable[SourceAsset]:
         assets, _ = self._load_manifest()
         selection = select_openalex_works_sample(assets, self._selection_config)
@@ -278,7 +295,7 @@ class OpenAlexConnector(SourceConnector):
         """Read only the bounded public Works manifest; never fetch a data object."""
         _, actual_format = self._load_manifest()
         return PublicConnectivityResult(
-            endpoint=f"https://{_PUBLIC_HOST}{_FORMATS[self._content_format][0]}",
+            endpoint=self.public_manifest_endpoint,
             access_mode="anonymous public HTTPS",
             expected_format=self._content_format,
             actual_format=actual_format,
@@ -300,19 +317,20 @@ class OpenAlexConnector(SourceConnector):
             response.close()
         try:
             decoded = json.loads(content)
-            declared_format = decoded.get("format") if isinstance(decoded, dict) else None
-            if declared_format not in _FORMATS:
-                raise OpenAlexFormatError("OpenAlex Works manifest declares an unsupported format")
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise OpenAlexManifestError("OpenAlex Works manifest is malformed") from None
+        if not isinstance(decoded, dict):
+            raise OpenAlexManifestError("OpenAlex Works manifest is malformed") from None
+        declared_format = decoded.get("format")
+        if not isinstance(declared_format, str) or declared_format not in _FORMATS:
+            raise OpenAlexFormatError("OpenAlex Works manifest declares an unsupported format")
+        try:
             assets = parse_openalex_works_manifest(
                 content, content_format=self._content_format, entity="works"
             )
-        except OpenAlexFormatError:
-            raise
         except ValueError as error:
             if "format" in str(error).lower() or "unsupported" in str(error).lower():
                 raise OpenAlexFormatError("OpenAlex Works manifest format is unexpected") from None
-            raise OpenAlexManifestError("OpenAlex Works manifest is malformed") from None
-        except (UnicodeDecodeError, json.JSONDecodeError):
             raise OpenAlexManifestError("OpenAlex Works manifest is malformed") from None
         if declared_format != self._content_format:
             raise OpenAlexFormatError("OpenAlex Works manifest format differs from the requested format")
@@ -329,7 +347,7 @@ class OpenAlexConnector(SourceConnector):
                     raise OpenAlexTimeoutError("OpenAlex request timed out") from None
                 self._sleep(attempt)
                 continue
-            except OSError:
+            except (OSError, http.client.HTTPException):
                 if attempt + 1 == self._max_attempts:
                     raise OpenAlexNetworkError("OpenAlex request failed") from None
                 self._sleep(attempt)
@@ -359,21 +377,13 @@ class OpenAlexConnector(SourceConnector):
             time.sleep(self._backoff * (2**attempt))
 
 
+@dataclass(frozen=True)
 class PublicConnectivityResult:
-    def __init__(
-        self,
-        *,
-        endpoint: str,
-        access_mode: str,
-        expected_format: str,
-        actual_format: str,
-        manifest_byte_limit: int,
-    ) -> None:
-        self.endpoint = endpoint
-        self.access_mode = access_mode
-        self.expected_format = expected_format
-        self.actual_format = actual_format
-        self.manifest_byte_limit = manifest_byte_limit
+    endpoint: str
+    access_mode: str
+    expected_format: str
+    actual_format: str
+    manifest_byte_limit: int
 
     def as_dict(self) -> dict[str, str | int]:
         return {
@@ -390,13 +400,35 @@ def _public_path(uri: str) -> str:
     if (
         parsed.scheme != "s3"
         or parsed.netloc != _S3_BUCKET
+        or "?" in uri
+        or "#" in uri
         or parsed.query
         or parsed.fragment
         or parsed.username is not None
         or parsed.password is not None
     ):
         raise OpenAlexEndpointUnavailableError("OpenAlex URI is outside the public bucket")
-    return parsed.path
+    path = parsed.path
+    parts = path.split("/")
+    if (
+        len(parts) < 5
+        or parts[0] != ""
+        or parts[1] != "data"
+        or parts[2] not in _FORMATS
+        or parts[3] != "works"
+        or any(part in {"", ".", ".."} for part in parts[1:])
+        or "%" in path
+        or "\\" in path
+        or not path.isascii()
+        or any(ord(character) < 32 or character.isspace() for character in path)
+    ):
+        raise OpenAlexEndpointUnavailableError("OpenAlex URI has an unsafe object path")
+    format_name = parts[2]
+    if path != _FORMATS[format_name][0] and not parts[-1].endswith(
+        _FORMATS[format_name][1]
+    ):
+        raise OpenAlexFormatError("OpenAlex URI suffix does not match its format")
+    return path
 
 
 def _validate_source_asset(asset: SourceAsset) -> str:
@@ -413,9 +445,11 @@ def _validate_source_asset(asset: SourceAsset) -> str:
         or parts[1] != "data"
         or parts[2] not in _FORMATS
         or parts[3] != "works"
-        or parts[-1].endswith(_FORMATS[parts[2]][1]) is False
+        or not parts[-1].endswith(_FORMATS[parts[2]][1])
         or any(part in {"", ".", ".."} for part in parts[1:])
         or "%" in path
+        or "\\" in path
+        or not path.isascii()
         or any(ord(character) < 32 or character.isspace() for character in path)
     ):
         raise OpenAlexFormatError("OpenAlex source URI has an unsupported namespace or format")
@@ -470,5 +504,7 @@ def _read_bounded(response: _Response, max_bytes: int) -> bytes:
                 raise OpenAlexSizeLimitError("OpenAlex Works manifest exceeds its byte limit")
     except (TimeoutError, socket.timeout):
         raise OpenAlexTimeoutError("OpenAlex manifest request timed out") from None
+    except http.client.IncompleteRead:
+        raise OpenAlexTruncatedError("OpenAlex Works manifest response ended unexpectedly") from None
     except (OSError, http.client.HTTPException):
         raise OpenAlexNetworkError("OpenAlex manifest request failed") from None
