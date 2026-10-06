@@ -1,0 +1,10 @@
+{
+  "source": "openalex",
+  "snapshot_date": "2025-01-15",
+  "entity": "works",
+  "file_uri": "s3://openalex/data/jsonl/works/updated_date=2025-01-14/part_0000.gz",
+  "byte_size": 1234,
+  "record_count": 7,
+  "updated_date": "2025-01-14",
+  "content_format": "jsonl"
+}
