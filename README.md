@@ -51,7 +51,8 @@ semantics are defined by the ObjectStore contract but are not implemented yet.
 | Contract | Phase 1 boundary |
 | --- | --- |
 | `SourceConnector` | `discover()` returns manifest assets; `fetch()` returns a caller-owned stream |
-| `OpenAlexAssetMetadata` | Validates one current-layout OpenAlex snapshot file description; does not parse manifests |
+| `OpenAlexAssetMetadata` | Validates one current-layout OpenAlex snapshot file description |
+| `parse_openalex_works_manifest()` | Purely parses caller-provided current Works manifest content; no discovery or downloads |
 | `ObjectStore` | `put_if_absent()` requires provenance and never overwrites; `open()` is read-only |
 | `Warehouse` | `query()` accepts bound parameters and returns a PyArrow table |
 
@@ -60,8 +61,8 @@ DuckDB warehouses. Cloud SDKs and PostgreSQL drivers are deliberately deferred.
 DuckDB is available as a development dependency for offline analytical tests.
 Warehouse SQL and parameter conventions remain backend-specific; the interface
 does not promise portable SQL. Writes/migrations need later explicit contracts.
-The OpenAlex snapshot metadata model, identity and duplicate rules, and safe future
-sample-selection boundary are specified in
+The OpenAlex Works manifest parser, snapshot metadata model, identity and duplicate
+rules, and safe future sample-selection boundary are specified in
 [the OpenAlex discovery and manifest contract](docs/architecture/openalex-manifest-contract.md).
 
 ## Local development
@@ -180,6 +181,7 @@ permissions. It needs no cloud secrets, database service, or public data downloa
 - No LLM, ML, GenAI, NLP, or knowledge graph implementation is included.
 - Future public sources include AACT/ClinicalTrials, FDA, grants, and patents.
 
-**Next recommended task:** design and test OpenAlex source discovery/manifests
-using tiny public or synthetic fixtures, specifying stable asset identities and
-provenance/replay rules before implementing any downloads or raw landing.
+The OpenAlex Works manifest parser and its metadata/identity contract are
+implemented as offline boundaries. Manifest acquisition, connector integration,
+downloads, and runtime ingestion remain deferred; this README does not prescribe a
+next roadmap task.
