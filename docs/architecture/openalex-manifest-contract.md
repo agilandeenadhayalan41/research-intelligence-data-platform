@@ -1,9 +1,9 @@
 # OpenAlex discovery and manifest contract
 
 This document defines an offline metadata boundary for one file in a current-layout
-OpenAlex snapshot. It does not implement manifest parsing, discovery, sample
-selection, network access, or landing. `OpenAlexConnector.discover()` and `fetch()`
-remain fail-fast skeletons.
+OpenAlex snapshot and the pure parser for current Works per-entity manifests.
+Discovery, sample selection, network access, and landing are not implemented.
+`OpenAlexConnector.discover()` and `fetch()` remain fail-fast skeletons.
 
 ## Public format facts and contract assumptions
 
@@ -25,8 +25,7 @@ The typed model deliberately represents the manifest's declared `format`
 object remains `jsonl`; it is never interpreted as Parquet. The model accepts only
 the currently documented `s3://openalex/data/{jsonl|parquet}/...` namespace and
 corresponding file suffixes. Pre-2026 legacy snapshot layouts are not part of this
-contract. These validation choices are contract rules, not claims that a parser or
-snapshot compatibility layer exists.
+contract.
 
 ## Metadata boundary
 
@@ -35,16 +34,20 @@ snapshot compatibility layer exists.
 | Model value | Manifest/discovery source |
 | --- | --- |
 | `source` | Discovery context: fixed to `openalex`, not a per-file manifest value |
-| `snapshot_date` | The manifest's `date`, carried from the manifest context to each file |
-| `entity`, `content_format` | Manifest context (`entity` and declared `format`) |
+| `snapshot_date` | The per-entity manifest's `date`, or explicit caller context when omitted |
+| `entity`, `content_format` | Per-entity manifest's `entity` and `format`, or explicit caller context when omitted |
 | `file_uri` | Per-file manifest `url` |
 | `byte_size`, `record_count` | Per-file `meta.content_length` and `meta.record_count` |
-| `updated_date` | The file's `updated_date=...` URI partition, only when unambiguously supplied by a future discovery layer |
+| `updated_date` | The file's single `updated_date=...` URI partition, when present |
 
-The combined manifest groups per-entity metadata, so a future discovery layer must
-carry the applicable context into each asset. This contract does not load, parse,
-or infer values from manifest JSON. Unknown optional values remain `None`, never
-fabricated as zero.
+The parser accepts one per-entity manifest only. Its `files` array and `url` values
+are input data; the parser never treats a string as a path or fetches a URL. If the
+manifest omits `date`, `entity`, or `format`, the corresponding explicit parser
+argument may supply it. When both a manifest value and caller context are present,
+they must agree. Context is validated even for an empty `files` array. Per-file
+metadata and aggregate totals may be omitted; unknown per-file size/count values
+remain `None`, never fabricated as zero. Unknown manifest, file, and `meta` fields
+are rejected.
 
 ## Validation, dates, and URIs
 
@@ -78,7 +81,48 @@ by identity. If two descriptions have the same identity but differ in any metada
 it raises `ValueError` rather than allowing iteration order to pick a winner.
 `asset_id` identifies the source object; it is not a content checksum. The SHA-256
 in future ingestion provenance must be calculated from the bytes actually
-retrieved. Manifest metadata and byte-derived checksums are separate facts.
+retrieved. Manifest metadata and byte-derived checksums are separate facts. The
+parser does not manufacture checksums, run IDs, retrieval times, or ingestion
+provenance.
+
+## Parser API and supported scope
+
+`research_platform.sources.openalex.parse_openalex_works_manifest(content, *,
+snapshot_date=None, entity=None, content_format=None)` returns a tuple of validated
+`OpenAlexAssetMetadata` entries. `content` may be JSON text, UTF-8 JSON bytes, or an
+already-decoded mapping. It cannot be a filesystem path or URL. The implementation
+is pure with respect to external resources: it performs no I/O, network requests,
+downloads, writes, discovery, or selection.
+
+The supported format is the currently documented per-entity Works manifest for
+either `jsonl`/gzip (`.gz`) or `parquet`/Snappy (`.parquet`), with top-level `date`,
+`format`, `entity`, and `files`; optional totals are `record_count` and
+`content_length`. Each file has `url` and optional `meta.content_length` and
+`meta.record_count`. Counts and sizes must be non-negative integers (not booleans,
+strings, or fractional values). Duplicate JSON object keys, unknown fields,
+malformed structures, conflicting context, unsafe/inconsistent file URIs, and
+unsupported entity/format values fail explicitly. Exact repeated assets collapse;
+conflicting descriptions for one stable identity fail; results are sorted by
+identity regardless of input entry order. Combined manifests, pre-2026 layouts,
+other entities, downloads, and future source formats are deliberately excluded.
+
+Example using caller-owned data:
+
+```python
+from research_platform.sources.openalex import parse_openalex_works_manifest
+
+assets = parse_openalex_works_manifest(manifest_json)
+```
+
+`OpenAlexConnector` remains a fail-fast skeleton in this phase. In a later task,
+its discovery implementation can pass content obtained by its caller and any
+separate expected context to this parser, then adapt the returned metadata to
+`SourceAsset`; this PR does not wire the connector or acquire the manifest.
+
+Tests use small in-memory synthetic manifests only. No OpenAlex snapshot object
+or manifest file is downloaded. The model fixture at
+`tests/fixtures/openalex_asset.json` is also synthetic: dates, sizes, counts, and
+source paths are illustrative.
 
 ## Future flow
 
@@ -97,7 +141,3 @@ workloads. The existing `SourceAsset(source, identifier, uri)` interface is
 preserved: `to_source_asset()` adapts the validated metadata using the stable
 `asset_id`. Connector discovery/fetch, storage, and warehouse operations continue
 to raise `NotImplementedError`.
-
-The fixture at `tests/fixtures/openalex_asset.json` is deliberately synthetic:
-its dates, sizes, counts, and source paths are illustrative only and are not a
-downloaded snapshot.
