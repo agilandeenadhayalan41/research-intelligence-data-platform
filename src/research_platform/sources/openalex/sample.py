@@ -50,12 +50,15 @@ def select_openalex_works_sample(
     """Select the smallest eligible assets without reading or writing objects.
 
     Candidates sort by byte size ascending, then updated date ascending (assets
-    without that optional partition sort before dated assets), then file URI
-    ascending. Exact duplicates collapse and conflicting duplicate identities
-    are rejected by the existing metadata contract.
+    without that optional partition sort before dated assets), file URI ascending,
+    and stable asset ID ascending. Exact repeated metadata collapses; conflicting
+    descriptions of one identity, including values that compare equal but have
+    different types, are rejected before the existing duplicate helper is called.
     """
     config = SampleSelectionConfig.model_validate(config.model_dump())
-    unique = unique_assets(assets)
+    candidates = tuple(assets)
+    _reject_conflicting_descriptions(candidates)
+    unique = unique_assets(candidates)
     eligible: list[OpenAlexAssetMetadata] = []
     skipped: list[SkippedOpenAlexAsset] = []
 
@@ -77,6 +80,7 @@ def select_openalex_works_sample(
             asset.updated_date is not None,
             asset.updated_date or date.min,
             asset.file_uri,
+            asset.asset_id,
         )
     )
     selected = tuple(eligible[: config.max_files])
@@ -93,6 +97,23 @@ def select_openalex_works_sample(
         selected=selected,
         skipped=tuple(skipped),
     )
+
+
+def _reject_conflicting_descriptions(
+    assets: tuple[OpenAlexAssetMetadata, ...],
+) -> None:
+    signatures_by_identity: dict[str, tuple[tuple[str, type[object], object], ...]] = {}
+    for asset in assets:
+        if not isinstance(asset, OpenAlexAssetMetadata):
+            raise TypeError("sample selection requires OpenAlexAssetMetadata entries")
+        signature = tuple(
+            (name, type(getattr(asset, name)), getattr(asset, name))
+            for name in OpenAlexAssetMetadata.model_fields
+        )
+        previous = signatures_by_identity.get(asset.asset_id)
+        if previous is not None and previous != signature:
+            raise ValueError("conflicting metadata for an OpenAlex asset identity")
+        signatures_by_identity[asset.asset_id] = signature
 
 
 def _skip_reason(

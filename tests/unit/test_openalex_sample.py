@@ -1,3 +1,6 @@
+import builtins
+import copy
+import socket
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -154,6 +157,105 @@ def test_exact_duplicates_collapse_and_conflicting_duplicates_fail() -> None:
         select_openalex_works_sample([duplicate, conflicting])
 
 
+@pytest.mark.parametrize("invalid_size", [True, 1.0])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_type_distinct_duplicate_sizes_are_conflicts_in_both_orders(
+    invalid_size: bool | float, reverse: bool
+) -> None:
+    valid = asset("typed-duplicate", byte_size=1)
+    invalid = valid.model_copy(update={"byte_size": invalid_size})
+    inputs = [invalid, valid] if reverse else [valid, invalid]
+
+    with pytest.raises(ValueError, match="conflicting metadata"):
+        select_openalex_works_sample(inputs)
+
+
+def test_equal_size_date_and_uri_across_snapshots_use_asset_id_tiebreaker() -> None:
+    first_snapshot = asset(
+        "same-uri", byte_size=1, snapshot_date=date(2025, 1, 15), updated_date=date(2025, 1, 14)
+    )
+    second_snapshot = asset(
+        "same-uri", byte_size=1, snapshot_date=date(2025, 1, 16), updated_date=date(2025, 1, 14)
+    )
+    expected = min((first_snapshot, second_snapshot), key=lambda item: item.asset_id)
+
+    forward = select_openalex_works_sample(
+        [first_snapshot, second_snapshot], SampleSelectionConfig(max_files=1)
+    )
+    reverse = select_openalex_works_sample(
+        [second_snapshot, first_snapshot], SampleSelectionConfig(max_files=1)
+    )
+
+    assert forward.selected == reverse.selected == (expected,)
+
+
+def test_yaml_sample_selection_overrides_are_enforced(tmp_path: Path) -> None:
+    path = tmp_path / "local.yaml"
+    path.write_text(
+        "sample_selection:\n  max_files: 2\n  max_file_size_bytes: 3\n",
+        encoding="utf-8",
+    )
+    config = load_config(path, environ={}).sample_selection
+    inputs = [asset("one", byte_size=1), asset("two", byte_size=2),
+              asset("three", byte_size=3), asset("four", byte_size=4)]
+
+    report = select_openalex_works_sample(inputs, config)
+
+    assert report.max_files == 2
+    assert report.max_file_size_bytes == 3
+    assert [item.byte_size for item in report.selected] == [1, 2]
+    assert report.eligible_count == 3
+    assert set(reason_map(report).values()) == {"FILE_LIMIT_REACHED", "OVERSIZED"}
+
+
+@pytest.mark.parametrize(
+    "field_value",
+    ["0", "-1", "true", "1.5", '"2"'],
+)
+@pytest.mark.parametrize("field", ["max_files", "max_file_size_bytes"])
+def test_yaml_rejects_invalid_sample_selection_limits(
+    tmp_path: Path, field: str, field_value: str
+) -> None:
+    path = tmp_path / "invalid.yaml"
+    path.write_text(f"sample_selection:\n  {field}: {field_value}\n", encoding="utf-8")
+
+    with pytest.raises(ValidationError):
+        load_config(path, environ={})
+
+
+@pytest.mark.parametrize("size", [-1, True, 1.0, "1"])
+def test_invalid_byte_sizes_are_never_selected(size: object) -> None:
+    invalid = asset("invalid-size").model_copy(update={"byte_size": size})
+
+    report = select_openalex_works_sample([invalid])
+
+    assert report.eligible_count == 0
+    assert report.selected == ()
+    assert report.skipped[0].reason == "INVALID_SIZE"
+
+
+def test_selector_has_no_io_or_service_side_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs = [asset("one", byte_size=1), asset("two", byte_size=2)]
+    original = copy.deepcopy(inputs)
+
+    def reject_side_effect(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("sample selection must not access services or files")
+
+    monkeypatch.setattr(socket, "socket", reject_side_effect)
+    monkeypatch.setattr(builtins, "open", reject_side_effect)
+    monkeypatch.setattr(Path, "open", reject_side_effect)
+    monkeypatch.setattr(Path, "write_bytes", reject_side_effect)
+    monkeypatch.setattr(Path, "write_text", reject_side_effect)
+
+    report = select_openalex_works_sample(inputs)
+
+    assert report.selected == (inputs[0],)
+    assert inputs == original
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_wrong_entity_and_unsupported_format_are_excluded() -> None:
     wrong_entity = asset("author", entity="authors")
     valid = asset("format")
@@ -186,6 +288,25 @@ def test_snapshot_and_updated_date_partitions_are_applied() -> None:
     assert set(reason_map(report).values()) == {
         "SNAPSHOT_MISMATCH",
         "UPDATED_DATE_MISMATCH",
+    }
+
+
+def test_skip_reason_precedence_is_stable_for_multiple_failures() -> None:
+    wrong_entity_and_oversized = asset(
+        "author", entity="authors", byte_size=25_000_001
+    )
+    snapshot_mismatch_and_oversized = asset(
+        "snapshot", snapshot_date=date(2025, 1, 16), byte_size=25_000_001
+    )
+
+    report = select_openalex_works_sample(
+        [wrong_entity_and_oversized, snapshot_mismatch_and_oversized],
+        snapshot_date=date(2025, 1, 15),
+    )
+
+    assert reason_map(report) == {
+        wrong_entity_and_oversized.file_uri: "WRONG_ENTITY",
+        snapshot_mismatch_and_oversized.file_uri: "SNAPSHOT_MISMATCH",
     }
 
 

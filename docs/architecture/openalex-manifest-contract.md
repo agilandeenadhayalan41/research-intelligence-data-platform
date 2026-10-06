@@ -132,22 +132,52 @@ source paths are illustrative.
 must be positive strict integers; zero, negative values, booleans, strings, and
 fractional values are rejected.
 
-The selector first collapses exact repeated identities and rejects conflicting
-descriptions using `unique_assets()`. It excludes non-Works entities, unsupported
-formats, requested snapshot/update partition mismatches, unknown or invalid byte
-sizes, and files larger than the configured size bound. `eligible_count` is the
-number that pass these metadata checks before applying the file-count limit. A
-report with no eligible or selected files is explicit: it has
-`eligible_count=0`, an empty selection, and skip details for excluded assets.
+Before deduplication, the selector compares each same-identity description using
+both field values and their types. Exact repeated descriptions collapse through
+`unique_assets()`. Any conflicting description for an identity is consistently
+rejected with `ValueError`, including a valid size of `1` paired with an invalid
+boolean `True` or float `1.0`; input order cannot choose which metadata survives.
+This duplicate conflict rule does not weaken the validated metadata model or
+`unique_assets()` contract. A lone malformed size is reported as `INVALID_SIZE`
+and cannot be selected.
+
+The selector excludes non-Works entities, unsupported formats, requested
+snapshot/update partition mismatches, unknown or invalid byte sizes, and files
+larger than the configured size bound. If an asset fails multiple conditions,
+the reported reason is the first matching condition in this precedence:
+`WRONG_ENTITY`, `UNSUPPORTED_FORMAT`, `SNAPSHOT_MISMATCH`,
+`UPDATED_DATE_MISMATCH`, `UNKNOWN_SIZE`, `INVALID_SIZE`, `OVERSIZED`.
+`FILE_LIMIT_REACHED` is used only for otherwise eligible assets after ranking.
+`eligible_count` is the number that pass these metadata checks before applying
+the file-count limit. A report with no eligible or selected files is explicit:
+it has `eligible_count=0`, an empty selection, and skip details for excluded
+assets.
 
 Eligible assets are ranked by ascending `byte_size`, then ascending
 `updated_date`, then ascending `file_uri`. Because `updated_date` is optional,
 assets without it sort before assets with a date when byte sizes tie. The first
-`max_files` are selected. Skipped metadata is sorted by stable `asset_id`; each
-entry has one safe reason code (`UNKNOWN_SIZE`, `INVALID_SIZE`, `OVERSIZED`,
-`WRONG_ENTITY`, `UNSUPPORTED_FORMAT`, `SNAPSHOT_MISMATCH`,
-`UPDATED_DATE_MISMATCH`, or `FILE_LIMIT_REACHED`). The report contains only
-validated asset metadata and configured bounds, not credentials or payload data.
+`max_files` are selected; stable `asset_id` ascending breaks any remaining tie,
+including equal size/date/URI entries from different snapshots. Skipped metadata
+is sorted by stable `asset_id`; each entry has one safe reason code. The report
+contains only asset metadata and configured bounds, not credentials or payload
+data.
+
+```python
+from datetime import date
+
+from research_platform.sources.openalex import (
+    parse_openalex_works_manifest,
+    select_openalex_works_sample,
+)
+
+assets = parse_openalex_works_manifest(manifest_json)
+selection = select_openalex_works_sample(
+    assets,
+    config.sample_selection,
+    snapshot_date=date(2025, 1, 15),
+    updated_date=date(2025, 1, 14),
+)
+```
 
 ```text
 Manifest
@@ -176,8 +206,10 @@ flowchart LR
     Checksum --> Provenance["Attach checksum and retrieval provenance"]
 ```
 
-All arrows beyond metadata validation are future contracts, not delivered
-workloads. The existing `SourceAsset(source, identifier, uri)` interface is
-preserved: `to_source_asset()` adapts the validated metadata using the stable
-`asset_id`. Connector discovery/fetch, storage, and warehouse operations continue
-to raise `NotImplementedError`.
+The manifest-to-parser, parser-to-metadata, and metadata-to-selector arrows are
+implemented as pure metadata operations. The selector-to-fetcher and all later
+arrows are future contracts, not delivered workloads. The existing
+`SourceAsset(source, identifier, uri)` interface is preserved:
+`to_source_asset()` adapts validated metadata using the stable `asset_id`.
+Connector discovery/fetch, storage, and warehouse operations continue to raise
+`NotImplementedError`.

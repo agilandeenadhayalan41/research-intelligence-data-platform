@@ -8,7 +8,9 @@ access or proprietary data.
 
 This repository currently provides Python packaging, validated YAML configuration,
 typed adapter contracts and fail-fast skeletons, structured JSON logging,
-provenance metadata, local PostgreSQL Compose tooling, offline tests, and CI.
+provenance metadata, a pure OpenAlex Works manifest parser and deterministic
+size-bounded metadata sample selector, local PostgreSQL Compose tooling, offline
+tests, and CI.
 **No ingestion, network requests, database connections, or cloud provisioning are
 implemented.** All adapter operations raise `NotImplementedError`; constructing an
 adapter or loading configuration has no service side effects.
@@ -53,6 +55,7 @@ semantics are defined by the ObjectStore contract but are not implemented yet.
 | `SourceConnector` | `discover()` returns manifest assets; `fetch()` returns a caller-owned stream |
 | `OpenAlexAssetMetadata` | Validates one current-layout OpenAlex snapshot file description |
 | `parse_openalex_works_manifest()` | Purely parses caller-provided current Works manifest content; no discovery or downloads |
+| `select_openalex_works_sample()` | Selects bounded eligible metadata only; no object reads/writes or downloads |
 | `ObjectStore` | `put_if_absent()` requires provenance and never overwrites; `open()` is read-only |
 | `Warehouse` | `query()` accepts bound parameters and returns a PyArrow table |
 
@@ -62,7 +65,7 @@ DuckDB is available as a development dependency for offline analytical tests.
 Warehouse SQL and parameter conventions remain backend-specific; the interface
 does not promise portable SQL. Writes/migrations need later explicit contracts.
 The OpenAlex Works manifest parser, snapshot metadata model, identity and duplicate
-rules, and safe future sample-selection boundary are specified in
+rules, and bounded sample-selection contract are specified in
 [the OpenAlex discovery and manifest contract](docs/architecture/openalex-manifest-contract.md).
 
 ## Local development
