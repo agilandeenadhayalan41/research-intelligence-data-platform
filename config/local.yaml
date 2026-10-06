@@ -9,3 +9,6 @@ warehouse:
   analytical: duckdb
   postgres_dsn_env: POSTGRES_DSN
   duckdb_path: ":memory:"
+sample_selection:
+  max_files: 1
+  max_file_size_bytes: 25000000

@@ -1,9 +1,10 @@
 # OpenAlex discovery and manifest contract
 
-This document defines an offline metadata boundary for one file in a current-layout
-OpenAlex snapshot and the pure parser for current Works per-entity manifests.
-Discovery, sample selection, network access, and landing are not implemented.
-`OpenAlexConnector.discover()` and `fetch()` remain fail-fast skeletons.
+This document defines an offline metadata boundary for files in a current-layout
+OpenAlex snapshot, the pure parser for current Works per-entity manifests, and a
+deterministic bounded development sample selector. Network access and landing are
+not implemented. `OpenAlexConnector.discover()` and `fetch()` remain fail-fast
+skeletons.
 
 ## Public format facts and contract assumptions
 
@@ -63,10 +64,8 @@ are rejected.
   dot path segments, and mismatched suffixes are rejected. When `updated_date` is
   provided and the URI includes a partition date, they must agree.
 - `byte_size` and `record_count` are non-negative integers or unknown (`None`).
-  A future selector with a hard byte budget must not treat unknown size as zero or
-  claim a metadata-only size bound. It must exclude that asset from the bounded
-  selection or obtain trustworthy size information before admitting it. No
-  metadata probe or download is implemented here.
+  The bounded selector never treats unknown size as zero; it excludes the asset
+  rather than probing or downloading it to discover a size.
 
 ## Identity and duplicates
 
@@ -124,20 +123,93 @@ or manifest file is downloaded. The model fixture at
 `tests/fixtures/openalex_asset.json` is also synthetic: dates, sizes, counts, and
 source paths are illustrative.
 
+## Bounded development sample
+
+`select_openalex_works_sample()` accepts the parsed
+`OpenAlexAssetMetadata` entries and a validated `SampleSelectionConfig`.
+`PlatformConfig.sample_selection` exposes the same settings, defaulting to
+`max_files=1` and `max_file_size_bytes=25_000_000` (decimal bytes). Both limits
+must be positive strict integers; zero, negative values, booleans, strings, and
+fractional values are rejected.
+
+Before deduplication, the selector compares each same-identity description using
+both field values and their types. Exact repeated descriptions collapse through
+`unique_assets()`. Any conflicting description for an identity is consistently
+rejected with `ValueError`, including a valid size of `1` paired with an invalid
+boolean `True` or float `1.0`; input order cannot choose which metadata survives.
+This duplicate conflict rule does not weaken the validated metadata model or
+`unique_assets()` contract. A lone malformed size is reported as `INVALID_SIZE`
+and cannot be selected.
+
+The selector excludes non-Works entities, unsupported formats, requested
+snapshot/update partition mismatches, unknown or invalid byte sizes, and files
+larger than the configured size bound. If an asset fails multiple conditions,
+the reported reason is the first matching condition in this precedence:
+`WRONG_ENTITY`, `UNSUPPORTED_FORMAT`, `SNAPSHOT_MISMATCH`,
+`UPDATED_DATE_MISMATCH`, `UNKNOWN_SIZE`, `INVALID_SIZE`, `OVERSIZED`.
+`FILE_LIMIT_REACHED` is used only for otherwise eligible assets after ranking.
+`eligible_count` is the number that pass these metadata checks before applying
+the file-count limit. A report with no eligible or selected files is explicit:
+it has `eligible_count=0`, an empty selection, and skip details for excluded
+assets.
+
+Eligible assets are ranked by ascending `byte_size`, then ascending
+`updated_date`, then ascending `file_uri`. Because `updated_date` is optional,
+assets without it sort before assets with a date when byte sizes tie. The first
+`max_files` are selected; stable `asset_id` ascending breaks any remaining tie,
+including equal size/date/URI entries from different snapshots. Skipped metadata
+is sorted by stable `asset_id`; each entry has one safe reason code. The report
+contains only asset metadata and configured bounds, not credentials or payload
+data.
+
+```python
+from datetime import date
+
+from research_platform.sources.openalex import (
+    parse_openalex_works_manifest,
+    select_openalex_works_sample,
+)
+
+assets = parse_openalex_works_manifest(manifest_json)
+selection = select_openalex_works_sample(
+    assets,
+    config.sample_selection,
+    snapshot_date=date(2025, 1, 15),
+    updated_date=date(2025, 1, 14),
+)
+```
+
+```text
+Manifest
+   -> Parser
+   -> Bounded Sample Selector
+   -> Selected metadata only
+   -> Future Fetcher
+```
+
+Selection reads or writes no objects. This step does **not** call HTTP/S3,
+download objects, write raw data, connect to GCP, PostgreSQL, or BigQuery, or run
+Airflow. The future fetcher must independently enforce the actual number of bytes
+received, even when manifest metadata reports a size within this selection limit.
+
 ## Future flow
 
 ```mermaid
 flowchart LR
-    Manifest["Manifest metadata + discovery context"] --> Asset["Validated OpenAlexAssetMetadata"]
-    Asset --> Selector["Future deterministic sample selector"]
-    Selector -->|"known size within budget"| Landing["Future immutable landing"]
-    Selector -->|"size unknown or unsafe"| Exclude["Exclude or resolve trustworthy size"]
+    Manifest["Manifest metadata + discovery context"] --> Parser["Pure parser"]
+    Parser --> Asset["Validated OpenAlexAssetMetadata"]
+    Asset --> Selector["Bounded sample selector"]
+    Selector -->|"selected metadata only"| Fetcher["Future fetcher"]
+    Fetcher -->|"enforce actual bytes received"| Landing["Future immutable landing"]
+    Selector -->|"unknown, invalid, or unsafe size"| Exclude["Report skipped metadata"]
     Landing --> Checksum["Calculate SHA-256 from retrieved bytes"]
     Checksum --> Provenance["Attach checksum and retrieval provenance"]
 ```
 
-All arrows beyond metadata validation are future contracts, not delivered
-workloads. The existing `SourceAsset(source, identifier, uri)` interface is
-preserved: `to_source_asset()` adapts the validated metadata using the stable
-`asset_id`. Connector discovery/fetch, storage, and warehouse operations continue
-to raise `NotImplementedError`.
+The manifest-to-parser, parser-to-metadata, and metadata-to-selector arrows are
+implemented as pure metadata operations. The selector-to-fetcher and all later
+arrows are future contracts, not delivered workloads. The existing
+`SourceAsset(source, identifier, uri)` interface is preserved:
+`to_source_asset()` adapts validated metadata using the stable `asset_id`.
+Connector discovery/fetch, storage, and warehouse operations continue to raise
+`NotImplementedError`.

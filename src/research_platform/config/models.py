@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class SettingsModel(BaseModel):
@@ -30,6 +30,11 @@ class WarehouseConfig(SettingsModel):
     bigquery_dataset: str | None = None
 
 
+class SampleSelectionConfig(SettingsModel):
+    max_files: int = Field(default=1, strict=True, gt=0)
+    max_file_size_bytes: int = Field(default=25_000_000, strict=True, gt=0)
+
+
 class CloudConfig(SettingsModel):
     project_id: str | None = None
 
@@ -40,6 +45,7 @@ class PlatformConfig(SettingsModel):
     source: Literal["openalex"] = "openalex"
     storage: StorageConfig = StorageConfig()
     warehouse: WarehouseConfig = WarehouseConfig()
+    sample_selection: SampleSelectionConfig = Field(default_factory=SampleSelectionConfig)
     cloud: CloudConfig = CloudConfig()
 
     @model_validator(mode="after")
