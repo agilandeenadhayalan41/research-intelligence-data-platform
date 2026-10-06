@@ -1,0 +1,11 @@
+environment: local
+log_level: INFO
+source: openalex
+storage:
+  backend: local
+  landing_path: data/landing
+warehouse:
+  transactional: postgres
+  analytical: duckdb
+  postgres_dsn_env: POSTGRES_DSN
+  duckdb_path: ":memory:"

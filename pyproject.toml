@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "research-intelligence-data-platform"
+version = "0.1.0"
+description = "Local-first foundation for public research intelligence data"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic==2.13.5",
+    "PyYAML==6.0.3",
+    "pyarrow==25.0.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1", "duckdb==1.5.6"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+research_platform = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = ["integration: local integration tests; no external services required"]

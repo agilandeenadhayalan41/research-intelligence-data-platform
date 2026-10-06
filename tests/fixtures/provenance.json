@@ -1,0 +1,7 @@
+{
+  "run_id": "00000000-0000-4000-8000-000000000001",
+  "source": "synthetic",
+  "source_uri": "https://example.org/synthetic/empty",
+  "retrieved_at": "2026-01-01T00:00:00Z",
+  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

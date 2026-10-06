@@ -1,0 +1,6 @@
+# Local-only placeholder, not a deployed QA environment.
+environment: qa
+storage:
+  backend: local
+warehouse:
+  analytical: duckdb

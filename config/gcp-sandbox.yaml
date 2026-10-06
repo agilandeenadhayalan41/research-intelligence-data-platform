@@ -1,0 +1,13 @@
+environment: gcp-sandbox
+log_level: INFO
+source: openalex
+storage:
+  backend: gcs
+  bucket: ${GCS_BUCKET}
+warehouse:
+  transactional: postgres
+  analytical: bigquery
+  postgres_dsn_env: POSTGRES_DSN
+  bigquery_dataset: ${BIGQUERY_DATASET}
+cloud:
+  project_id: ${GOOGLE_CLOUD_PROJECT}
