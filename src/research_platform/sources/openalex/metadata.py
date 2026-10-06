@@ -32,6 +32,8 @@ class OpenAlexAssetMetadata(BaseModel):
     def require_calendar_date(cls, value: object) -> object:
         if isinstance(value, datetime):
             raise ValueError("date fields must be calendar dates, not timestamps")
+        if value is not None and not isinstance(value, (date, str)):
+            raise ValueError("date fields must be calendar dates or YYYY-MM-DD strings")
         if isinstance(value, str):
             try:
                 parsed = date.fromisoformat(value)

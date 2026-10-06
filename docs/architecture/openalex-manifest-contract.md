@@ -50,9 +50,10 @@ fabricated as zero.
 
 - `snapshot_date` is the manifest's calendar release date. `updated_date` is the
   source-record partition date; it is not the snapshot date or a retrieval time.
-  Both are ISO `YYYY-MM-DD` dates without a time zone. Timestamps are not valid
-  substitutes. Future `IngestionProvenance.retrieved_at` remains a separate,
-  timezone-aware retrieval timestamp.
+  Both accept calendar date values (including Python `date` objects) or canonical
+  `YYYY-MM-DD` strings, without a time zone. Timestamps and numeric Unix timestamp
+  values are rejected. Future `IngestionProvenance.retrieved_at` remains a
+  separate, timezone-aware retrieval timestamp.
 - Entity names are lowercase slugs. A file URI must use the `s3` scheme, the
   `openalex` bucket, and the matching
   `data/{content_format}/{entity}/...` namespace. Queries, fragments, whitespace,

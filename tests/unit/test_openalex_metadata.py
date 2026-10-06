@@ -42,6 +42,36 @@ def test_unknown_optional_metadata_stays_unknown(asset: OpenAlexAssetMetadata) -
 @pytest.mark.parametrize(
     ("field", "value"),
     [
+        ("snapshot_date", 0),
+        ("snapshot_date", 1736899200),
+        ("updated_date", 1736812800),
+    ],
+)
+def test_numeric_timestamps_are_not_calendar_dates(
+    asset: OpenAlexAssetMetadata, field: str, value: int
+) -> None:
+    metadata = asset.model_dump()
+    metadata[field] = value
+
+    with pytest.raises(ValidationError):
+        OpenAlexAssetMetadata.model_validate(metadata)
+
+
+def test_date_fields_accept_date_objects_and_canonical_strings(
+    asset: OpenAlexAssetMetadata,
+) -> None:
+    metadata = asset.model_dump()
+    metadata.update(snapshot_date=date(2025, 1, 15), updated_date=date(2025, 1, 14))
+
+    assert OpenAlexAssetMetadata.model_validate(metadata) == asset
+    assert OpenAlexAssetMetadata.model_validate(
+        {**metadata, "snapshot_date": "2025-01-15", "updated_date": "2025-01-14"}
+    ) == asset
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
         ("source", "another-source"),
         ("snapshot_date", "2025-02-30"),
         ("snapshot_date", "2025-01-15T00:00:00Z"),
