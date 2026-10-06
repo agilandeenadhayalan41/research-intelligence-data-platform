@@ -1,9 +1,10 @@
 # OpenAlex discovery and manifest contract
 
-This document defines an offline metadata boundary for one file in a current-layout
-OpenAlex snapshot and the pure parser for current Works per-entity manifests.
-Discovery, sample selection, network access, and landing are not implemented.
-`OpenAlexConnector.discover()` and `fetch()` remain fail-fast skeletons.
+This document defines an offline metadata boundary for files in a current-layout
+OpenAlex snapshot, the pure parser for current Works per-entity manifests, and a
+deterministic bounded development sample selector. Network access and landing are
+not implemented. `OpenAlexConnector.discover()` and `fetch()` remain fail-fast
+skeletons.
 
 ## Public format facts and contract assumptions
 
@@ -63,10 +64,8 @@ are rejected.
   dot path segments, and mismatched suffixes are rejected. When `updated_date` is
   provided and the URI includes a partition date, they must agree.
 - `byte_size` and `record_count` are non-negative integers or unknown (`None`).
-  A future selector with a hard byte budget must not treat unknown size as zero or
-  claim a metadata-only size bound. It must exclude that asset from the bounded
-  selection or obtain trustworthy size information before admitting it. No
-  metadata probe or download is implemented here.
+  The bounded selector never treats unknown size as zero; it excludes the asset
+  rather than probing or downloading it to discover a size.
 
 ## Identity and duplicates
 
@@ -124,14 +123,55 @@ or manifest file is downloaded. The model fixture at
 `tests/fixtures/openalex_asset.json` is also synthetic: dates, sizes, counts, and
 source paths are illustrative.
 
+## Bounded development sample
+
+`select_openalex_works_sample()` accepts the parsed
+`OpenAlexAssetMetadata` entries and a validated `SampleSelectionConfig`.
+`PlatformConfig.sample_selection` exposes the same settings, defaulting to
+`max_files=1` and `max_file_size_bytes=25_000_000` (decimal bytes). Both limits
+must be positive strict integers; zero, negative values, booleans, strings, and
+fractional values are rejected.
+
+The selector first collapses exact repeated identities and rejects conflicting
+descriptions using `unique_assets()`. It excludes non-Works entities, unsupported
+formats, requested snapshot/update partition mismatches, unknown or invalid byte
+sizes, and files larger than the configured size bound. `eligible_count` is the
+number that pass these metadata checks before applying the file-count limit. A
+report with no eligible or selected files is explicit: it has
+`eligible_count=0`, an empty selection, and skip details for excluded assets.
+
+Eligible assets are ranked by ascending `byte_size`, then ascending
+`updated_date`, then ascending `file_uri`. Because `updated_date` is optional,
+assets without it sort before assets with a date when byte sizes tie. The first
+`max_files` are selected. Skipped metadata is sorted by stable `asset_id`; each
+entry has one safe reason code (`UNKNOWN_SIZE`, `INVALID_SIZE`, `OVERSIZED`,
+`WRONG_ENTITY`, `UNSUPPORTED_FORMAT`, `SNAPSHOT_MISMATCH`,
+`UPDATED_DATE_MISMATCH`, or `FILE_LIMIT_REACHED`). The report contains only
+validated asset metadata and configured bounds, not credentials or payload data.
+
+```text
+Manifest
+   -> Parser
+   -> Bounded Sample Selector
+   -> Selected metadata only
+   -> Future Fetcher
+```
+
+Selection reads or writes no objects. This step does **not** call HTTP/S3,
+download objects, write raw data, connect to GCP, PostgreSQL, or BigQuery, or run
+Airflow. The future fetcher must independently enforce the actual number of bytes
+received, even when manifest metadata reports a size within this selection limit.
+
 ## Future flow
 
 ```mermaid
 flowchart LR
-    Manifest["Manifest metadata + discovery context"] --> Asset["Validated OpenAlexAssetMetadata"]
-    Asset --> Selector["Future deterministic sample selector"]
-    Selector -->|"known size within budget"| Landing["Future immutable landing"]
-    Selector -->|"size unknown or unsafe"| Exclude["Exclude or resolve trustworthy size"]
+    Manifest["Manifest metadata + discovery context"] --> Parser["Pure parser"]
+    Parser --> Asset["Validated OpenAlexAssetMetadata"]
+    Asset --> Selector["Bounded sample selector"]
+    Selector -->|"selected metadata only"| Fetcher["Future fetcher"]
+    Fetcher -->|"enforce actual bytes received"| Landing["Future immutable landing"]
+    Selector -->|"unknown, invalid, or unsafe size"| Exclude["Report skipped metadata"]
     Landing --> Checksum["Calculate SHA-256 from retrieved bytes"]
     Checksum --> Provenance["Attach checksum and retrieval provenance"]
 ```
