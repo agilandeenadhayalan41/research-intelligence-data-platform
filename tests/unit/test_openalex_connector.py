@@ -322,3 +322,16 @@ def test_connectivity_check_is_manifest_only_and_records_expected_and_actual_for
     }
     assert [call[0] for call in client.calls] == [MANIFEST_URI]
     assert response.closed
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"timeout_seconds": 31},
+        {"max_attempts": 6},
+        {"retry_backoff_seconds": 1.1},
+    ],
+)
+def test_request_configuration_has_hard_upper_bounds(settings: dict[str, object]) -> None:
+    with pytest.raises(ValueError):
+        OpenAlexConnector(**settings)  # type: ignore[arg-type]

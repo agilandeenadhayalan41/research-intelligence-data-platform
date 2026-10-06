@@ -216,6 +216,8 @@ actual returned bytes up to the configured limit, even if `Content-Length` or
 manifest metadata is missing or wrong. The default selector limits are
 `max_files=1` and `max_file_size_bytes=25_000_000`; the connector's timeout defaults
 to 10 seconds, with at most 3 attempts and exponential 0.1-second base backoff.
+Configuration is hard-bounded to 30 seconds per request, 5 attempts, and 1 second
+of base backoff. The explicit connectivity command uses one 5-second attempt.
 401/403, unavailable endpoints, malformed manifests, timeouts, transport failures,
 unexpected formats, truncation, and actual-byte overflow are explicit errors.
 Retryable request errors are retried only before a response stream is returned;

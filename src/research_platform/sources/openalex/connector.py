@@ -29,6 +29,9 @@ _FORMATS = {
 _MANIFEST_LIMIT = 1_000_000
 _CHUNK_SIZE = 64 * 1024
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+_MAX_TIMEOUT_SECONDS = 30
+_MAX_ATTEMPTS = 5
+_MAX_RETRY_BACKOFF_SECONDS = 1
 
 
 class OpenAlexConnectorError(Exception):
@@ -236,17 +239,19 @@ class OpenAlexConnector(SourceConnector):
             or not isinstance(timeout_seconds, (int, float))
             or not math.isfinite(timeout_seconds)
             or timeout_seconds <= 0
+            or timeout_seconds > _MAX_TIMEOUT_SECONDS
         ):
-            raise ValueError("timeout_seconds must be positive")
-        if type(max_attempts) is not int or max_attempts < 1:
-            raise ValueError("max_attempts must be a positive integer")
+            raise ValueError("timeout_seconds must be greater than zero and at most 30")
+        if type(max_attempts) is not int or not 1 <= max_attempts <= _MAX_ATTEMPTS:
+            raise ValueError("max_attempts must be between 1 and 5")
         if (
             isinstance(retry_backoff_seconds, bool)
             or not isinstance(retry_backoff_seconds, (int, float))
             or not math.isfinite(retry_backoff_seconds)
             or retry_backoff_seconds < 0
+            or retry_backoff_seconds > _MAX_RETRY_BACKOFF_SECONDS
         ):
-            raise ValueError("retry_backoff_seconds must be non-negative")
+            raise ValueError("retry_backoff_seconds must be between zero and 1")
         self._selection_config = SampleSelectionConfig.model_validate(
             sample_selection.model_dump()
         )
