@@ -34,7 +34,10 @@ from research_platform.control.models import (
 from research_platform.control.reconciliation import RegistrationOutcome
 from research_platform.control.store import ControlStore
 from research_platform.ingestion.deletion_limits import CsvDeletionDecodeLimits
-from research_platform.ingestion.deletions_csv import iter_deleted_work_ids
+from research_platform.ingestion.deletions_csv import (
+    DeletedWorkRecord,
+    iter_deleted_work_records,
+)
 from research_platform.ingestion.errors import (
     IngestionConfigError,
     IngestionDecodeError,
@@ -314,7 +317,7 @@ def _ingest_one_deletion_asset(
             retrieval_provenance=retrieval_provenance,
             source_uri=asset.file_uri,
             source_updated_date=asset.updated_date,
-            open_work_ids=_id_stream_factory(
+            open_records=_record_stream_factory(
                 objects=objects,
                 raw_key=raw_key,
                 decode_limits=decode_limits,
@@ -361,17 +364,17 @@ def _ingest_one_deletion_asset(
         raise IngestionError(message) from error
 
 
-def _id_stream_factory(
+def _record_stream_factory(
     *,
     objects: ObjectStore,
     raw_key: str,
     decode_limits: CsvDeletionDecodeLimits,
-) -> Callable[[], Iterator[str]]:
-    def open_work_ids() -> Iterator[str]:
+) -> Callable[[], Iterator[DeletedWorkRecord]]:
+    def open_records() -> Iterator[DeletedWorkRecord]:
         with objects.open(raw_key) as handle:
-            yield from iter_deleted_work_ids(handle, limits=decode_limits)
+            yield from iter_deleted_work_records(handle, limits=decode_limits)
 
-    return open_work_ids
+    return open_records
 
 
 def _land_raw(

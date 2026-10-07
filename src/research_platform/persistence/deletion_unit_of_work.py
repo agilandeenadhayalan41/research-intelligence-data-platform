@@ -9,6 +9,7 @@ from uuid import UUID
 
 from research_platform.canonical.openalex.deletions import DeletionOutcome
 from research_platform.control.models import SourceFileControl
+from research_platform.ingestion.deletions_csv import DeletedWorkRecord
 from research_platform.provenance.models import IngestionProvenance
 
 
@@ -60,7 +61,7 @@ class DeletionPublishRequest:
     retrieval_provenance: IngestionProvenance
     source_uri: str
     source_updated_date: date | None
-    open_work_ids: Callable[[], Iterator[str]]
+    open_records: Callable[[], Iterator[DeletedWorkRecord]]
 
 
 @dataclass(frozen=True)

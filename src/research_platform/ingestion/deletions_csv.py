@@ -6,6 +6,8 @@ import csv
 import gzip
 import zlib
 from collections.abc import Iterator
+from dataclasses import dataclass
+from datetime import date
 from typing import BinaryIO
 
 from research_platform.canonical.openalex.errors import IdentifierError
@@ -14,33 +16,40 @@ from research_platform.ingestion.deletion_limits import CsvDeletionDecodeLimits
 from research_platform.ingestion.errors import IngestionDecodeError, IngestionFormatError
 
 _CHUNK = 64 * 1024
-_REQUIRED_HEADER = "id"
+_REQUIRED_HEADERS = ("work_id", "deleted_date")
 
 
-def iter_deleted_work_ids(
+@dataclass(frozen=True)
+class DeletedWorkRecord:
+    """One streamed row from the OpenAlex Works deletion ledger."""
+
+    work_id: str
+    deleted_date: date
+
+
+def iter_deleted_work_records(
     stream: BinaryIO,
     *,
     limits: CsvDeletionDecodeLimits | None = None,
-) -> Iterator[str]:
-    """Yield normalized Work IDs from a gzip CSV deletion stream.
+) -> Iterator[DeletedWorkRecord]:
+    """Yield typed deletion rows from a gzip CSV deletion stream.
 
-    Contract (Step 13):
-    - Required header column: ``id``
-    - Values: OpenAlex Work URL or short ``W…`` form
+    Authoritative CSV contract:
+
+    - Header exactly ``work_id,deleted_date`` (order fixed; no extra columns)
+    - ``work_id``: OpenAlex Work URL or short ``W…`` form (Step 11 normalization)
+    - ``deleted_date``: exact ``YYYY-MM-DD``
     - Blank rows skipped
-    - Duplicate IDs are yielded once; callers may count duplicates via a seen-set
-      or by inspecting row order (this iterator yields every valid occurrence so
-      the publisher can classify DUPLICATE)
+    - Unexpected schema fails explicitly
 
-    Does not fabricate IDs from malformed values.
+    Does not fabricate IDs or dates from malformed values.
     """
     bounds = limits or CsvDeletionDecodeLimits()
     decoded_total = 0
     rows_seen = 0
     try:
         with gzip.GzipFile(fileobj=stream, mode="rb") as reader:
-            header_fields: list[str] | None = None
-            id_index: int | None = None
+            header_seen = False
             while True:
                 remaining = bounds.max_decompressed_bytes - decoded_total
                 line, consumed = _read_bounded_line(
@@ -71,33 +80,47 @@ def iter_deleted_work_ids(
                 except csv.Error as error:
                     raise IngestionDecodeError("malformed deletion CSV row") from error
 
-                if header_fields is None:
-                    header_fields = [item.strip().lower() for item in fields]
-                    if _REQUIRED_HEADER not in header_fields:
+                if not header_seen:
+                    header = tuple(item.strip().lower() for item in fields)
+                    if header != _REQUIRED_HEADERS:
                         raise IngestionDecodeError(
-                            "deletion CSV missing required 'id' header"
+                            "deletion CSV header must be exactly work_id,deleted_date"
                         )
-                    id_index = header_fields.index(_REQUIRED_HEADER)
+                    header_seen = True
                     continue
 
-                assert id_index is not None
-                if len(fields) <= id_index:
-                    raise IngestionDecodeError("deletion CSV row missing id column")
-                # Extra columns are tolerated after the required id column.
-                raw_id = fields[id_index].strip()
+                if len(fields) != 2:
+                    raise IngestionDecodeError(
+                        "deletion CSV row must have exactly two columns"
+                    )
+                raw_id = fields[0].strip()
+                raw_date = fields[1].strip()
                 if not raw_id:
-                    continue
+                    raise IngestionDecodeError("deletion CSV row missing work_id")
+                if not raw_date:
+                    raise IngestionDecodeError("deletion CSV row missing deleted_date")
                 rows_seen += 1
                 if rows_seen > bounds.max_ids:
                     raise IngestionDecodeError("deletion CSV exceeds max_ids")
                 try:
-                    yield normalize_openalex_id(
-                        raw_id, expected_prefix="W", field_name="id"
+                    work_id = normalize_openalex_id(
+                        raw_id, expected_prefix="W", field_name="work_id"
                     )
                 except IdentifierError as error:
                     raise IngestionDecodeError(
                         "malformed OpenAlex Work id in deletion CSV"
                     ) from error
+                try:
+                    deleted_date = date.fromisoformat(raw_date)
+                except ValueError as error:
+                    raise IngestionDecodeError(
+                        "malformed deleted_date in deletion CSV"
+                    ) from error
+                if deleted_date.isoformat() != raw_date:
+                    raise IngestionDecodeError(
+                        "deleted_date must be exact YYYY-MM-DD"
+                    )
+                yield DeletedWorkRecord(work_id=work_id, deleted_date=deleted_date)
     except IngestionDecodeError:
         raise
     except EOFError as error:
@@ -106,6 +129,16 @@ def iter_deleted_work_ids(
         raise IngestionFormatError(
             "gzip deletion CSV stream could not be decoded"
         ) from error
+
+
+# Back-compat alias used by older call sites during hardening; prefer records.
+def iter_deleted_work_ids(
+    stream: BinaryIO,
+    *,
+    limits: CsvDeletionDecodeLimits | None = None,
+) -> Iterator[str]:
+    for record in iter_deleted_work_records(stream, limits=limits):
+        yield record.work_id
 
 
 def _read_bounded_line(

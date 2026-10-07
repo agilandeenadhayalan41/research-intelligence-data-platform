@@ -1,21 +1,28 @@
 """Validated metadata for one OpenAlex Works deletion asset (Step 13 / #21).
 
-Repository evidence does not pin a single public URI template for
-``deleted_ids.csv.gz``. Step 13 therefore defines an explicit local contract:
+Authoritative public OpenAlex snapshot contract (Help Center “Sync”, 2026):
 
-- ``entity = works-deletions``
-- ``content_format = csv`` (bytes are gzip-compressed ``.csv.gz``)
-- URI shape: ``s3://openalex/data/csv/works-deletions/.../deleted_ids.csv.gz``
+- Physical URI (JSONL Works tree, chosen as canonical for this project)::
 
-If future OpenAlex snapshot paths differ, adapt the connector mapping here
-rather than inventing silent URI rewrites.
+    s3://openalex/data/jsonl/works/deleted_ids.csv.gz
+
+- Equivalent file also exists under ``data/parquet/works/``; we do **not** accept
+  that path as an alternate identity in this slice (one canonical URI).
+- CSV columns: ``work_id,deleted_date``
+- Cumulative Works deletion ledger (~160 MB compressed / tens of millions of
+  rows in production). Local development remains bounded at
+  ``max_file_size_bytes <= 25_000_000`` and does **not** ingest the full public
+  ledger.
+
+Logical control entity remains ``works-deletions`` so deletion assets stay
+distinct from Works-data (``works`` / ``oa-…``) identities. Physical URI and
+logical entity are intentionally different concepts.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import re
 from datetime import date, datetime
 from typing import Literal
 from urllib.parse import urlsplit
@@ -27,6 +34,9 @@ from research_platform.sources.base import SourceAsset
 DELETION_ENTITY = "works-deletions"
 DELETION_CONTENT_FORMAT = "csv"
 DELETION_FILENAME = "deleted_ids.csv.gz"
+# Canonical physical path under the public OpenAlex bucket (JSONL Works tree).
+DELETION_PUBLIC_URI = f"s3://openalex/data/jsonl/works/{DELETION_FILENAME}"
+DELETION_PUBLIC_PATH = f"/data/jsonl/works/{DELETION_FILENAME}"
 
 
 class OpenAlexDeletionAssetMetadata(BaseModel):
@@ -71,37 +81,13 @@ class OpenAlexDeletionAssetMetadata(BaseModel):
         ):
             raise ValueError("file_uri must be a canonical OpenAlex S3 object URI")
 
-        parts = parsed.path.split("/")
-        if (
-            len(parts) < 5
-            or parts[0] != ""
-            or parts[1] != "data"
-            or parts[2] != "csv"
-            or parts[3] != DELETION_ENTITY
-            or parts[-1] != DELETION_FILENAME
-            or any(part in {".", ".."} for part in parts)
+        if parsed.path != DELETION_PUBLIC_PATH or any(
+            part in {".", ".."} for part in parsed.path.split("/")
         ):
             raise ValueError(
-                "deletion file_uri must be under data/csv/works-deletions/…/"
-                f"{DELETION_FILENAME}"
+                "deletion file_uri must be the public Works deletion ledger "
+                f"{DELETION_PUBLIC_URI} (logical entity remains {DELETION_ENTITY})"
             )
-
-        for part in parts:
-            if part.startswith("updated_date="):
-                partition_date = part.removeprefix("updated_date=")
-                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", partition_date):
-                    raise ValueError("updated_date URI partition must use YYYY-MM-DD")
-                try:
-                    date.fromisoformat(partition_date)
-                except ValueError as error:
-                    raise ValueError(
-                        "updated_date URI partition must be a real date"
-                    ) from error
-                if (
-                    self.updated_date is not None
-                    and self.updated_date.isoformat() != partition_date
-                ):
-                    raise ValueError("updated_date does not match the URI partition")
         return self
 
     @property

@@ -101,7 +101,7 @@ class PostgresCanonicalStore(CanonicalStore):
         deletion_asset_id: str,
         source_checksum_sha256: str,
         run_id: UUID,
-        source_updated_date: date | None,
+        deleted_date: date,
         processed_at: datetime,
         deleted_at: datetime,
     ) -> DeletionOutcome:
@@ -112,7 +112,7 @@ class PostgresCanonicalStore(CanonicalStore):
                 deletion_asset_id=deletion_asset_id,
                 source_checksum_sha256=source_checksum_sha256,
                 run_id=run_id,
-                source_updated_date=source_updated_date,
+                deleted_date=deleted_date,
                 processed_at=processed_at,
                 deleted_at=deleted_at,
             )
@@ -151,13 +151,13 @@ def apply_work_deletion(
     deletion_asset_id: str,
     source_checksum_sha256: str,
     run_id: UUID,
-    source_updated_date: date | None,
+    deleted_date: date,
     processed_at: datetime,
     deleted_at: datetime,
 ) -> DeletionOutcome:
     """Tombstone one Work using the caller's open transaction."""
     existing = _load_work(connection, work_id)
-    outcome = classify_deletion(existing, deletion_updated_date=source_updated_date)
+    outcome = classify_deletion(existing, deleted_date=deleted_date)
     if outcome is DeletionOutcome.UNKNOWN_WORK:
         return outcome
     if outcome in {DeletionOutcome.ALREADY_DELETED, DeletionOutcome.STALE}:
@@ -168,7 +168,7 @@ def apply_work_deletion(
         deletion_asset_id=deletion_asset_id,
         source_checksum_sha256=source_checksum_sha256,
         run_id=run_id,
-        source_updated_date=source_updated_date,
+        deleted_date=deleted_date,
         processed_at=processed_at,
         deleted_at=deleted_at,
     )

@@ -29,7 +29,7 @@ The full end-to-end / cloud pipeline is not implemented.**
 | 10 | Pipeline control contracts | `PipelineRun`, `SourceFileControl`, `RecordProvenance`, lifecycle/claim rules, `ControlStore` protocol, and versioned PostgreSQL DDL specs |
 | 11 | Canonical OpenAlex model | Normalized entities/relationships, ID rules, PyArrow schemas, source mapping, lineage/version semantics; no ingestion |
 | 12 | One-file local Works ingestion | Manifest → claim → immutable land → stream decode/map/upsert/provenance inside one Postgres txn → SUCCESS; `--backend memory|postgres`; offline + Postgres tests ([#20](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/20)) |
-| 13 | OpenAlex Works deletions | `deleted_ids.csv.gz` → claim → immutable land → stream tombstones + deletion lineage in one txn; no silent resurrection; offline + Postgres tests ([#21](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/21)) |
+| 13 | OpenAlex Works deletions | Public `data/jsonl/works/deleted_ids.csv.gz` (`work_id,deleted_date`) → claim → stream tombstones with per-row precedence; no silent resurrection; offline + Postgres tests ([#21](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/21)) |
 
 Constructing adapters or loading configuration does not connect to services.
 `LocalObjectStore` writes only under the configured local landing path. Default
