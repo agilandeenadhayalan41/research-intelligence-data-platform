@@ -16,7 +16,13 @@ import duckdb
 from research_platform.analytics.bigquery.contracts import (
     BIGQUERY_MAX_CLUSTER_COLUMNS,
     FORBIDDEN_INVENTED_SOURCE_FIELDS,
+    LINEAGE_FIELD_NAMES,
+    PUBLICATION_YEAR_RANGE_END_EXCLUSIVE,
+    PUBLICATION_YEAR_RANGE_INTERVAL,
+    PUBLICATION_YEAR_RANGE_START,
+    YEAR_BOUNDED_PATTERN_IDS,
     ValidationLabel,
+    render_partition_clause,
 )
 from research_platform.analytics.bigquery.registry import (
     UNRESOLVED_PATTERN_IDS,
@@ -100,6 +106,45 @@ def validate_static_contracts(
                 f"{table.table_name} cluster field {cluster_field} missing",
             )
         ok(table.lineage_preserved, f"{table.table_name} must preserve lineage")
+        ok(
+            LINEAGE_FIELD_NAMES.issubset(col_names),
+            f"{table.table_name} missing lineage_source_updated_date set",
+        )
+        if ddl.is_file():
+            text = ddl.read_text(encoding="utf-8")
+            ok(
+                "`lineage_source_updated_date`" in text,
+                f"{table.table_name} DDL missing lineage_source_updated_date",
+            )
+
+    works = next(t for t in registry.tables if t.table_name == "works")
+    works_cols = {c.name for c in works.columns}
+    ok("source_updated_date" in works_cols, "works must keep Work.source_updated_date")
+    ok(
+        "lineage_source_updated_date" in works_cols,
+        "works must keep lineage_source_updated_date",
+    )
+    ok(
+        works.partitioning.partition_type == "INTEGER_RANGE",
+        "works must use INTEGER_RANGE on publication_year",
+    )
+    ok(
+        works.partitioning.field == "publication_year",
+        "works partition field must be publication_year",
+    )
+    works_ddl = repo_path(works.ddl_path).read_text(encoding="utf-8")
+    expected_partition = render_partition_clause(works.partitioning)
+    assert expected_partition is not None
+    ok(
+        expected_partition in works_ddl,
+        "works DDL missing RANGE_BUCKET publication_year partition",
+    )
+    ok(
+        f"GENERATE_ARRAY({PUBLICATION_YEAR_RANGE_START}, "
+        f"{PUBLICATION_YEAR_RANGE_END_EXCLUSIVE}, "
+        f"{PUBLICATION_YEAR_RANGE_INTERVAL})" in works_ddl,
+        "works DDL missing publication_year GENERATE_ARRAY bounds",
+    )
 
     sources = next(t for t in registry.tables if t.table_name == "sources")
     source_cols = {c.name for c in sources.columns}
@@ -112,6 +157,50 @@ def validate_static_contracts(
     ok(
         repo_path(registry.active_works_view_path).is_file(),
         f"missing active works view: {registry.active_works_view_path}",
+    )
+
+    merge_works = repo_path(
+        "sql/bigquery/openalex/models/merge_works.sql"
+    ).read_text(encoding="utf-8")
+    merge_works_code = _strip_sql_comments(merge_works)
+    ok(
+        "lineage_source_updated_date" in merge_works_code,
+        "merge_works must use lineage_source_updated_date",
+    )
+    ok(
+        "DELETED" in merge_works_code and "ACTIVE" in merge_works_code,
+        "merge_works must guard DELETED→ACTIVE resurrection",
+    )
+    ok(
+        "source_checksum_sha256" in merge_works_code,
+        "merge_works must compare checksums",
+    )
+    ok(
+        ">" in merge_works_code,
+        "merge_works must require newer lineage date to overwrite",
+    )
+
+    merge_topics = repo_path(
+        "sql/bigquery/openalex/models/merge_work_topics.sql"
+    ).read_text(encoding="utf-8")
+    topics_code = _strip_sql_comments(merge_topics).upper()
+    ok("BEGIN TRANSACTION" in topics_code, "relationship replace needs BEGIN TRANSACTION")
+    ok("COMMIT TRANSACTION" in topics_code, "relationship replace needs COMMIT TRANSACTION")
+    begin_at = topics_code.find("BEGIN TRANSACTION")
+    delete_at = topics_code.find("DELETE FROM")
+    insert_at = topics_code.find("INSERT INTO")
+    commit_at = topics_code.find("COMMIT TRANSACTION")
+    ok(
+        begin_at != -1
+        and delete_at != -1
+        and insert_at != -1
+        and commit_at != -1
+        and begin_at < delete_at < insert_at < commit_at,
+        "DELETE+INSERT must sit inside BEGIN/COMMIT TRANSACTION",
+    )
+    ok(
+        "lineage_source_updated_date" in merge_topics,
+        "merge_work_topics must use lineage_source_updated_date",
     )
 
     for query in registry.queries:
@@ -180,6 +269,15 @@ def validate_static_contracts(
             ok(
                 "LEFT JOIN" in code.upper(),
                 f"{query.sql_path} must LEFT JOIN citation targets",
+            )
+        if query.pattern_id in YEAR_BOUNDED_PATTERN_IDS:
+            ok(
+                "publication_year" in code,
+                f"{query.sql_path} must filter partition key publication_year",
+            )
+            ok(
+                "@year_from" in text and "@year_to" in text,
+                f"{query.sql_path} must expose year_from/year_to bounds",
             )
 
     ok(registry.maximum_bytes_billed > 0, "maximum_bytes_billed must be positive")

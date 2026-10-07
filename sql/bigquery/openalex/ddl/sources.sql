@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS `openalex.sources` (
   `host_publisher_id` STRING,
   `source_asset_id` STRING NOT NULL,
   `source_checksum_sha256` STRING NOT NULL,
-  `source_updated_date` DATE,
+  `lineage_source_updated_date` DATE,
   `run_id` STRING NOT NULL,
   `processed_at` TIMESTAMP NOT NULL,
   `activity_state` STRING NOT NULL,

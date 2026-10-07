@@ -8,7 +8,7 @@ cost-safety rules, and local DuckDB semantic checks.
 
 | Status | What |
 | --- | --- |
-| **DEFINED IN STEP 15** | Table DDL contracts, query SQL files, pattern mappings, grains, partition/cluster decisions, MERGE/relationship refresh design, cost rules, DuckDB `SEMANTIC_ONLY` fixtures, static offline checks |
+| **DEFINED IN STEP 15** | Table DDL contracts, query SQL files, pattern mappings, grains, partition/cluster decisions, MERGE/refresh design, cost rules, DuckDB `SEMANTIC_ONLY` fixtures, static offline checks |
 | **NOT YET DEPLOYED / MEASURED** | GCP datasets/tables, paid BigQuery jobs, partition pruning proof, clustering effectiveness, real cost/latency, Gold marts (Step 16 / #55) |
 
 No cloud deployment, service accounts, Terraform, or paid queries are included.
@@ -17,7 +17,8 @@ No cloud deployment, service accounts, Terraform, or paid queries are included.
 
 1. **BigQuery SQL correctness (contract)** — Standard SQL files use backtick
    identifiers and `@named_parameter` syntax; static tests assert file presence,
-   parameter form, ACTIVE predicates, and forbidden patterns.
+   parameter form, ACTIVE predicates, partition-key alignment, MERGE guards, and
+   forbidden patterns.
 2. **Local semantic validation (`SEMANTIC_ONLY`)** — DuckDB + tiny synthetic
    fixtures prove activity/deletion, citation LEFT JOIN, primary-license, and
    fan-out avoidance semantics.
@@ -25,30 +26,48 @@ No cloud deployment, service accounts, Terraform, or paid queries are included.
    must measure bytes scanned, pruning, clustering, cost, and latency on real
    (or representative) data. DuckDB does **not** prove those properties.
 
+## Work record date vs lineage date
+
+Two distinct calendar-date concepts exist on Works:
+
+| Concept | Nested model | Flattened physical column |
+| --- | --- | --- |
+| Work record OpenAlex `updated_date` | `Work.source_updated_date` | `source_updated_date` |
+| Canonical lineage / deletion date | `CanonicalLineage.source_updated_date` | `lineage_source_updated_date` |
+
+Step 13 stores tombstone `deleted_date` in `CanonicalLineage.source_updated_date`.
+Flattened PyArrow schemas, PostgreSQL DDL, and BigQuery DDL all use
+`lineage_source_updated_date` for that lineage value so it never collides with
+the Work record field. Nested Pydantic access is unchanged.
+
+Every analytical table preserves lineage:
+
+`source_asset_id`, `source_checksum_sha256`, `lineage_source_updated_date`,
+`run_id`, `processed_at`, `activity_state`, `deleted_at`.
+
 ## Analytical table inventory
 
 Canonical input tables only (Step 11). No invented fields.
 
 | Table | Grain | Partition | Clustering | Incremental |
 | --- | --- | --- | --- | --- |
-| `works` | one row per `work_id` | `publication_date` (DATE) | `work_id`, `doi`, `primary_publisher_id`, `primary_source_id` | `MERGE_BY_PRIMARY_KEY` |
+| `works` | one row per `work_id` | `INTEGER_RANGE` on `publication_year` | `work_id`, `doi`, `primary_publisher_id`, `primary_source_id` | `MERGE_BY_PRIMARY_KEY` + precedence |
 | `authors` | one row per `author_id` | none | `author_id` | `MERGE_BY_PRIMARY_KEY` |
 | `institutions` | one row per `institution_id` | none | `institution_id` | `MERGE_BY_PRIMARY_KEY` |
 | `sources` | one row per `source_id` | none | `source_id` | `MERGE_BY_PRIMARY_KEY` |
 | `publishers` | one row per `publisher_id` | none | `publisher_id` | `MERGE_BY_PRIMARY_KEY` |
 | `topics` | one row per `topic_id` | none | `topic_id` | `MERGE_BY_PRIMARY_KEY` |
 | `funders` | one row per `funder_id` | none | `funder_id` | `MERGE_BY_PRIMARY_KEY` |
-| `work_authors` | `(work_id, authorship_index)` | `source_updated_date` | `work_id`, `author_id` | `REPLACE_BY_WORK_ID` |
-| `work_author_institutions` | `(work_id, authorship_index, institution_index)` | `source_updated_date` | `work_id`, `institution_id` | `REPLACE_BY_WORK_ID` |
-| `work_topics` | `(work_id, topic_id)` | `source_updated_date` | `work_id`, `topic_id` | `REPLACE_BY_WORK_ID` |
-| `work_keywords` | `(work_id, keyword_id)` | `source_updated_date` | `work_id`, `keyword_id` | `REPLACE_BY_WORK_ID` |
-| `work_references` | `(work_id, reference_index)` | `source_updated_date` | `work_id`, `referenced_work_id` | `REPLACE_BY_WORK_ID` |
-| `work_mesh` | `(work_id, mesh_index)` | `source_updated_date` | `work_id`, `descriptor_ui` | `REPLACE_BY_WORK_ID` |
-| `work_locations` | `(work_id, location_index)` | `source_updated_date` | `work_id`, `source_id` | `REPLACE_BY_WORK_ID` |
-| `work_grants` | `(work_id, grant_index)` | `source_updated_date` | `work_id`, `funder_id` | `REPLACE_BY_WORK_ID` |
+| `work_authors` | `(work_id, authorship_index)` | `lineage_source_updated_date` | `work_id`, `author_id` | `REPLACE_BY_WORK_ID` (txn) |
+| `work_author_institutions` | `(work_id, authorship_index, institution_index)` | `lineage_source_updated_date` | `work_id`, `institution_id` | `REPLACE_BY_WORK_ID` (txn) |
+| `work_topics` | `(work_id, topic_id)` | `lineage_source_updated_date` | `work_id`, `topic_id` | `REPLACE_BY_WORK_ID` (txn) |
+| `work_keywords` | `(work_id, keyword_id)` | `lineage_source_updated_date` | `work_id`, `keyword_id` | `REPLACE_BY_WORK_ID` (txn) |
+| `work_references` | `(work_id, reference_index)` | `lineage_source_updated_date` | `work_id`, `referenced_work_id` | `REPLACE_BY_WORK_ID` (txn) |
+| `work_mesh` | `(work_id, mesh_index)` | `lineage_source_updated_date` | `work_id`, `descriptor_ui` | `REPLACE_BY_WORK_ID` (txn) |
+| `work_locations` | `(work_id, location_index)` | `lineage_source_updated_date` | `work_id`, `source_id` | `REPLACE_BY_WORK_ID` (txn) |
+| `work_grants` | `(work_id, grant_index)` | `lineage_source_updated_date` | `work_id`, `funder_id` | `REPLACE_BY_WORK_ID` (txn) |
 
-Ordinal relationship keys are retained for canonical portability (no array-only
-collapse).
+Ordinal relationship keys are retained for canonical portability.
 
 ## Canonical → BigQuery type mapping
 
@@ -61,24 +80,31 @@ collapse).
 | `date32` | `DATE` |
 | UTC `timestamp` | `TIMESTAMP` |
 
-Nullability and lineage fields are preserved:
+## Works partition strategy
 
-`source_asset_id`, `source_checksum_sha256`, `source_updated_date`, `run_id`,
-`processed_at`, `activity_state`, `deleted_at`.
+`works` uses BigQuery **integer-range** partitioning on `publication_year`:
 
-`works` lists `source_updated_date` once in BigQuery DDL (PyArrow currently
-repeats the name in entity + lineage field lists).
+```sql
+PARTITION BY RANGE_BUCKET(publication_year, GENERATE_ARRAY(1000, 3001, 1))
+```
 
-## Partition strategy
+Why this key:
 
-- **`works.publication_date`**: supports publication/OA trend pruning and
-  year-bounded analytical scans. NULL dates use the NULL partition. Incremental
-  identity still keys on `work_id` + control-plane changed sets /
-  `source_updated_date`, not partition replacement alone.
-- **Relationship `source_updated_date`**: lineage freshness of the producing
-  asset — **not** Work publication time. Enables prune of recently refreshed
-  relationship batches; primary refresh path remains `REPLACE_BY_WORK_ID`.
-- **Dimensions**: unpartitioned (small; MERGE by primary key).
+- Step 14 `publication-trends`, `open-access-trends`, and
+  `publisher-topic-license-year` filter `@year_from` / `@year_to` on
+  `publication_year`.
+- Partition pruning requires filtering the **actual partition column**. Year
+  predicates on `publication_year` align with that column; filtering only
+  `publication_date` would not establish the documented pruning story.
+- Canonical `publication_year` domain is 1000..3000. NULL years use the
+  BigQuery NULL partition.
+
+**Partition-pruning requirement (contract):** year-bounded analytical query
+SQL must predicate on `publication_year`. This repository defines that contract;
+actual pruning effectiveness is **NOT YET MEASURED** on deployed BigQuery.
+
+Relationship tables partition on `lineage_source_updated_date` (source/asset
+freshness, including deletion dates) — **not** publication time.
 
 ## Clustering strategy
 
@@ -113,31 +139,43 @@ For `publisher-topic-license-year`:
 
 ## Incremental / MERGE design
 
-### Entity tables (`works`, dimensions)
+### Works MERGE precedence
 
-`MERGE` by canonical primary key from a staging table. Deterministic update of
-attributes + lineage; insert when absent. Idempotent replay of the same staging
-rows converges to the same current projection. Tombstones arrive as rows with
-`activity_state = 'DELETED'`.
+`sql/bigquery/openalex/models/merge_works.sql` does **not** blindly overwrite
+matched rows. It mirrors Steps 11–13:
 
-Representative contract: `sql/bigquery/openalex/models/merge_works.sql`.
+| Case | Behavior |
+| --- | --- |
+| Same `source_checksum_sha256` | Idempotent replay (touch `run_id` / `processed_at` only) |
+| Target `DELETED` + staging `ACTIVE` | **No silent resurrection** (skip); surface via preconditions |
+| Staging `lineage_source_updated_date` older | STALE — skip |
+| Equal lineage dates, different checksum | CONFLICT — skip; detect via preconditions |
+| Staging newer lineage date (or dated vs undated target) | APPLY update, including ACTIVE→DELETED tombstones |
 
-### Relationship tables
+Precondition query: `sql/bigquery/openalex/models/merge_works_preconditions.sql`
+(`RESTORE_REQUIRED`, `CONFLICT`, `STALE_SKIPPED`). Ordinary analytical MERGE
+must not resurrect DELETED Works; newer ACTIVE after DELETE remains
+`RESTORE_REQUIRED` / explicit reconciliation.
 
-**Chosen strategy: `REPLACE_BY_WORK_ID`**
+Offline decision helper: `decide_analytical_works_merge` (tests only; not a
+BigQuery runtime).
 
-1. Identify changed `work_id` set (control/provenance from Steps 10–13).
-2. `DELETE` existing relationships for those Works.
-3. `INSERT` current projection for those Works from staging.
+### Relationship tables — transactional REPLACE_BY_WORK_ID
 
-This avoids stale relationship members that a key-only `MERGE` would leave
-behind. Representative contract:
-`sql/bigquery/openalex/models/merge_work_topics.sql`.
+Template (`merge_work_topics.sql`):
 
-BigQuery does **not** provide multi-table ACID identical to local Postgres
-ingestion. Orchestration must coordinate `works` MERGE + relationship replace
-for the same changed `work_id` set and support retry/idempotency by replaying
-the same staging projection.
+```sql
+BEGIN TRANSACTION;
+DELETE ... changed work_id set ...
+INSERT ... current projection ...
+COMMIT TRANSACTION;
+```
+
+Atomic commit/rollback prevents a failed mid-replace from leaving those Works
+with an empty relationship projection. BigQuery multi-statement DML
+transactions can span tables, but they differ operationally from the local
+PostgreSQL ingestion transaction — do not claim identical ACID behavior to
+Step 12.
 
 ## Fan-out avoidance
 
@@ -150,20 +188,16 @@ Safe patterns (implemented in query SQL):
 - Institution×topic: `DISTINCT` institution/work, then join topics.
 - License metrics: primary location CTE, then join topics (not all locations).
 
-Offline DuckDB fixtures demonstrate unsafe authors×topics row inflation versus
-safe distinct counts (`SEMANTIC_ONLY`).
-
 ## Cost / scan safety
 
 Logical deployment-time rules (enforced when BigQuery execution exists):
 
-- Prefer bounded `@year_from` / `@year_to` (and partition predicates) for trends.
+- Prefer bounded `@year_from` / `@year_to` on `publication_year` for trends.
 - No `SELECT *` in broad analytical aggregate query contracts.
 - Select only needed columns; filter `ACTIVE` early.
-- Avoid accidental cross joins / unrestricted full-corpus exploratory scans in
-  application contracts.
-- Suggested default `maximum_bytes_billed`: **10 GiB** per application query
-  (`BigQueryAnalyticalRegistry.maximum_bytes_billed`). Not executed in Step 15.
+- Avoid accidental cross joins / unrestricted full-corpus exploratory scans.
+- Suggested default `maximum_bytes_billed`: **10 GiB** per application query.
+  Not executed in Step 15.
 
 ## Step 14 pattern → BigQuery query mapping
 
@@ -185,25 +219,23 @@ Logical deployment-time rules (enforced when BigQuery execution exists):
 ## Unresolved capability: ISSN / eISSN
 
 Canonical `sources` exposes `issn_l` only. Step 14 marks ISSN/eISSN lookup
-`UNRESOLVED`. Step 15 **preserves** that gap: no `sources.issn` / `sources.eissn`
-columns and no fake BigQuery SQL for that pattern.
+`UNRESOLVED`. Step 15 **preserves** that gap.
 
 ## Gold marts (out of scope)
 
-Step 16 / #55 owns gold marts, materialized aggregates, reusable publisher/topic
-metrics, trend marts, and journal stats. Step 15 may define candidate SQL but
-does not claim Gold models are deployed.
+Step 16 / #55 owns gold marts and materialized aggregates. Step 15 does not
+claim Gold models are deployed.
 
 ## Code and SQL layout
 
 ```text
 sql/bigquery/openalex/
   ddl/           CREATE TABLE contracts
-  models/        active_works view, MERGE / relationship refresh
+  models/        active_works, MERGE + preconditions, transactional REPLACE
   queries/       Step 14 pattern SQL (BigQuery Standard SQL)
 
 src/research_platform/analytics/bigquery/
-  contracts.py   BigQueryTableContract / type mapping
+  contracts.py   BigQueryTableContract / type mapping / merge decision helper
   registry.py    pattern → query mapping
   validation.py  static checks + DuckDB SEMANTIC_ONLY
 ```
@@ -215,6 +247,7 @@ Before treating these contracts as production-ready:
 1. Deploy DDL to a non-production dataset.
 2. Load a bounded representative slice.
 3. Measure bytes scanned, slot time, cost, and latency for each pattern.
-4. Verify partition pruning and clustering effectiveness.
-5. Confirm `maximum_bytes_billed` policy behavior.
-6. Only then consider Step 16 materializations from measured reuse.
+4. Verify integer-range partition pruning on `publication_year` filters.
+5. Verify MERGE precedence and transactional REPLACE under failure injection.
+6. Confirm `maximum_bytes_billed` policy behavior.
+7. Only then consider Step 16 materializations from measured reuse.

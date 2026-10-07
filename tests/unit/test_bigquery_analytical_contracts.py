@@ -9,13 +9,17 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
+from datetime import date
+
 from research_platform.analytics.bigquery.contracts import (
     BIGQUERY_MAX_CLUSTER_COLUMNS,
     FORBIDDEN_INVENTED_SOURCE_FIELDS,
     LINEAGE_FIELD_NAMES,
     PRIMARY_KEYS,
     TABLE_GRAINS,
+    YEAR_BOUNDED_PATTERN_IDS,
     ActiveFilterBehavior,
+    AnalyticalMergeDecision,
     BigQueryTableContract,
     ClusteringSpec,
     IncrementalStrategy,
@@ -23,7 +27,9 @@ from research_platform.analytics.bigquery.contracts import (
     arrow_type_to_bigquery,
     build_table_contracts,
     columns_from_arrow_schema,
+    decide_analytical_works_merge,
     render_create_table_ddl,
+    render_partition_clause,
 )
 from research_platform.analytics.bigquery.registry import (
     UNRESOLVED_PATTERN_IDS,
@@ -181,9 +187,12 @@ def test_incremental_merge_key_contracts_valid() -> None:
     merge_topics = repo_path(
         "sql/bigquery/openalex/models/merge_work_topics.sql"
     ).read_text(encoding="utf-8")
+    assert "BEGIN TRANSACTION" in merge_topics.upper()
+    assert "COMMIT TRANSACTION" in merge_topics.upper()
     assert "DELETE FROM" in merge_topics.upper()
     assert "INSERT INTO" in merge_topics.upper()
     assert "changed_work_ids" in merge_topics
+    assert "lineage_source_updated_date" in merge_topics
 
 
 def test_works_active_filter_behavior() -> None:
@@ -291,3 +300,164 @@ def test_table_contract_rejects_missing_partition_field() -> None:
             cost_safety_notes=base.cost_safety_notes,
             ddl_path=base.ddl_path,
         )
+
+
+def test_canonical_schemas_have_unique_field_names() -> None:
+    for name, schema in CANONICAL_SCHEMAS.items():
+        names = list(schema.names)
+        assert len(names) == len(set(names)), f"{name} has duplicate fields"
+
+
+def test_works_keeps_both_source_and_lineage_updated_dates() -> None:
+    works = CANONICAL_SCHEMAS["works"]
+    assert "source_updated_date" in works.names
+    assert "lineage_source_updated_date" in works.names
+    assert works.names.count("source_updated_date") == 1
+    assert works.names.count("lineage_source_updated_date") == 1
+    contract = next(t for t in build_table_contracts() if t.table_name == "works")
+    col_names = [c.name for c in contract.columns]
+    assert "source_updated_date" in col_names
+    assert "lineage_source_updated_date" in col_names
+    ddl = repo_path(contract.ddl_path).read_text(encoding="utf-8")
+    assert "`source_updated_date` DATE" in ddl
+    assert "`lineage_source_updated_date` DATE" in ddl
+
+
+def test_every_table_preserves_lineage_source_updated_date() -> None:
+    for contract in build_table_contracts():
+        assert "lineage_source_updated_date" in {c.name for c in contract.columns}
+        ddl = repo_path(contract.ddl_path).read_text(encoding="utf-8")
+        assert "`lineage_source_updated_date`" in ddl
+
+
+def test_works_integer_range_partition_aligns_with_year_queries() -> None:
+    works = next(t for t in build_table_contracts() if t.table_name == "works")
+    assert works.partitioning.partition_type == "INTEGER_RANGE"
+    assert works.partitioning.field == "publication_year"
+    clause = render_partition_clause(works.partitioning)
+    assert clause is not None
+    assert "RANGE_BUCKET(`publication_year`" in clause
+    assert "GENERATE_ARRAY(1000, 3001, 1)" in clause
+    ddl = repo_path(works.ddl_path).read_text(encoding="utf-8")
+    assert clause in ddl
+    registry = load_bigquery_analytical_registry()
+    for query in registry.queries:
+        if query.pattern_id not in YEAR_BOUNDED_PATTERN_IDS:
+            continue
+        assert query.sql_path is not None
+        text = repo_path(query.sql_path).read_text(encoding="utf-8")
+        assert "publication_year" in text
+        assert "@year_from" in text and "@year_to" in text
+
+
+def test_relationship_partition_uses_lineage_source_updated_date() -> None:
+    for contract in build_table_contracts():
+        if contract.table_name.startswith("work_"):
+            assert contract.partitioning.field == "lineage_source_updated_date"
+            assert contract.partitioning.partition_type == "DATE"
+
+
+def test_stale_work_merge_cannot_overwrite_newer_state() -> None:
+    decision = decide_analytical_works_merge(
+        target_exists=True,
+        target_checksum="aa" * 32,
+        target_lineage_date=date(2024, 6, 1),
+        target_activity_state="ACTIVE",
+        source_checksum="bb" * 32,
+        source_lineage_date=date(2024, 1, 1),
+        source_activity_state="ACTIVE",
+    )
+    assert decision is AnalyticalMergeDecision.SKIP_STALE
+
+
+def test_deleted_to_active_cannot_occur_through_ordinary_merge() -> None:
+    decision = decide_analytical_works_merge(
+        target_exists=True,
+        target_checksum="aa" * 32,
+        target_lineage_date=date(2024, 2, 1),
+        target_activity_state="DELETED",
+        source_checksum="bb" * 32,
+        source_lineage_date=date(2024, 8, 1),
+        source_activity_state="ACTIVE",
+    )
+    assert decision is AnalyticalMergeDecision.SKIP_RESTORE_REQUIRED
+
+
+def test_same_or_newer_deletion_may_replace_active() -> None:
+    newer = decide_analytical_works_merge(
+        target_exists=True,
+        target_checksum="aa" * 32,
+        target_lineage_date=date(2024, 1, 1),
+        target_activity_state="ACTIVE",
+        source_checksum="bb" * 32,
+        source_lineage_date=date(2024, 2, 1),
+        source_activity_state="DELETED",
+    )
+    assert newer is AnalyticalMergeDecision.APPLY_UPDATE
+
+
+def test_equal_date_different_checksum_is_conflict() -> None:
+    decision = decide_analytical_works_merge(
+        target_exists=True,
+        target_checksum="aa" * 32,
+        target_lineage_date=date(2024, 1, 1),
+        target_activity_state="ACTIVE",
+        source_checksum="bb" * 32,
+        source_lineage_date=date(2024, 1, 1),
+        source_activity_state="ACTIVE",
+    )
+    assert decision is AnalyticalMergeDecision.SKIP_CONFLICT
+
+
+def test_identical_checksum_is_idempotent_noop() -> None:
+    decision = decide_analytical_works_merge(
+        target_exists=True,
+        target_checksum="aa" * 32,
+        target_lineage_date=date(2024, 1, 1),
+        target_activity_state="ACTIVE",
+        source_checksum="aa" * 32,
+        source_lineage_date=date(2024, 9, 1),
+        source_activity_state="ACTIVE",
+    )
+    assert decision is AnalyticalMergeDecision.IDENTICAL_NOOP
+
+
+def test_merge_sql_encodes_precedence_guards() -> None:
+    text = repo_path("sql/bigquery/openalex/models/merge_works.sql").read_text(
+        encoding="utf-8"
+    )
+    assert "source_checksum_sha256" in text
+    assert "lineage_source_updated_date" in text
+    assert "DELETED" in text and "ACTIVE" in text
+    assert "RESTORE" in text.upper() or "NOT (" in text
+    pre = repo_path(
+        "sql/bigquery/openalex/models/merge_works_preconditions.sql"
+    ).read_text(encoding="utf-8")
+    assert "RESTORE_REQUIRED" in pre
+    assert "CONFLICT" in pre
+    assert "STALE_SKIPPED" in pre
+
+
+def test_relationship_delete_insert_inside_transaction() -> None:
+    from research_platform.analytics.bigquery.validation import _strip_sql_comments
+
+    text = repo_path(
+        "sql/bigquery/openalex/models/merge_work_topics.sql"
+    ).read_text(encoding="utf-8")
+    code = _strip_sql_comments(text).upper()
+    begin = code.index("BEGIN TRANSACTION")
+    delete = code.index("DELETE FROM")
+    insert = code.index("INSERT INTO")
+    commit = code.index("COMMIT TRANSACTION")
+    assert begin < delete < insert < commit
+
+
+def test_columns_from_arrow_rejects_duplicate_names() -> None:
+    schema = pa.schema(
+        [
+            pa.field("source_updated_date", pa.date32()),
+            pa.field("source_updated_date", pa.date32()),
+        ]
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        columns_from_arrow_schema(schema)

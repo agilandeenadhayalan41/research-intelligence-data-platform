@@ -3,6 +3,7 @@
 --
 -- Canonical `works` retains both ACTIVE and DELETED rows.
 -- Consumer analytical models must filter ACTIVE explicitly (or use this view).
+-- Preserves both Work.source_updated_date and lineage_source_updated_date.
 
 CREATE OR REPLACE VIEW `openalex.active_works` AS
 SELECT
@@ -31,6 +32,7 @@ SELECT
   w.`grants_presence`,
   w.`source_asset_id`,
   w.`source_checksum_sha256`,
+  w.`lineage_source_updated_date`,
   w.`run_id`,
   w.`processed_at`,
   w.`activity_state`,

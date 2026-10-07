@@ -15,10 +15,11 @@ SELECT
   w.`oa_status`,
   w.`primary_source_id`,
   w.`primary_publisher_id`,
+  w.`source_updated_date`,
   w.`activity_state`,
   w.`source_asset_id`,
   w.`source_checksum_sha256`,
-  w.`source_updated_date`,
+  w.`lineage_source_updated_date`,
   w.`run_id`,
   w.`processed_at`
 FROM `openalex.works` AS w

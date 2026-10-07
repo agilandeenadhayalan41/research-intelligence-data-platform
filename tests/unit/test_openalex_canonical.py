@@ -538,12 +538,19 @@ def test_pyarrow_schema_contracts() -> None:
         "work_locations",
         "work_grants",
     }
+    for schema_name, schema in CANONICAL_SCHEMAS.items():
+        names = list(schema.names)
+        assert len(names) == len(set(names)), schema_name
+        assert "lineage_source_updated_date" in names
+        assert "source_updated_date" not in names or schema_name == "works"
     works = CANONICAL_SCHEMAS["works"]
     assert works.field("work_id").type == pa.string()
     assert works.field("work_id").nullable is False
     assert works.field("doi").nullable is True
     assert [field.name for field in works][:3] == ["work_id", "work_id_url", "doi"]
     assert "source_checksum_sha256" in works.names
+    assert "source_updated_date" in works.names
+    assert "lineage_source_updated_date" in works.names
     assert "run_id" in works.names
     rel = CANONICAL_SCHEMAS["work_author_institutions"]
     assert rel.field("authorship_index").type == pa.int32()
