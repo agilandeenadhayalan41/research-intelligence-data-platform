@@ -37,18 +37,15 @@ DIMENSION_FK_SPECS: tuple[tuple[str, str, str, str], ...] = (
     ("work_grants", "funder_id", "funders", "funder_id"),
 )
 
+def _step16_gold_mart_ids() -> tuple[str, ...]:
+    """Authoritative Gold mart inventory from Step 16 registry (no hand copy)."""
+    from research_platform.analytics.gold.registry import load_gold_registry
+
+    return tuple(m.mart_id for m in load_gold_registry())
+
+
 # Step 16 consumer Gold marts for deleted-source exclusion.
-GOLD_MART_IDS: tuple[str, ...] = (
-    "research_discovery",
-    "journal_author_stats",
-    "publisher_author_stats",
-    "publisher_topic_year_stats",
-    "publisher_topic_license_year_stats",
-    "institution_topic_stats",
-    "publication_trends",
-    "open_access_trends",
-    "citation_edges",
-)
+GOLD_MART_IDS: tuple[str, ...] = _step16_gold_mart_ids()
 
 
 def quality_check_contracts() -> tuple[QualityCheckContract, ...]:
@@ -196,13 +193,16 @@ def quality_check_contracts() -> tuple[QualityCheckContract, ...]:
             backend_support=BackendSupport.BOTH,
             sql_path=f"{_QUALITY_SQL}/active_gold_deleted_work_exclusion.sql",
             diagnostic_fields=(
+                "missing_manifest_mart_count",
+                "unexpected_manifest_mart_count",
+                "duplicate_manifest_mart_count",
                 "missing_source_work_count",
                 "inactive_source_work_count",
-                "manifest_mart_count",
             ),
             threshold=0,
             notes=(
-                "Manifest declares participating marts (zero-row marts allowed). "
+                "Manifest must contain exactly one row per Step-16 Gold mart_id "
+                "(zero-row marts allowed via membership). "
                 "Missing required table != empty table. "
                 "citation_edges in manifest requires staged_gold_citation_edges."
             ),
