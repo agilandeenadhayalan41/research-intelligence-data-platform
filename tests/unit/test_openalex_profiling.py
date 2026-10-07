@@ -932,6 +932,13 @@ def test_parquet_native_footer_has_finite_allocation_limits(tmp_path: Path, monk
     assert seen["pre_buffer"] is False
 
 
+def test_parquet_thrift_allocation_limit_is_profile_limit_error(tmp_path: Path) -> None:
+    path = tmp_path / "thrift-budget.parquet"
+    pq.write_table(pa.table({"a": [[[1]]], "b": [2], "c": [3]}), path)
+    with pytest.raises(OpenAlexProfileLimitError, match="thrift metadata"):
+        inspect_parquet(path, max_records=100, limits=ProfilingLimits(max_profile_nodes=2))
+
+
 @pytest.mark.parametrize(
     "overrides", [{"max_nesting_depth": 2}, {"max_schema_fields": 2},
                   {"max_profile_nodes": 2}],

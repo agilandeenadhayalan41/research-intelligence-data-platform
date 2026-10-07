@@ -120,6 +120,8 @@ inputs would require a separate process/sandbox, which this step does not add.
 - Leading/trailing `PAR1` magic and the footer length are checked before the
   footer is read with `pyarrow.parquet.ParquetFile`. Thrift string allocations
   use `max_parquet_footer_bytes`; container allocations use `max_profile_nodes`.
+  When Arrow rejects those thrift allocations (`Exceeded size limit`), the
+  profiler raises `OpenAlexProfileLimitError`, not a malformed-file error.
   Row-group/column traversal, schema fields, and nesting are bounded before any
   batch is requested. The profiler reports the Arrow schema with
   struct/list/map paths (`a.b`, `a[]`, `a{key}`, `a{value}`), declared

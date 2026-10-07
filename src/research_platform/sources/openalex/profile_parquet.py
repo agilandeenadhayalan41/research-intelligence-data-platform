@@ -11,6 +11,7 @@ from research_platform.sources.openalex.profile_models import (
     EvidenceType,
     FieldProfile,
     OpenAlexMalformedParquetError,
+    OpenAlexProfileError,
     OpenAlexProfileLimitError,
     ProfileBudget,
     ProfilingLimits,
@@ -19,6 +20,7 @@ from research_platform.sources.openalex.profile_models import (
 )
 
 PARQUET_MAGIC = b"PAR1"
+_THRIFT_SIZE_LIMIT_MARKERS = ("Exceeded size limit", "TProtocolException")
 
 
 @dataclass(frozen=True)
@@ -114,8 +116,22 @@ def inspect_parquet(
                 sampled_record_count=sampled_records,
                 fields=tuple(sorted(fields, key=lambda item: item.path)),
             )
-    except (pa.ArrowException, OSError, ValueError):
+    except OpenAlexProfileError:
+        raise
+    except (pa.ArrowException, OSError, ValueError) as exc:
+        if _is_thrift_allocation_limit_error(exc):
+            raise OpenAlexProfileLimitError(
+                "Parquet thrift metadata exceeds its configured allocation limit"
+            ) from None
         raise OpenAlexMalformedParquetError("Parquet footer or data cannot be read") from None
+
+
+def _is_thrift_allocation_limit_error(exc: BaseException) -> bool:
+    """True when Arrow rejected thrift string/container allocations at our caps."""
+    text = str(exc)
+    return "thrift" in text.lower() and any(
+        marker in text for marker in _THRIFT_SIZE_LIMIT_MARKERS
+    )
 
 
 def _check_magic(path: Path, limits: ProfilingLimits) -> None:
