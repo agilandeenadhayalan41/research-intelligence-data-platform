@@ -1,10 +1,11 @@
 from io import BytesIO
+import socket
 
 import pytest
 
 from research_platform.config import PlatformConfig
 from research_platform.provenance.models import IngestionProvenance
-from research_platform.sources.base import SourceAsset, SourceConnector
+from research_platform.sources.base import SourceConnector
 from research_platform.sources.openalex import OpenAlexConnector
 from research_platform.storage.base import ObjectStore
 from research_platform.storage.gcs import GCSObjectStore
@@ -23,14 +24,16 @@ def test_contracts_cannot_be_instantiated(
         contract()
 
 
-def test_openalex_remains_a_skeleton() -> None:
+def test_openalex_construction_has_no_implicit_network_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_connection(*args: object, **kwargs: object) -> None:
+        raise AssertionError("connector construction must not access the network")
+
+    monkeypatch.setattr(socket, "create_connection", reject_connection)
     connector = OpenAlexConnector()
     assert isinstance(connector, SourceConnector)
-    asset = SourceAsset("synthetic", "empty", "https://example.org/synthetic/empty")
-    with pytest.raises(NotImplementedError, match="discovery"):
-        connector.discover()
-    with pytest.raises(NotImplementedError, match="retrieval"):
-        connector.fetch(asset)
+    assert connector.manifest_uri == "s3://openalex/data/jsonl/works/manifest.json"
 
 
 def test_warehouse_skeletons_do_not_execute_queries(local_config: PlatformConfig) -> None:

@@ -1,10 +1,10 @@
 # OpenAlex discovery and manifest contract
 
-This document defines an offline metadata boundary for files in a current-layout
-OpenAlex snapshot, the pure parser for current Works per-entity manifests, and a
-deterministic bounded development sample selector. Network access and landing are
-not implemented. `OpenAlexConnector.discover()` and `fetch()` remain fail-fast
-skeletons.
+This document defines the metadata boundary for files in a current-layout OpenAlex
+snapshot, the pure parser for current Works per-entity manifests, and a deterministic
+bounded development sample selector. `OpenAlexConnector` uses anonymous HTTPS for
+manifest discovery and returns bounded caller-owned streams for selected objects.
+It does not write raw data or perform ingestion.
 
 ## Public format facts and contract assumptions
 
@@ -20,6 +20,49 @@ Sources:
 
 - [OpenAlex snapshot data format](https://github.com/ourresearch/docs/blob/main/download/snapshot-format.mdx)
 - [OpenAlex: Download the snapshot](https://help.openalex.org/tutorials/download-the-snapshot/)
+
+The documented public bucket is `openalex`. The current JSON Lines Works manifest
+endpoint is `https://openalex.s3.amazonaws.com/data/jsonl/works/manifest.json`;
+the corresponding Parquet endpoint replaces `jsonl` with `parquet`. OpenAlex
+documents anonymous public access (its CLI examples specify `--no-sign-request`).
+The connector maps only canonical `s3://openalex/...` object URIs to HTTPS requests
+for the fixed `openalex.s3.amazonaws.com` host. It sends no credentials, follows no
+redirects, and does not invoke AWS credential discovery.
+
+### Expected format versus live observation
+
+The selected JSON Lines manifest is expected to declare `jsonl`; its payload files
+are gzip-compressed `.gz` files. Selecting `parquet` instead reads that format's
+separate Works manifest and expects Snappy-compressed `.parquet` files. These are
+codec expectations from OpenAlex documentation, not a claim about payload bytes
+downloaded or decoded by this connector.
+
+Independent public metadata observations on **2026-10-06** verified anonymous
+access. At 23:43:11 UTC, anonymous `HEAD` requests to both endpoints returned the
+following:
+
+| Endpoint | Anonymous HEAD at 23:43:11 UTC | Anonymous bounded range at 23:56:02 UTC |
+| --- | --- | --- |
+| `https://openalex.s3.amazonaws.com/data/jsonl/works/manifest.json` | HTTP 200, Content-Length 383359, `binary/octet-stream` | `Range: bytes=0-4095` observed `format: jsonl`, `entity: works` |
+| `https://openalex.s3.amazonaws.com/data/parquet/works/manifest.json` | HTTP 200, Content-Length 397668, `binary/octet-stream` | `Range: bytes=0-4095` observed `format: parquet`, `entity: works` |
+
+The bounded requests disabled curl configuration, redirects, and non-HTTPS
+protocols, used 10-second connect / 20-second total timeouts, and capped response
+size at 4096 bytes. A 1024-byte JSONL prefix also confirmed the per-entity schema:
+`date`, `format`, `entity`, `record_count`, `content_length`, `files`, `url`, and
+`meta`. No snapshot payload object was requested. Thus the **live
+manifest-declared formats** and anonymous metadata access are verified, while gzip
+and Snappy remain documented codec expectations only.
+
+The opt-in command was separately attempted in the Copilot cloud environment and
+could not obtain an HTTP response because that environment's DNS firewall blocked
+`openalex.s3.amazonaws.com` (cloud run 37548052335). A repeat on
+**2026-10-07 00:05:11 UTC** returned `OpenAlexNetworkError`, `actual_format: null`,
+for the JSONL manifest endpoint, using one 5-second attempt and a 1,000,000-byte
+manifest cap. This does not contradict the independent successful anonymous
+observations. It means the command could not verify connectivity from that
+restricted runtime. The firewall was not changed, and no credentials or
+authenticated fallback were used.
 
 The typed model deliberately represents the manifest's declared `format`
 (`jsonl` or `parquet`), not the compression codec. Thus, a gzip-compressed JSONL
@@ -113,10 +156,10 @@ from research_platform.sources.openalex import parse_openalex_works_manifest
 assets = parse_openalex_works_manifest(manifest_json)
 ```
 
-`OpenAlexConnector` remains a fail-fast skeleton in this phase. In a later task,
-its discovery implementation can pass content obtained by its caller and any
-separate expected context to this parser, then adapt the returned metadata to
-`SourceAsset`; this PR does not wire the connector or acquire the manifest.
+`OpenAlexConnector.discover()` reads only the selected format's Works manifest,
+caps the actual manifest bytes at 1,000,000, parses it with the shared parser, and
+applies the shared bounded selector. It returns stable `SourceAsset` values for
+selected files. Discovery never requests a data object.
 
 Tests use small in-memory synthetic manifests only. No OpenAlex snapshot object
 or manifest file is downloaded. The model fixture at
@@ -184,13 +227,36 @@ Manifest
    -> Parser
    -> Bounded Sample Selector
    -> Selected metadata only
-   -> Future Fetcher
+   -> OpenAlexConnector.fetch(): bounded stream
 ```
 
-Selection reads or writes no objects. This step does **not** call HTTP/S3,
-download objects, write raw data, connect to GCP, PostgreSQL, or BigQuery, or run
-Airflow. The future fetcher must independently enforce the actual number of bytes
-received, even when manifest metadata reports a size within this selection limit.
+Selection reads or writes no objects. The connector reads a selected-format manifest
+only, accepts the observed `binary/octet-stream` response MIME plus supported JSON
+MIME types, and treats bounded JSON parsing—not the MIME label—as authoritative.
+HTML/XML and malformed JSON are rejected. It checks the actual manifest bytes
+against both the 1,000,000-byte cap and any valid declared `Content-Length`.
+
+`fetch()` streams a selected file through a caller-owned binary stream. Each
+underlying read is bounded, cumulative actual returned bytes cannot exceed the
+configured limit, and a one-byte probe detects overflow rather than silently
+truncating. Declared lengths are checked for truncation. EOF, explicit close, and
+all error paths close the response; after a stream is returned, failures are
+reported and never retried from byte zero.
+
+The default selector limits are `max_files=1` and
+`max_file_size_bytes=25_000_000`. Each HTTP attempt uses a monotonic deadline,
+including response-header and body reads; each bounded socket read gets only the
+remaining time. Timeout defaults to 10 seconds, with at most 3 attempts and
+exponential 0.1-second base backoff. Configuration is hard-bounded to 30 seconds
+per attempt, 5 attempts, and 1 second of base backoff. Retries apply only before a
+response stream is returned and failed/retried responses are closed. The explicit
+connectivity command uses one 5-second attempt and a 1,000,000-byte manifest cap.
+401/403, unavailable endpoints, malformed manifests, timeouts, transport failures,
+unexpected formats, truncation, and actual-byte overflow are explicit errors.
+
+This connector does **not** write raw data, connect to GCP, PostgreSQL, or BigQuery,
+or run Airflow. Its public connectivity check is an explicit, read-only request
+limited to the 1,000,000-byte manifest boundary and is not part of default tests.
 
 ## Future flow
 
@@ -199,7 +265,7 @@ flowchart LR
     Manifest["Manifest metadata + discovery context"] --> Parser["Pure parser"]
     Parser --> Asset["Validated OpenAlexAssetMetadata"]
     Asset --> Selector["Bounded sample selector"]
-    Selector -->|"selected metadata only"| Fetcher["Future fetcher"]
+    Selector -->|"selected metadata only"| Fetcher["OpenAlexConnector.fetch(): bounded stream"]
     Fetcher -->|"enforce actual bytes received"| Landing["Future immutable landing"]
     Selector -->|"unknown, invalid, or unsafe size"| Exclude["Report skipped metadata"]
     Landing --> Checksum["Calculate SHA-256 from retrieved bytes"]
@@ -207,9 +273,7 @@ flowchart LR
 ```
 
 The manifest-to-parser, parser-to-metadata, and metadata-to-selector arrows are
-implemented as pure metadata operations. The selector-to-fetcher and all later
-arrows are future contracts, not delivered workloads. The existing
-`SourceAsset(source, identifier, uri)` interface is preserved:
-`to_source_asset()` adapts validated metadata using the stable `asset_id`.
-Connector discovery/fetch, storage, and warehouse operations continue to raise
-`NotImplementedError`.
+metadata operations; connector discovery and retrieval implement the
+`SourceConnector` boundary. The existing `SourceAsset(source, identifier, uri)`
+interface is preserved: `to_source_asset()` adapts validated metadata using the
+stable `asset_id`. Landing, storage, and warehouse operations remain future work.

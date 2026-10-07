@@ -9,11 +9,11 @@ access or proprietary data.
 This repository currently provides Python packaging, validated YAML configuration,
 typed adapter contracts and fail-fast skeletons, structured JSON logging,
 provenance metadata, a pure OpenAlex Works manifest parser and deterministic
-size-bounded metadata sample selector, local PostgreSQL Compose tooling, offline
-tests, and CI.
-**No ingestion, network requests, database connections, or cloud provisioning are
-implemented.** All adapter operations raise `NotImplementedError`; constructing an
-adapter or loading configuration has no service side effects.
+size-bounded metadata sample selector, bounded anonymous OpenAlex snapshot manifest
+discovery and file streaming, local PostgreSQL Compose tooling, offline tests, and
+CI. The OpenAlex connector is the only implemented runtime network adapter; storage
+and warehouse adapters remain fail-fast skeletons. Constructing an adapter or
+loading configuration has no service side effects.
 
 ## Architecture
 
@@ -56,17 +56,46 @@ semantics are defined by the ObjectStore contract but are not implemented yet.
 | `OpenAlexAssetMetadata` | Validates one current-layout OpenAlex snapshot file description |
 | `parse_openalex_works_manifest()` | Purely parses caller-provided current Works manifest content; no discovery or downloads |
 | `select_openalex_works_sample()` | Selects bounded eligible metadata only; no object reads/writes or downloads |
+| `OpenAlexConnector` | Anonymous manifest-only discovery plus size-limited streaming retrieval |
 | `ObjectStore` | `put_if_absent()` requires provenance and never overwrites; `open()` is read-only |
 | `Warehouse` | `query()` accepts bound parameters and returns a PyArrow table |
 
-Skeletons: OpenAlex connector; local/GCS object stores; PostgreSQL, BigQuery, and
-DuckDB warehouses. Cloud SDKs and PostgreSQL drivers are deliberately deferred.
+Skeletons: local/GCS object stores; PostgreSQL, BigQuery, and DuckDB warehouses.
+Cloud SDKs and PostgreSQL drivers are deliberately deferred.
 DuckDB is available as a development dependency for offline analytical tests.
 Warehouse SQL and parameter conventions remain backend-specific; the interface
 does not promise portable SQL. Writes/migrations need later explicit contracts.
 The OpenAlex Works manifest parser, snapshot metadata model, identity and duplicate
 rules, and bounded sample-selection contract are specified in
 [the OpenAlex discovery and manifest contract](docs/architecture/openalex-manifest-contract.md).
+
+The connector defaults to the current Works JSON Lines manifest at
+`https://openalex.s3.amazonaws.com/data/jsonl/works/manifest.json`. Public OpenAlex
+The architecture contract records observed anonymous manifest access and the live
+declared formats. Public documentation describes JSONL `.gz` and Snappy `.parquet`
+payload codecs; these are expected codecs, not payloads inspected by this connector.
+The adapter uses anonymous HTTPS only, never AWS credential discovery, and accepts
+the observed `binary/octet-stream` manifest MIME while validating the bounded JSON
+body.
+
+Discovery caps the manifest at 1,000,000 actual bytes and applies the existing
+selector (default one file, 25,000,000 bytes). `fetch()` returns a caller-owned
+binary stream, reads in bounded chunks, enforces actual cumulative bytes including a
+bounded overflow probe, checks declared length for truncation, and closes responses
+on EOF, explicit close, or errors. HTTP attempts have monotonic deadlines (10
+seconds by default, at most 30); at most 3 attempts are made by default, with
+bounded exponential backoff. A stream is never restarted after it is returned.
+`OpenAlexConnector` has no constructor-time network side effects.
+
+The opt-in connectivity check reads only the bounded Works manifest:
+
+The network check is opt-in and reads only the bounded Works manifest:
+
+```bash
+python -m research_platform.sources.openalex.connectivity
+```
+
+It is not invoked by tests or `make test`.
 
 ## Local development
 
@@ -139,7 +168,7 @@ config/                  Local and future environment YAML templates
 src/research_platform/
   common/                Structured logging
   config/                Configuration models and loader
-  sources/openalex/      Public source connector skeleton
+  sources/openalex/      Public OpenAlex manifest parser and bounded connector
   ingestion/             Reserved: future orchestration
   storage/               Immutable ObjectStore contract; local/GCS skeletons
   warehouse/             Warehouse contract; PostgreSQL/BigQuery/DuckDB skeletons
@@ -167,11 +196,12 @@ introduced yet.
 
 ## Tests and CI
 
-`pytest` covers configuration/environment validation, adapter contracts and
-fail-fast behavior, provenance, JSON logging, and an offline DuckDB/PyArrow
-interoperability smoke test using synthetic data. GitHub Actions runs install,
+`pytest` covers configuration/environment validation, adapter contracts, bounded
+OpenAlex connector behavior with synthetic responses, provenance, JSON logging, and
+an offline DuckDB/PyArrow interoperability smoke test. GitHub Actions runs install,
 checks, tests, and wheel packaging on Python 3.12 with read-only repository
-permissions. It needs no cloud secrets, database service, or public data downloads.
+permissions. It needs no cloud secrets, database service, or public data downloads;
+the opt-in connectivity check is not part of CI.
 
 ## Security and deferred work
 
@@ -184,7 +214,7 @@ permissions. It needs no cloud secrets, database service, or public data downloa
 - No LLM, ML, GenAI, NLP, or knowledge graph implementation is included.
 - Future public sources include AACT/ClinicalTrials, FDA, grants, and patents.
 
-The OpenAlex Works manifest parser and its metadata/identity contract are
-implemented as offline boundaries. Manifest acquisition, connector integration,
-downloads, and runtime ingestion remain deferred; this README does not prescribe a
-next roadmap task.
+The OpenAlex Works manifest parser and bounded selector remain offline boundaries.
+The connector acquires only the selected-format Works manifest and provides
+caller-owned bounded streams; it does not write raw data or connect to storage,
+warehouses, or other runtime services.
