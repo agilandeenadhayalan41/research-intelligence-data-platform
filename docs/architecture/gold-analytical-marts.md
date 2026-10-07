@@ -157,4 +157,4 @@ Shared Step 15 publication decision table names remain contract addresses only. 
 
 ## Out of scope
 
-Data quality (#24), Data Service/API (#26), end-to-end pipeline (#27), orchestration (#25), readiness (#28), PostgreSQL/AlloyDB serving (#23), GCS/Terraform/cloud deploy, AACT/OpenFDA, ML/vector/KG.
+End-to-end pipeline (#27; [details](end-to-end-pipeline.md)), orchestration (#25), readiness (#28), PostgreSQL/AlloyDB serving (#23), GCS/Terraform/cloud deploy, AACT/OpenFDA, ML/vector/KG. Data quality (#24) and Data Service (#26) are complete.

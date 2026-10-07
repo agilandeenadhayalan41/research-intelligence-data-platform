@@ -48,10 +48,35 @@ is deployed or MEASURED. Step 18 adds no HTTP service and no Postgres serving.
 
 ### Next scoped work
 
+**Steps 01–18 ✅ complete.**
+
 **Step 19 / [#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27):**
-bounded end-to-end pipeline (discover → ingest → validate → canonicalize →
-deletions → analytical models → quality gate → publish). Do not start #27 from
-this hardening PR.
+bounded end-to-end pipeline. See
+[End-to-end pipeline](docs/architecture/end-to-end-pipeline.md).
+
+```text
+discover
+  ↓
+select
+  ↓
+ingest
+  ↓
+immutable landing
+  ↓
+canonicalize
+  ↓
+changes/deletions
+  ↓
+analytical models
+  ↓
+data-quality gate
+  ↓
+Gold outputs
+  ↓
+consumer publication
+  ↓
+final validation
+```
 
 Step 18 / [#26](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/26)
 Data Service domain layer is complete; see

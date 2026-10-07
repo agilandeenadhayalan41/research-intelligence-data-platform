@@ -33,7 +33,7 @@ landing and later steps remain planned.
 
 | Step | Work |
 | --- | --- |
-| 19 | Deliver a bounded end-to-end pipeline: discover → ingest → validate → canonicalize → apply deletions → build analytical models → quality gate → publish marts/views → final validation. Default `MAX_FILES=1`. |
+| 19 | Deliver a bounded end-to-end pipeline ([details](end-to-end-pipeline.md)): discover → select → ingest → immutable landing → canonicalize → changes/deletions → analytical models → data-quality gate → Gold outputs → consumer publication → final validation. Default `MAX_FILES=1` ([#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27)). |
 | 20 | After Step 19 works, evaluate local Airflow and future Composer compatibility, CI/CD, Dataform alignment, retries, scheduling, and monitoring. Keep business logic out of DAGs. Include run-scoped analytical publication decision tables (or TEMP tables / single-writer orchestration) so concurrent jobs do not clash on shared `work_publication_decisions` / `accepted_work_ids` / `relationship_publish_work_ids` (Step 15 contracts use shared names for file addressability only). |
 | 21 | Prepare sandbox/dev/QA/prod readiness documentation for IAM, workload identity, secrets, monitoring, recovery, cost controls, deployment, rollback, lineage, and governance. Do not automatically deploy production. |
 
