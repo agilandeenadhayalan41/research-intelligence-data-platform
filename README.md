@@ -1,237 +1,318 @@
 # Research Intelligence Data Platform
 
-Local-first, cloud-ready foundation for public scholarly and research data.
-Development uses **public OpenAlex or synthetic data only**, never Wiley enterprise
-access or proprietary data.
+A local-first platform for public scholarly and research data, with **OpenAlex
+first**, portable canonical schemas, and **BigQuery as the first analytical
+implementation on GCP**. DuckDB supports local validation and prototyping.
+PostgreSQL/AlloyDB is an optional operational projection, justified by benchmarks
+rather than required by the target architecture.
 
-## Phase 1 scope
+Development uses public OpenAlex or synthetic data only. No Wiley enterprise
+access, proprietary data, or cloud credentials are needed for the default tests.
 
-This repository currently provides Python packaging, validated YAML configuration,
-typed adapter contracts and fail-fast skeletons, structured JSON logging,
-provenance metadata, a pure OpenAlex Works manifest parser and deterministic
-size-bounded metadata sample selector, bounded anonymous OpenAlex snapshot manifest
-discovery and file streaming, local PostgreSQL Compose tooling, offline tests, and
-CI. The OpenAlex connector is the only implemented runtime network adapter; storage
-and warehouse adapters remain fail-fast skeletons. Constructing an adapter or
-loading configuration has no service side effects.
+## Current status
 
-## Architecture
+This overview reflects the completed OpenAlex connector in
+[PR #32](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/32)
+and the documentation-only architecture refresh in
+[PR #34](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/34).
+**Steps 01-07 are complete; the full data pipeline is not implemented.**
+
+| Step | Delivered capability | Implementation boundary |
+| --- | --- | --- |
+| 01 | Repository foundation | Python packaging, typed interfaces, structured logging, tests, CI, and optional local PostgreSQL tooling |
+| 02 | Configuration framework | Validated YAML, environment substitution, explicit environment selection, and strict sample limits |
+| 03 | Storage contracts | `ObjectStore` and immutable-write semantics; local/GCS implementations remain skeletons |
+| 04 | Warehouse contracts | Parameterized query/PyArrow interface; DuckDB, BigQuery, and PostgreSQL adapters remain skeletons |
+| 05 | Bounded OpenAlex connector | Anonymous manifest discovery and separate caller-owned streaming retrieval |
+| 06 | Works manifest parser | Pure parsing, validated metadata, stable identities, and duplicate/conflict handling |
+| 07 | Development sample selector | Deterministic, metadata-only selection with file-count and byte-size bounds |
+
+The OpenAlex connector is the only implemented runtime network adapter.
+Constructing adapters or loading configuration does not connect to services.
+The existing provenance model is not a pipeline control database or an ingestion
+implementation.
+
+**Still planned:** source-format/schema profiling, immutable landing, pipeline
+control, canonical modeling, ingestion, change/deletion processing, analytical
+models, gold marts, data quality, consumer APIs, and orchestration. There is no
+implemented GCS/BigQuery deployment or production pipeline.
+
+### Next scoped work
+
+The next coding step is **Step 08: source-format and bounded sample profiling**,
+tracked by [issue #16](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/16).
+It must identify the actual source representation, use PyArrow for genuine
+Parquet, and keep payload retrieval and processing bounded. JSONL must never be
+relabeled as Parquet.
+
+Before assigning that implementation, synchronize the GitHub backlog with the
+merged [roadmap](docs/architecture/roadmap.md). Historical issue scopes and native
+dependencies still need alignment; this README does not perform that refresh.
+Keep [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
+as the open umbrella roadmap. Assign one scoped issue at a time and stop after
+its reviewable PR; do not reopen completed work or automatically start later steps.
+
+## Target architecture
+
+The following diagram is the **target**, not a claim that these components are
+already running:
 
 ```mermaid
-flowchart TD
-    Sources["Public sources"] --> Connectors["Source-specific connectors"]
-    Connectors --> Raw["Immutable raw landing: local first / GCS on GCP"]
-    Raw --> Canonical["Portable canonical data: normalized schemas / Parquet where applicable"]
-    Canonical --> BQ["BigQuery analytical layer on GCP"]
-    Canonical --> DuckDB["DuckDB for local analytical tests"]
-    BQ --> Models["Analytical models and justified materialized aggregates"]
+flowchart LR
+    Sources["Public sources: OpenAlex first"] --> Connectors["Source-specific connectors"]
+    Connectors --> Raw["Immutable raw landing: local first / GCS later"]
+    Raw --> Canonical["Portable canonical entities and relationships"]
+    Canonical --> BigQuery["BigQuery analytical layer on GCP"]
+    Canonical --> DuckDB["DuckDB: local validation and prototypes"]
+    BigQuery --> Models["Analytical models and justified gold marts / aggregates"]
     Models --> API["Storage-independent Data Service/API"]
-    API --> RI["Research Intelligence / applications"]
-    API --> Enrichment["Future enrichment / knowledge graph consumers"]
-    API -. "only if measured requirements justify it" .-> Ops["Optional operational store / cache"]
-    Provenance["Provenance and data quality"] --- Connectors
-    Provenance --- Raw
-    Provenance --- Canonical
+    API --> Consumers["Research Intelligence and other consumers"]
+    API -. "only if BigQuery + API/cache cannot meet measured needs" .-> Optional["Optional PostgreSQL/AlloyDB projection"]
+    Governance["Provenance, lineage, and data quality"] --- Raw
+    Governance --- Canonical
+    Governance --- Models
 ```
 
-This is the **target architecture**, not a delivered pipeline. BigQuery is the
-first analytical implementation on GCP; DuckDB is for local analytical tests and
-prototypes. Query-pattern measurements come before any operational database
-decision. PostgreSQL/AlloyDB is optional: first assess BigQuery with an API/cache,
-then add an operational store only if measured latency, concurrency, or indexed
-lookup requirements justify it. See [platform architecture](docs/architecture/platform-architecture.md),
-[query routing](docs/architecture/query-routing.md), and
-[GCP / BigQuery-first guidance](docs/architecture/gcp-bigquery-first.md).
+- **Preserve the source.** Immutable raw bytes and provenance must support replay
+  without overwrites. Atomic publication and conflict handling belong in storage
+  adapters.
+- **Keep canonical data portable.** Model entities and relationships separately;
+  do not create a giant flattened table or couple canonical schemas to a serving
+  engine. Use Parquet only where applicable.
+- **Start GCP analytics with BigQuery.** Derive partitioning, clustering, bounded
+  scans, and materializations from query evidence. DuckDB results do not prove
+  BigQuery SQL compatibility.
+- **Measure before adding operational storage.** Benchmark latency, concurrency,
+  freshness, frequency, scanned bytes, cost, and result size against BigQuery with
+  an API/cache. Do not copy the full analytical relationship model into PostgreSQL.
+- **Publish capabilities, not unrestricted SQL.** Future consumers should use
+  storage-independent metadata lookup, journal metrics, and publisher analytics.
+  Aggregate multi-valued relationships independently to avoid double counting.
 
-Canonical schemas remain portable and independent of serving technology. Model
-entities and relationships separately rather than creating a flattened table;
-high-volume work-author, work-topic, work-institution, and citation/reference
-relationships belong primarily in the analytical layer. Raw landing preserves
-source bytes and provenance (run identity, source URI, retrieval time, checksum)
-with immutable keys and replay/conflict handling. The ObjectStore contract defines
-these semantics; runtime storage adapters are not implemented.
+See the [platform architecture](docs/architecture/platform-architecture.md),
+[BigQuery-first guidance](docs/architecture/gcp-bigquery-first.md), and
+[query-routing strategy](docs/architecture/query-routing.md) for the design
+decisions and boundaries.
 
-This is a reusable public research data platform, with OpenAlex first and AACT /
-ClinicalTrials as the next planned source (tracked in
-[issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)).
-OpenFDA, grants, patents, news/releases, and other public research datasets are
-future source extensions, not current implementations. Existing Wiley content
-ingestion, content registry/delivery, search, enrichment, and knowledge-graph
-systems remain separate; this repository does not replace or implement them.
+## Implemented OpenAlex flow
 
-Read the [public data source strategy](docs/architecture/public-data-sources.md)
-and the [21-step roadmap](docs/architecture/roadmap.md) for scope and sequencing.
+```text
+Public Works manifest
+  -> bounded manifest retrieval
+  -> pure manifest parser
+  -> deterministic bounded sample selector
+  -> selected SourceAsset metadata
+  -> explicit fetch() call
+  -> caller-owned bounded source-byte stream
+```
 
-### Interfaces
+Discovery does not fetch source data files. Retrieval does not write raw data,
+canonicalize records, load a warehouse, or run a pipeline.
 
-| Contract | Phase 1 boundary |
+| API | Responsibility |
 | --- | --- |
-| `SourceConnector` | `discover()` returns manifest assets; `fetch()` returns a caller-owned stream |
-| `OpenAlexAssetMetadata` | Validates one current-layout OpenAlex snapshot file description |
-| `parse_openalex_works_manifest()` | Purely parses caller-provided current Works manifest content; no discovery or downloads |
-| `select_openalex_works_sample()` | Selects bounded eligible metadata only; no object reads/writes or downloads |
-| `OpenAlexConnector` | Anonymous manifest-only discovery plus size-limited streaming retrieval |
-| `ObjectStore` | `put_if_absent()` requires provenance and never overwrites; `open()` is read-only |
-| `Warehouse` | `query()` accepts bound parameters and returns a PyArrow table |
+| `OpenAlexAssetMetadata` | Validates source format, URI, dates, sizes/counts, and stable asset identity |
+| `parse_openalex_works_manifest()` | Parses caller-provided JSON text, UTF-8 bytes, or a mapping without I/O |
+| `select_openalex_works_sample()` | Returns selected metadata, configured bounds, eligibility counts, and safe skip reasons |
+| `OpenAlexConnector.discover()` | Retrieves only the selected-format Works manifest and reuses the parser/selector |
+| `OpenAlexConnector.fetch()` | Returns a caller-owned binary stream with actual-byte enforcement and explicit failures |
 
-Skeletons: local/GCS object stores; PostgreSQL, BigQuery, and DuckDB warehouses.
-Cloud SDKs and database drivers are deliberately deferred. PostgreSQL is optional,
-not the default serving requirement. Warehouse SQL and parameter conventions
-remain backend-specific; the interface does not promise portable SQL. Writes and
-migrations need later explicit contracts. The Data Service/API consumer contract
-is storage-independent and is a future capability, not an implemented service.
-The OpenAlex Works manifest parser, snapshot metadata model, identity and duplicate
-rules, and bounded sample-selection contract are specified in
-[the OpenAlex discovery and manifest contract](docs/architecture/openalex-manifest-contract.md).
+The selector defaults are exactly `max_files=1` and
+`max_file_size_bytes=25_000_000` (decimal bytes). Invalid limits are rejected, never
+interpreted as unlimited. Unknown-size and oversized assets are excluded; eligible
+assets are ranked smallest first with deterministic tie-breaking.
 
-The connector defaults to the current Works JSON Lines manifest at
-`https://openalex.s3.amazonaws.com/data/jsonl/works/manifest.json`. Public OpenAlex
-The architecture contract records observed anonymous manifest access and the live
-declared formats. Public documentation describes JSONL `.gz` and Snappy `.parquet`
-payload codecs; these are expected codecs, not payloads inspected by this connector.
-The adapter uses anonymous HTTPS only, never AWS credential discovery, and accepts
-the observed `binary/octet-stream` manifest MIME while validating the bounded JSON
-body.
+Manifest reads have a separate 1,000,000-byte cap. Payload retrieval uses bounded
+reads, checks actual cumulative bytes independently of metadata, and uses a
+one-byte probe to detect overflow. Responses are closed on EOF, caller close, or
+failure. Request retries/timeouts are bounded, and returned streams are never
+restarted after partial delivery.
 
-Discovery caps the manifest at 1,000,000 actual bytes and applies the existing
-selector (default one file, 25,000,000 bytes). `fetch()` returns a caller-owned
-binary stream, reads in bounded chunks, enforces actual cumulative bytes including a
-bounded overflow probe, checks declared length for truncation, and closes responses
-on EOF, explicit close, or errors. HTTP attempts have monotonic deadlines (10
-seconds by default, at most 30); at most 3 attempts are made by default, with
-bounded exponential backoff. A stream is never restarted after it is returned.
-`OpenAlexConnector` has no constructor-time network side effects.
+The connector supports the current Works `jsonl` and `parquet` namespaces in the
+public `openalex` bucket, mapped to the fixed `openalex.s3.amazonaws.com` HTTPS
+host. It uses no AWS credentials, authenticated fallback, or redirects. The
+default manifest endpoint is:
 
-The opt-in connectivity check reads only the bounded Works manifest:
+```text
+https://openalex.s3.amazonaws.com/data/jsonl/works/manifest.json
+```
 
-The network check is opt-in and reads only the bounded Works manifest:
+OpenAlex documents gzip-compressed JSONL and Snappy-compressed Parquet.
+Anonymous HEAD and bounded manifest-prefix observations verified metadata access
+and the declared formats, not the payload codecs. The cloud-agent connectivity
+attempt was separately blocked by its runtime firewall. See the
+[OpenAlex contract](docs/architecture/openalex-manifest-contract.md) for dated
+evidence, exact format/identity rules, error categories, and stream ownership.
 
-```bash
+The explicit network check reads only the bounded JSONL Works manifest:
+
+```powershell
 python -m research_platform.sources.openalex.connectivity
 ```
 
-It is not invoked by tests or `make test`.
+This command is **opt-in**, may fail under network restrictions, and is not part
+of default tests or CI. It does not fetch a snapshot data file or contact GCP.
 
 ## Local development
 
-Requires Python 3.12+ and Make. Docker Compose is optional; tests do not need it.
-Run these commands from the repository root:
+Requires **Python 3.12+ and Make**. Docker Compose is optional and is not needed
+for the default test suite. Dependencies and package metadata are defined in
+[`pyproject.toml`](pyproject.toml): Pydantic, PyYAML, and PyArrow at runtime, with
+pytest and DuckDB for development. Direct dependencies are pinned; a complete
+transitive lockfile is not provided.
 
-```bash
+From the repository root, create a virtual environment. In PowerShell:
+
+```powershell
 python -m venv .venv
-source .venv/bin/activate
+.\.venv\Scripts\Activate.ps1
+```
+
+On Linux/macOS, activate the environment with `source .venv/bin/activate` instead.
+Then use the existing Make targets:
+
+```text
 make install
-make test-unit
 make test
 make check
 make build
 ```
 
-`make check` compiles Python and checks installed dependency consistency; a
-dedicated lint/type-check tool is not introduced in this initial foundation.
-`make build` creates an ignored wheel under `dist/`. Direct dependencies are pinned
-in `pyproject.toml`; this is not yet a fully locked transitive environment.
+| Command | Purpose |
+| --- | --- |
+| `make install` | Install the package in editable mode with development dependencies |
+| `make test` | Run all default unit and local integration tests |
+| `make test-unit` | Run only unit tests |
+| `make check` | Compile Python sources/tests and check installed dependency consistency |
+| `make build` | Build a wheel into the ignored `dist` directory without building dependency wheels |
+| `make postgres-up` / `make postgres-down` | Explicitly start/stop the optional local Compose service |
 
-Load configuration explicitly; there is no implicit production selection:
+These commands come from the [Makefile](Makefile). `make check` is not a dedicated
+linter, formatter, or static type checker; those targets do not currently exist.
+For one focused test file in PowerShell:
 
-```python
-from research_platform.config import load_config
-from research_platform.common.logging import configure_logging
-
-config = load_config("config/local.yaml")
-configure_logging(config.log_level)
+```powershell
+python -m pytest tests\unit\test_openalex_sample.py
 ```
 
-YAML is safely parsed, `${VARIABLE}` references are resolved from the process
-environment, and Pydantic rejects unknown fields and invalid backend selections.
-Missing or empty references fail early. Environment substitutions happen **after**
-YAML parsing, so values cannot introduce YAML structure. Relative data paths are
-relative to the current working directory. Python does not automatically load
-`.env`; logs must use safe event messages, never credentials or configuration dumps.
+Default tests use tiny synthetic data, fake HTTP clients/sockets, and local
+DuckDB/PyArrow checks. They do not require cloud credentials, external services,
+or public-source downloads.
 
-| File | Intent |
+The [Tests workflow](.github/workflows/tests.yml) runs install, check, test, and
+wheel packaging on pushes and pull requests, using Python 3.12 on `ubuntu-latest`
+with read-only repository permissions. Required-check enforcement is a separate
+GitHub repository setting, not established by the workflow file.
+
+## Configuration and environments
+
+Load one configuration explicitly; do not print configuration or environment
+contents:
+
+```python
+from pathlib import Path
+
+from research_platform.common.logging import configure_logging
+from research_platform.config import load_config
+from research_platform.sources.openalex import OpenAlexConnector
+
+config = load_config(Path("config") / "local.yaml")
+configure_logging(config.log_level)
+connector = OpenAlexConnector(sample_selection=config.sample_selection)
+```
+
+This example does not discover or retrieve anything. The
+[loader](src/research_platform/config/loader.py) resolves `${VARIABLE}` references
+after safe YAML parsing; missing/empty referenced values fail explicitly.
+[Pydantic models](src/research_platform/config/models.py) reject unknown settings
+and invalid sample limits. Relative data paths are relative to the process
+working directory. Python does not automatically load `.env`.
+
+| Configuration | Current meaning |
 | --- | --- |
-| `config/local.yaml` | Local landing, PostgreSQL warehouse selection (skeleton), in-memory DuckDB |
-| `config/gcp-sandbox.yaml` | GCS/BigQuery identifiers supplied via environment variables; no resources created |
-| `config/dev.yaml`, `config/qa.yaml`, `config/prod.yaml` | Local-only placeholders, not deployment configurations |
+| [`config/local.yaml`](config/local.yaml) | Local storage settings, in-memory DuckDB settings, and bounded sample defaults |
+| [`config/gcp-sandbox.yaml`](config/gcp-sandbox.yaml) | Future GCS/BigQuery identifiers from environment variables; no resources created |
+| [`config/dev.yaml`](config/dev.yaml), [`config/qa.yaml`](config/qa.yaml), [`config/prod.yaml`](config/prod.yaml) | Local-only placeholders, not verified deployments |
 
-The sandbox template requires `GOOGLE_CLOUD_PROJECT`, `GCS_BUCKET`, and
-`BIGQUERY_DATASET`. Credentials are not YAML settings: future adapters will use
-environment-provided credentials/ADC or workload identity. No cloud credentials
-are needed for Phase 1 tests. Do not connect to any production environment.
+The scaffold still includes `warehouse.transactional: postgres`; that setting
+does not implement PostgreSQL persistence or make operational serving mandatory.
+Storage/warehouse adapters remain skeletons. Configuration alignment and runtime
+implementation require separately scoped work.
+
+The sandbox template references `GOOGLE_CLOUD_PROJECT`, `GCS_BUCKET`, and
+`BIGQUERY_DATASET`. Future cloud adapters must obtain credentials through approved
+environment/ADC or workload-identity mechanisms, never tracked credential files.
+Sandbox -> DEV -> QA -> PROD is a future readiness path, not deployed infrastructure.
 
 ### Optional local PostgreSQL
 
-```bash
-cp .env.example .env
-# Edit .env and set a unique, local-only POSTGRES_PASSWORD.
+The [Compose file](docker-compose.yml) provides PostgreSQL 16 for explicitly
+requested local tooling only:
+
+```powershell
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+# Set a unique local POSTGRES_PASSWORD in .env before starting Compose.
 make postgres-up
 make postgres-down
 ```
 
-Compose binds PostgreSQL only to `127.0.0.1` and requires a non-empty password.
-It does not run migrations or ingest data. `postgres-down` preserves the local
-database volume; explicitly remove volumes only when intentionally discarding data.
-Set `POSTGRES_DSN` in the process environment when connection behavior is added;
-never place a credential-bearing DSN in tracked YAML.
+Do not replace an existing `.env`. Compose binds only to `127.0.0.1`, requires a
+non-empty password, and preserves its named volume on `postgres-down`. It does not
+run migrations or ingest data. Never put a credential-bearing `POSTGRES_DSN` in
+tracked YAML or logs.
 
-## Repository layout
+## Documentation and repository map
+
+| Document | Read it for |
+| --- | --- |
+| [Platform architecture](docs/architecture/platform-architecture.md) | Layers, responsibilities, and system boundaries |
+| [GCP / BigQuery-first architecture](docs/architecture/gcp-bigquery-first.md) | Analytical strategy, cost safety, and optional operational storage |
+| [Query routing](docs/architecture/query-routing.md) | Benchmark categories, consumer capabilities, and materialization decisions |
+| [Public data sources](docs/architecture/public-data-sources.md) | Source priorities and source-specific normalization |
+| [OpenAlex contract](docs/architecture/openalex-manifest-contract.md) | Implemented metadata, parser, selector, connector, and public-access evidence |
+| [21-step roadmap](docs/architecture/roadmap.md) | Completed stages and separately scoped future work |
+| [Copilot instructions](.github/copilot-instructions.md) | Engineering rules, phase boundaries, and required validation |
 
 ```text
-.github/                 Copilot engineering principles and test workflow
-config/                  Local and future environment YAML templates
-src/research_platform/
-  common/                Structured logging
-  config/                Configuration models and loader
-  sources/openalex/      Public OpenAlex manifest parser and bounded connector
-  ingestion/             Reserved: future orchestration
-  storage/               Immutable ObjectStore contract; local/GCS skeletons
-  warehouse/             Warehouse contract; PostgreSQL/BigQuery/DuckDB skeletons
-  provenance/            Required ingestion metadata
-  quality/               Reserved: future quality checks
-  serving/               Reserved: future query services
-sql/
-  control/ raw/ canonical/ postgres/ olap/ quality/
-dags/                    Reserved: Airflow later (no DAGs yet)
-scripts/                 Reserved: operational tools
-tests/
-  unit/ integration/ fixtures/
-data/
-  manifests/ sample/ landing/  Ignored runtime data; no downloaded datasets
-docs/
-  architecture/ development/ data-model/ runbooks/
-infrastructure/
-  terraform/             Reserved: infrastructure later (no resources yet)
+config\                       Local and future environment templates
+src\research_platform\
+  common\                     Structured JSON logging
+  config\                     Validated models and explicit YAML loading
+  sources\openalex\            Metadata, parser, selector, connector, connectivity CLI
+  storage\                    ObjectStore contract; local/GCS skeletons
+  warehouse\                  Warehouse contract; DuckDB/BigQuery/PostgreSQL skeletons
+  provenance\                 Retrieval-provenance model
+  ingestion\ quality\ serving\ Reserved runtime areas
+tests\                        Offline unit/integration tests and synthetic fixtures
+docs\architecture\            Architecture, contracts, source strategy, roadmap
+sql\                          Reserved control/canonical/serving/quality SQL areas
+scripts\ dags\                Reserved operational tools and later orchestration
+infrastructure\terraform\     Reserved infrastructure; no provisioned resources
+data\                         Ignored runtime-data locations; no committed datasets
 ```
 
-Empty directories are tracked with `.gitkeep`. Architecture documentation is
-maintained in `docs/architecture/`; Docusaurus publication remains deferred and
-no Node application or docs deployment is introduced.
+Reserved directories are not delivered workloads. Docusaurus publication,
+Airflow/Composer, Dataform coordination, Terraform resources, and deployed APIs
+remain future work.
 
-## Tests and CI
+## Public-data and delivery boundaries
 
-`pytest` covers configuration/environment validation, adapter contracts, bounded
-OpenAlex connector behavior with synthetic responses, provenance, JSON logging, and
-an offline DuckDB/PyArrow interoperability smoke test. GitHub Actions runs install,
-checks, tests, and wheel packaging on Python 3.12 with read-only repository
-permissions. It needs no cloud secrets, database service, or public data downloads;
-the opt-in connectivity check is not part of CI.
+OpenAlex is the only implemented source connector. AACT/ClinicalTrials is the
+next planned source; OpenFDA, grants, patents, news/releases, and other public
+datasets remain future extensions. Each needs its own verified source contract
+and normalization; the OpenAlex schema must not be imposed on other sources.
 
-## Security and deferred work
-
-- Never commit credentials, `.env`, service-account JSON, or large downloaded data.
-  Credential files must live outside this repository, regardless of filename.
-- Never hardcode cloud project IDs, use Wiley proprietary data, or provision
-  costly cloud resources. Use only public OpenAlex or synthetic test fixtures.
-- Runtime GCS/BigQuery/PostgreSQL adapters, actual ingestion, canonical SQL
-  migrations, deployed serving, Airflow, Terraform resources, and Docusaurus site
-  setup are deferred. BigQuery is the planned first GCP analytical implementation;
-  PostgreSQL/AlloyDB remains conditional on query-pattern evidence.
-- No LLM, ML, GenAI, NLP, or knowledge graph implementation is included.
-- Future sources include AACT/ClinicalTrials (issue #2), OpenFDA, grants, patents,
-  news/releases, and other public datasets. AACT is documented but not implemented.
-
-The OpenAlex Works manifest parser and bounded selector remain offline boundaries.
-The connector acquires only the selected-format Works manifest and provides
-caller-owned bounded streams; it does not write raw data or connect to storage,
-warehouses, or other runtime services.
+- Work in small, explicitly selected phases. For code changes, run `make test`,
+  `make check`, and `make build`; resolve failures before presenting the PR.
+- Never commit credentials, `.env`, service-account JSON, or downloaded datasets.
+  Keep credential files outside the repository. Do not hardcode cloud project IDs
+  or log credentials, DSNs, environment contents, or sensitive payloads.
+- Preserve raw bytes and immutable provenance. Future ingestion must attach run
+  identity, source URI, retrieval time, and a checksum calculated from actual bytes;
+  a metadata-derived asset ID is not a payload checksum.
+- Do not access production, create cloud resources, or start other roadmap tasks
+  without explicit authorization. A configuration template is not proof of access,
+  readiness, or deployment.
+- Do not implement Wiley content ingestion, internal services, LLM/ML/GenAI/NLP,
+  embeddings, or knowledge graphs as part of the current platform stages. Future
+  consumers remain separate from this repository's delivered capabilities.
