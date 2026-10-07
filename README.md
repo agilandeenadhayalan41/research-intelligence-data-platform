@@ -11,8 +11,8 @@ access, proprietary data, or cloud credentials are needed for the default tests.
 
 ## Current status
 
-**Steps 01–16 are complete through Gold analytical mart contracts.
-Step 17 / #24 (data quality) is next.
+**Steps 01–17 are complete through data-quality gates and metrics.
+Step 18 / #26 (Data Service/API) is next.
 The full end-to-end / cloud pipeline is not implemented.**
 
 | Step | Delivered capability | Implementation boundary |
@@ -33,23 +33,24 @@ The full end-to-end / cloud pipeline is not implemented.**
 | 14 | Query-pattern + benchmark registry | Typed OpenAlex workload registry, grains, fan-out risks, evidence-honest placements, FIXTURE_ONLY local harness; no BigQuery deploy ([#19](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/19)) |
 | 15 | BigQuery-first analytical contracts | BigQuery Standard SQL DDL/queries, grains, partition/cluster, MERGE/refresh, cost rules, DuckDB `SEMANTIC_ONLY` validation; no GCP deploy or paid queries ([#22](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/22)) |
 | 16 | Gold analytical marts | Consumer Gold marts, grains, fan-out-safe SQL, ACTIVE/citation/license semantics, evidence-honest materialization candidates, DuckDB `SEMANTIC_ONLY`; no GCP deploy ([#55](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/55)) |
+| 17 | Data quality gates and metrics | HARD_GATE vs INFORMATIONAL_METRIC, canonical/relationship/reconciliation/Gold exclusion gates, DuckDB `SEMANTIC_ONLY` runner; no silent repair, no GCP deploy ([#24](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/24)) |
 
 Constructing adapters or loading configuration does not connect to services.
 `LocalObjectStore` writes only under the configured local landing path. Default
 ingestion tests stay offline (fake connector + in-memory control/canonical).
 The GCS adapter remains a skeleton.
 
-**Still planned:** GCS landing, data quality, consumer APIs, and orchestration.
+**Still planned:** GCS landing, consumer APIs, and orchestration.
 There is no implemented GCS/BigQuery deployment or production pipeline.
-Steps 15–16 define BigQuery/Gold contracts only — nothing is deployed or MEASURED.
+Steps 15–17 define BigQuery/Gold/quality contracts only — nothing is deployed or MEASURED.
 
 ### Next scoped work
 
-**Step 17 / [#24](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/24):**
-Data quality gates for canonical IDs, relationships, deleted-record exclusion,
-and reconciliation metrics. Driven by
-[Gold analytical marts](docs/architecture/gold-analytical-marts.md) and prior
-canonical/analytical contracts.
+**Step 18 / [#26](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/26):**
+Storage-independent Data Service/API capabilities for metadata lookup and
+journal/publisher analytics. Driven by
+[Data quality](docs/architecture/data-quality.md) and prior Gold/analytical
+contracts.
 
 Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
@@ -295,6 +296,7 @@ tracked YAML or logs.
 | [Query-pattern benchmarks](docs/architecture/query-pattern-benchmarks.md) | Step 14 registry fields, grains, fan-out, evidence, placement rules |
 | [BigQuery analytical models](docs/architecture/bigquery-analytical-models.md) | Step 15 BQ DDL/SQL contracts, partition/cluster, MERGE, SEMANTIC_ONLY limits |
 | [Gold analytical marts](docs/architecture/gold-analytical-marts.md) | Step 16 Gold grains, fan-out safety, materialization honesty, SEMANTIC_ONLY limits |
+| [Data quality](docs/architecture/data-quality.md) | Step 17 HARD_GATE/metric registry, publication blocking, SEMANTIC_ONLY limits |
 | [Public data sources](docs/architecture/public-data-sources.md) | Source priorities and source-specific normalization |
 | [OpenAlex contract](docs/architecture/openalex-manifest-contract.md) | Implemented metadata, parser, selector, connector, and public-access evidence |
 | [OpenAlex source profiling](docs/architecture/openalex-source-profiling.md) | Bounded profiler, evidence classes, verified representations, and format decision |
@@ -318,14 +320,15 @@ src\research_platform\
   benchmarks\                 Query-pattern registry models, fan-out fixtures, FIXTURE_ONLY harness
   analytics\bigquery\         Step 15 BigQuery table/query contracts + offline validation
   analytics\gold\             Step 16 Gold mart contracts + SEMANTIC_ONLY validation
+  quality\                    Step 17 data-quality gates, metrics, SEMANTIC_ONLY runner
   warehouse\                  Warehouse contract; DuckDB/BigQuery/PostgreSQL skeletons
   provenance\                 Immutable retrieval-provenance model
-  ingestion\ quality\ serving\ Reserved runtime areas
+  ingestion\ serving\         Reserved runtime areas
 tests\                        Offline unit/integration tests and synthetic fixtures
 docs\architecture\            Architecture, contracts, source strategy, roadmap
 sql\control\                  Versioned PostgreSQL control DDL specs (not auto-applied)
 sql\canonical\                Versioned PostgreSQL canonical DDL specs (not BigQuery)
-sql\bigquery\openalex\        BigQuery Standard SQL DDL, MERGE models, pattern queries, gold marts (not deployed)
+sql\bigquery\openalex\        BigQuery Standard SQL DDL, MERGE models, pattern queries, gold marts, quality (not deployed)
 scripts\ dags\                Reserved operational tools and later orchestration
 infrastructure\terraform\     Reserved infrastructure; no provisioned resources
 data\                         Ignored runtime-data locations; no committed datasets
