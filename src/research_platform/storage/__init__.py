@@ -12,6 +12,8 @@ from research_platform.storage.errors import (
 from research_platform.storage.gcs import GCSObjectStore
 from research_platform.storage.local import LocalObjectStore, dumps_provenance
 from research_platform.storage.openalex_layout import (
+    openalex_deletion_raw_object_key,
+    openalex_deletion_raw_provenance_key,
     openalex_raw_object_key,
     openalex_raw_provenance_key,
     openalex_source_extension,
@@ -28,6 +30,8 @@ __all__ = [
     "ObjectStore",
     "ObjectStoreError",
     "dumps_provenance",
+    "openalex_deletion_raw_object_key",
+    "openalex_deletion_raw_provenance_key",
     "openalex_raw_object_key",
     "openalex_raw_provenance_key",
     "openalex_source_extension",

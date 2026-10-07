@@ -11,8 +11,8 @@ access, proprietary data, or cloud credentials are needed for the default tests.
 
 ## Current status
 
-**Steps 01–12 are complete.
-Step 13 / #21 (OpenAlex deletions/change handling) is next.
+**Steps 01–13 are complete.
+Step 14 / #19 (query patterns + benchmarks) is next.
 The full end-to-end / cloud pipeline is not implemented.**
 
 | Step | Delivered capability | Implementation boundary |
@@ -29,21 +29,22 @@ The full end-to-end / cloud pipeline is not implemented.**
 | 10 | Pipeline control contracts | `PipelineRun`, `SourceFileControl`, `RecordProvenance`, lifecycle/claim rules, `ControlStore` protocol, and versioned PostgreSQL DDL specs |
 | 11 | Canonical OpenAlex model | Normalized entities/relationships, ID rules, PyArrow schemas, source mapping, lineage/version semantics; no ingestion |
 | 12 | One-file local Works ingestion | Manifest → claim → immutable land → stream decode/map/upsert/provenance inside one Postgres txn → SUCCESS; `--backend memory|postgres`; offline + Postgres tests ([#20](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/20)) |
+| 13 | OpenAlex Works deletions | `deleted_ids.csv.gz` → claim → immutable land → stream tombstones + deletion lineage in one txn; no silent resurrection; offline + Postgres tests ([#21](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/21)) |
 
 Constructing adapters or loading configuration does not connect to services.
 `LocalObjectStore` writes only under the configured local landing path. Default
 ingestion tests stay offline (fake connector + in-memory control/canonical).
 The GCS adapter remains a skeleton.
 
-**Still planned:** change/deletion processing, GCS landing, analytical models,
+**Still planned:** query/benchmark registry, GCS landing, analytical models,
 gold marts, data quality, consumer APIs, and orchestration. There is no
 implemented GCS/BigQuery deployment or production pipeline.
 
 ### Next scoped work
 
-**Step 13 / [#21](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/21):**
-OpenAlex deletions and change handling. Step 12 local Works ingestion is
-complete; see [local Works ingestion](docs/architecture/local-works-ingestion.md).
+**Step 14 / [#19](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/19):**
+query patterns and benchmarks. Step 13 deletions are documented in
+[OpenAlex deletions](docs/architecture/openalex-deletions.md).
 
 Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
@@ -198,7 +199,7 @@ make build
 | `make install` | Install the package in editable mode with development dependencies |
 | `make test` | Run default offline unit/integration tests (`-m "not postgres"`) |
 | `make test-unit` | Run only unit tests (also excludes postgres) |
-| `make test-postgres-ingestion` | Separately invoked local PostgreSQL Step 12 transaction tests |
+| `make test-postgres-ingestion` | Separately invoked local PostgreSQL Steps 12–13 transaction tests |
 | `make check` | Compile Python sources/tests and check installed dependency consistency |
 | `make build` | Build a wheel into the ignored `dist` directory without building dependency wheels |
 | `make postgres-up` / `make postgres-down` | Explicitly start/stop the optional local Compose service |
@@ -213,7 +214,7 @@ python -m pytest tests\unit\test_openalex_sample.py
 
 Default tests use tiny synthetic data, fake HTTP clients/sockets, and local
 DuckDB/PyArrow checks. They do not require cloud credentials, external services,
-or public-source downloads. Durable Step 12 PostgreSQL tests require
+or public-source downloads. Durable Steps 12–13 PostgreSQL tests require
 `POSTGRES_DSN` and `make test-postgres-ingestion` (skipped when unavailable).
 
 The [Tests workflow](.github/workflows/tests.yml) runs install, check, test, and
@@ -292,6 +293,7 @@ tracked YAML or logs.
 | [Immutable local landing](docs/architecture/immutable-local-landing.md) | Raw key layout, atomic publish, replay/conflict, open integrity |
 | [Pipeline control](docs/architecture/pipeline-control.md) | Control models, lifecycle, claims, idempotency, ControlStore boundary |
 | [OpenAlex canonical model](docs/architecture/openalex-canonical-model.md) | Normalized entities/relationships, IDs, mapping, PyArrow contracts |
+| [OpenAlex deletions](docs/architecture/openalex-deletions.md) | Tombstones, precedence/restore, deletion lineage, transaction boundary |
 | [21-step roadmap](docs/architecture/roadmap.md) | Completed stages and separately scoped future work |
 | [Copilot instructions](.github/copilot-instructions.md) | Engineering rules, phase boundaries, and required validation |
 

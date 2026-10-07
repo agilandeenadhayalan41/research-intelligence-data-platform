@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any
+from uuid import UUID
 
 import psycopg
 from psycopg.rows import dict_row
 
+from research_platform.canonical.openalex.deletions import (
+    DeletionOutcome,
+    RestoreRequiredError,
+    classify_deletion,
+    tombstone_work,
+)
 from research_platform.canonical.openalex.models import (
     Author,
+    CanonicalActivityState,
     CanonicalWorkBundle,
     Funder,
     Institution,
@@ -85,6 +94,29 @@ class PostgresCanonicalStore(CanonicalStore):
         with self._conn.transaction():
             return upsert_work_bundle(self._conn, bundle)
 
+    def apply_work_deletion(
+        self,
+        work_id: str,
+        *,
+        deletion_asset_id: str,
+        source_checksum_sha256: str,
+        run_id: UUID,
+        source_updated_date: date | None,
+        processed_at: datetime,
+        deleted_at: datetime,
+    ) -> DeletionOutcome:
+        with self._conn.transaction():
+            return apply_work_deletion(
+                self._conn,
+                work_id,
+                deletion_asset_id=deletion_asset_id,
+                source_checksum_sha256=source_checksum_sha256,
+                run_id=run_id,
+                source_updated_date=source_updated_date,
+                processed_at=processed_at,
+                deleted_at=deleted_at,
+            )
+
 
 def upsert_work_bundle(
     connection: psycopg.Connection, bundle: CanonicalWorkBundle
@@ -94,6 +126,9 @@ def upsert_work_bundle(
     if existing is None:
         _apply_bundle(connection, bundle, replace_relationships=True)
         return CanonicalUpsertOutcome.INSERTED
+    blocked = _deletion_blocks_active_upsert(existing, bundle.work)
+    if blocked is not None:
+        return blocked
     comparison = compare_work_versions(existing, bundle.work)
     if comparison is VersionComparison.IDENTICAL:
         _upsert_shared_entities(connection, bundle)
@@ -107,6 +142,59 @@ def upsert_work_bundle(
         )
     _apply_bundle(connection, bundle, replace_relationships=True)
     return CanonicalUpsertOutcome.REPLACED
+
+
+def apply_work_deletion(
+    connection: psycopg.Connection,
+    work_id: str,
+    *,
+    deletion_asset_id: str,
+    source_checksum_sha256: str,
+    run_id: UUID,
+    source_updated_date: date | None,
+    processed_at: datetime,
+    deleted_at: datetime,
+) -> DeletionOutcome:
+    """Tombstone one Work using the caller's open transaction."""
+    existing = _load_work(connection, work_id)
+    outcome = classify_deletion(existing, deletion_updated_date=source_updated_date)
+    if outcome is DeletionOutcome.UNKNOWN_WORK:
+        return outcome
+    if outcome in {DeletionOutcome.ALREADY_DELETED, DeletionOutcome.STALE}:
+        return outcome
+    assert existing is not None
+    tombstoned = tombstone_work(
+        existing,
+        deletion_asset_id=deletion_asset_id,
+        source_checksum_sha256=source_checksum_sha256,
+        run_id=run_id,
+        source_updated_date=source_updated_date,
+        processed_at=processed_at,
+        deleted_at=deleted_at,
+    )
+    _upsert_work_row(connection, tombstoned)
+    return DeletionOutcome.DELETED
+
+
+def _deletion_blocks_active_upsert(
+    existing: Work, incoming: Work
+) -> CanonicalUpsertOutcome | None:
+    if existing.lineage.activity_state is not CanonicalActivityState.DELETED:
+        return None
+    if incoming.lineage.activity_state is CanonicalActivityState.DELETED:
+        return None
+    deletion_date = existing.lineage.source_updated_date
+    incoming_date = incoming.lineage.source_updated_date
+    if (
+        deletion_date is not None
+        and incoming_date is not None
+        and incoming_date <= deletion_date
+    ):
+        return CanonicalUpsertOutcome.STALE
+    raise RestoreRequiredError(
+        f"work {existing.work_id} is DELETED; newer active ingestion requires "
+        "explicit restore reconciliation (RESTORE_REQUIRED)"
+    )
 
 
 def _load_work(connection: psycopg.Connection, work_id: str) -> Work | None:

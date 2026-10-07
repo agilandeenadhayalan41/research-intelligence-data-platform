@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import threading
+from datetime import date, datetime
+from uuid import UUID
 
+from research_platform.canonical.openalex.deletions import (
+    DeletionOutcome,
+    classify_deletion,
+    tombstone_work,
+)
 from research_platform.canonical.openalex.models import (
     Author,
+    CanonicalActivityState,
     CanonicalWorkBundle,
     Funder,
     Institution,
@@ -27,6 +35,7 @@ from research_platform.canonical.openalex.reconciliation import (
     merge_shared_entity,
     reconcile_shared_entity,
 )
+from research_platform.canonical.openalex.deletions import RestoreRequiredError
 from research_platform.canonical.openalex.versioning import (
     VersionComparison,
     compare_work_versions,
@@ -97,6 +106,10 @@ class InMemoryCanonicalStore(CanonicalStore):
                 self._apply_bundle(bundle, replace_relationships=True)
                 return CanonicalUpsertOutcome.INSERTED
 
+            blocked = _deletion_blocks_active_upsert(existing, bundle.work)
+            if blocked is not None:
+                return blocked
+
             comparison = compare_work_versions(existing, bundle.work)
             if comparison is VersionComparison.IDENTICAL:
                 # Still enrich shared entities from this observation.
@@ -112,6 +125,38 @@ class InMemoryCanonicalStore(CanonicalStore):
             # NEWER
             self._apply_bundle(bundle, replace_relationships=True)
             return CanonicalUpsertOutcome.REPLACED
+
+    def apply_work_deletion(
+        self,
+        work_id: str,
+        *,
+        deletion_asset_id: str,
+        source_checksum_sha256: str,
+        run_id: UUID,
+        source_updated_date: date | None,
+        processed_at: datetime,
+        deleted_at: datetime,
+    ) -> DeletionOutcome:
+        with self._lock:
+            existing = self._works.get(work_id)
+            outcome = classify_deletion(
+                existing, deletion_updated_date=source_updated_date
+            )
+            if outcome is DeletionOutcome.UNKNOWN_WORK:
+                return outcome
+            if outcome in {DeletionOutcome.ALREADY_DELETED, DeletionOutcome.STALE}:
+                return outcome
+            assert existing is not None
+            self._works[work_id] = tombstone_work(
+                existing,
+                deletion_asset_id=deletion_asset_id,
+                source_checksum_sha256=source_checksum_sha256,
+                run_id=run_id,
+                source_updated_date=source_updated_date,
+                processed_at=processed_at,
+                deleted_at=deleted_at,
+            )
+            return DeletionOutcome.DELETED
 
     def _apply_bundle(
         self, bundle: CanonicalWorkBundle, *, replace_relationships: bool
@@ -211,3 +256,25 @@ class InMemoryCanonicalStore(CanonicalStore):
         raise CanonicalConflictError(
             f"conflicting shared entity values for {type(incoming).__name__} {entity_id}"
         )
+
+
+def _deletion_blocks_active_upsert(
+    existing: Work, incoming: Work
+) -> CanonicalUpsertOutcome | None:
+    """Enforce no silent resurrection of DELETED Works."""
+    if existing.lineage.activity_state is not CanonicalActivityState.DELETED:
+        return None
+    if incoming.lineage.activity_state is CanonicalActivityState.DELETED:
+        return None
+    deletion_date = existing.lineage.source_updated_date
+    incoming_date = incoming.lineage.source_updated_date
+    if (
+        deletion_date is not None
+        and incoming_date is not None
+        and incoming_date <= deletion_date
+    ):
+        return CanonicalUpsertOutcome.STALE
+    raise RestoreRequiredError(
+        f"work {existing.work_id} is DELETED; newer active ingestion requires "
+        "explicit restore reconciliation (RESTORE_REQUIRED)"
+    )

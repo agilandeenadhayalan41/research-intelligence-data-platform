@@ -132,7 +132,7 @@ class SourceFileControl(SettingsModel):
     source_uri: str = Field(min_length=1, max_length=2048)
     snapshot_date: date
     updated_date: date | None = None
-    content_format: Literal["jsonl", "parquet"]
+    content_format: Literal["jsonl", "parquet", "csv"]
     declared_size_bytes: int | None = Field(default=None, strict=True, ge=0)
     source_checksum_sha256: str | None = Field(default=None, pattern=_SHA256)
     raw_object_key: str | None = Field(default=None, min_length=1, max_length=1024)

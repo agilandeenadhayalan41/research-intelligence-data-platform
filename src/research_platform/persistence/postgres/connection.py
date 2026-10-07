@@ -9,6 +9,7 @@ import psycopg
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _CONTROL_DDL = _REPO_ROOT / "sql" / "control" / "001_pipeline_control.sql"
+_DELETION_DDL = _REPO_ROOT / "sql" / "control" / "002_deletion_events.sql"
 _CANONICAL_DDL = _REPO_ROOT / "sql" / "canonical" / "001_openalex_canonical.sql"
 
 
@@ -33,8 +34,19 @@ def connect_postgres(dsn: str) -> psycopg.Connection:
 
 
 def apply_ingestion_schema(connection: psycopg.Connection) -> None:
-    """Apply control + canonical review DDL (idempotent CREATE IF NOT EXISTS)."""
+    """Apply control + canonical + deletion DDL (idempotent CREATE IF NOT EXISTS)."""
     with connection.transaction():
-        for path in (_CONTROL_DDL, _CANONICAL_DDL):
+        for path in (_CONTROL_DDL, _DELETION_DDL, _CANONICAL_DDL):
             sql = path.read_text(encoding="utf-8")
             connection.execute(sql)
+        # Widen content_format for DBs created before Step 13 added csv.
+        connection.execute(
+            "ALTER TABLE source_files DROP CONSTRAINT IF EXISTS source_files_format_check"
+        )
+        connection.execute(
+            """
+            ALTER TABLE source_files
+            ADD CONSTRAINT source_files_format_check
+            CHECK (content_format IN ('jsonl', 'parquet', 'csv'))
+            """
+        )

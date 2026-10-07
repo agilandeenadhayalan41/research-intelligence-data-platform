@@ -123,7 +123,7 @@ CREATE TABLE IF NOT EXISTS source_files (
     CONSTRAINT source_files_status_check
         CHECK (status IN ('DISCOVERED', 'PROCESSING', 'SUCCESS', 'FAILED')),
     CONSTRAINT source_files_format_check
-        CHECK (content_format IN ('jsonl', 'parquet')),
+        CHECK (content_format IN ('jsonl', 'parquet', 'csv')),
     CONSTRAINT source_files_attempt_check
         CHECK (attempt_count >= 0),
     CONSTRAINT source_files_size_check

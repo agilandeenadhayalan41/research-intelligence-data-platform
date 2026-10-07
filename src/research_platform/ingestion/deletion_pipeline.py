@@ -1,27 +1,19 @@
-"""One-file idempotent local OpenAlex Works ingestion (Step 12 / #20)."""
+"""Bounded idempotent OpenAlex Works deletion processing (Step 13 / #21)."""
 
 from __future__ import annotations
 
 import hashlib
 import tempfile
-from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO, Literal, Protocol
 from uuid import UUID, uuid4
 
 from research_platform.canonical.memory import InMemoryCanonicalStore
-from research_platform.canonical.openalex import map_openalex_work
-from research_platform.canonical.openalex.models import (
-    CanonicalActivityState,
-    CanonicalLineage,
-)
 from research_platform.canonical.openalex.deletions import RestoreRequiredError
-from research_platform.canonical.store import (
-    CanonicalConflictError,
-    CanonicalStore,
-)
+from research_platform.canonical.store import CanonicalConflictError, CanonicalStore
 from research_platform.config.loader import load_config
 from research_platform.config.models import PlatformConfig
 from research_platform.control.errors import (
@@ -37,103 +29,93 @@ from research_platform.control.models import (
     FailureCategory,
     PipelineRun,
     PipelineRunStatus,
-    RecordProvenance,
     SourceFileControl,
 )
 from research_platform.control.reconciliation import RegistrationOutcome
 from research_platform.control.store import ControlStore
-from research_platform.ingestion.decode_limits import JsonlDecodeLimits
+from research_platform.ingestion.deletion_limits import CsvDeletionDecodeLimits
+from research_platform.ingestion.deletions_csv import iter_deleted_work_ids
 from research_platform.ingestion.errors import (
     IngestionConfigError,
     IngestionDecodeError,
     IngestionError,
     IngestionFormatError,
 )
-from research_platform.ingestion.jsonl import iter_jsonl_gz_records
-from research_platform.persistence.memory_unit_of_work import publish_claimed_asset_memory
-from research_platform.persistence.unit_of_work import (
-    AssetPublishRequest,
-    PublishCounters,
-    StreamedWorkRecord,
+from research_platform.persistence.deletion_unit_of_work import (
+    DeletionCounters,
+    DeletionPublishRequest,
+)
+from research_platform.persistence.memory_deletion_unit_of_work import (
+    publish_claimed_deletions_memory,
 )
 from research_platform.provenance.models import IngestionProvenance
-from research_platform.sources.openalex.connector import OpenAlexConnector
-from research_platform.sources.openalex.metadata import OpenAlexAssetMetadata
+from research_platform.sources.openalex.deletion_metadata import (
+    OpenAlexDeletionAssetMetadata,
+)
 from research_platform.storage.base import ObjectStore
 from research_platform.storage.errors import ObjectConflictError, ObjectStoreError
 from research_platform.storage.local import LocalObjectStore
-from research_platform.storage.openalex_layout import openalex_raw_object_key
+from research_platform.storage.openalex_layout import openalex_deletion_raw_object_key
 
 if TYPE_CHECKING:
     import psycopg
 
-PIPELINE_NAME = "openalex-works-ingest"
+PIPELINE_NAME = "openalex-works-deletions"
 DEFAULT_LEASE = timedelta(minutes=15)
 DEFAULT_WORKER_ID = "local-worker"
 PersistenceBackend = Literal["memory", "postgres"]
 
 
-class _Discoverable(Protocol):
-    def discover_metadata(self) -> object: ...
-
+class _Fetchable(Protocol):
     def fetch(self, asset: object) -> BinaryIO: ...
 
 
 @dataclass(frozen=True)
-class FileIngestStats:
+class DeletionIngestStats:
     asset_id: str
-    works_inserted: int = 0
-    works_identical: int = 0
-    works_replaced: int = 0
-    works_stale: int = 0
-    record_provenance_count: int = 0
-    relationship_counts: Mapping[str, int] = field(default_factory=dict)
+    rows_seen: int = 0
+    unique_ids: int = 0
+    duplicates: int = 0
+    deleted: int = 0
+    already_deleted: int = 0
+    unknown: int = 0
+    stale: int = 0
+    conflicts: int = 0
 
 
 @dataclass(frozen=True)
-class LocalWorksIngestResult:
+class LocalDeletionsIngestResult:
     run: PipelineRun
     source_file: SourceFileControl | None
-    stats: FileIngestStats | None
+    stats: DeletionIngestStats | None
     skipped_reason: str | None = None
     persistence_backend: PersistenceBackend = "memory"
 
 
-def run_openalex_works_local_ingest(
+def run_openalex_deletions_local_ingest(
     config_path: Path | str,
     *,
     backend: PersistenceBackend = "memory",
+    deletion_asset: OpenAlexDeletionAssetMetadata,
     control_store: ControlStore | None = None,
     canonical_store: CanonicalStore | None = None,
     object_store: ObjectStore | None = None,
-    connector: OpenAlexConnector | None = None,
+    connector: _Fetchable | None = None,
     postgres_connection: Any | None = None,
     worker_id: str = DEFAULT_WORKER_ID,
     lease_ttl: timedelta = DEFAULT_LEASE,
     now: Callable[[], datetime] | None = None,
-    content_format: str = "jsonl",
-    decode_limits: JsonlDecodeLimits | None = None,
-) -> LocalWorksIngestResult:
-    """Run one bounded local Works ingestion against an explicitly selected config.
+    decode_limits: CsvDeletionDecodeLimits | None = None,
+) -> LocalDeletionsIngestResult:
+    """Process one bounded deletion CSV.GZ against an explicitly selected config.
 
-    Persistence:
-
-    - ``backend="memory"``: ephemeral in-process stores (tests/demo only)
-    - ``backend="postgres"``: durable local PostgreSQL ControlStore/CanonicalStore
-      behind one asset publication transaction (not ``Warehouse.query``)
-
-    After immutable raw landing, publication is:
-
-    ``BEGIN → re-check claim → upsert canonical → provenance → SUCCESS → COMMIT``
-
-    Raw ObjectStore bytes are outside that DB transaction and may remain after rollback.
+    ``deletion_asset`` must be supplied by the caller (manifest discovery for
+    deletions is not part of this slice; URI template uncertainty is documented).
     """
     clock = now or (lambda: datetime.now(tz=UTC))
     config = load_config(Path(config_path))
     _require_local_config(config)
-    if content_format != "jsonl":
-        raise IngestionFormatError("Step 12 local ingestion supports jsonl only")
-    limits = decode_limits or JsonlDecodeLimits()
+    limits = decode_limits or CsvDeletionDecodeLimits()
 
     owns_connection = False
     connection: Any | None = None
@@ -164,10 +146,10 @@ def run_openalex_works_local_ingest(
         canonical = canonical_store or InMemoryCanonicalStore()
 
     objects = object_store or LocalObjectStore(config.storage)
-    openalex = connector or OpenAlexConnector(
-        sample_selection=config.sample_selection,
-        content_format=content_format,
-    )
+    if connector is None:
+        raise IngestionConfigError(
+            "deletion ingest requires an explicit connector/fetch source"
+        )
 
     started = clock()
     try:
@@ -186,37 +168,14 @@ def run_openalex_works_local_ingest(
             )
         )
         try:
-            selection = openalex.discover_metadata()
-            selected = tuple(getattr(selection, "selected", ()))
-            if not selected:
-                finished = control.finish_pipeline_run(
-                    run.run_id,
-                    status=PipelineRunStatus.SUCCESS,
-                    completed_at=clock(),
-                )
-                return LocalWorksIngestResult(
-                    run=finished,
-                    source_file=None,
-                    stats=None,
-                    skipped_reason="NO_ELIGIBLE_FILE",
-                    persistence_backend=backend,
-                )
-            if len(selected) > config.sample_selection.max_files:
-                selected = selected[: config.sample_selection.max_files]
-            asset = selected[0]
-            if not isinstance(asset, OpenAlexAssetMetadata):
-                raise IngestionFormatError("selected asset must be OpenAlexAssetMetadata")
-            if asset.content_format != "jsonl":
-                raise IngestionFormatError("selected asset must be jsonl")
-
-            result = _ingest_one_asset(
-                asset=asset,
+            result = _ingest_one_deletion_asset(
+                asset=deletion_asset,
                 run=run,
                 config=config,
                 control=control,
                 canonical=canonical,
                 objects=objects,
-                connector=openalex,
+                connector=connector,
                 worker_id=worker_id,
                 lease_ttl=lease_ttl,
                 clock=clock,
@@ -229,7 +188,7 @@ def run_openalex_works_local_ingest(
                 status=PipelineRunStatus.SUCCESS,
                 completed_at=clock(),
             )
-            return LocalWorksIngestResult(
+            return LocalDeletionsIngestResult(
                 run=finished,
                 source_file=result[0],
                 stats=result[1],
@@ -254,8 +213,8 @@ def run_openalex_works_local_ingest(
                 | ControlError
                 | ObjectStoreError
                 | CanonicalConflictError
-                | RestoreRequiredError
-                | IdempotencyConflictError,
+                | IdempotencyConflictError
+                | RestoreRequiredError,
             ):
                 raise
             raise IngestionError(message) from error
@@ -264,22 +223,22 @@ def run_openalex_works_local_ingest(
             connection.close()
 
 
-def _ingest_one_asset(
+def _ingest_one_deletion_asset(
     *,
-    asset: OpenAlexAssetMetadata,
+    asset: OpenAlexDeletionAssetMetadata,
     run: PipelineRun,
     config: PlatformConfig,
     control: ControlStore,
     canonical: CanonicalStore,
     objects: ObjectStore,
-    connector: OpenAlexConnector,
+    connector: _Fetchable,
     worker_id: str,
     lease_ttl: timedelta,
     clock: Callable[[], datetime],
-    decode_limits: JsonlDecodeLimits,
+    decode_limits: CsvDeletionDecodeLimits,
     backend: PersistenceBackend,
     postgres_connection: Any | None,
-) -> tuple[SourceFileControl, FileIngestStats | None, str | None]:
+) -> tuple[SourceFileControl, DeletionIngestStats | None, str | None]:
     discovered_at = clock()
     incoming = SourceFileControl.model_validate(
         {
@@ -303,14 +262,14 @@ def _ingest_one_asset(
         return control_row, None, "ALREADY_SUCCESS"
     if outcome is RegistrationOutcome.CHECKSUM_CONFLICT:
         raise ChecksumConflictError(
-            "source checksum conflicts for an existing asset identity"
+            "source checksum conflicts for an existing deletion asset identity"
         )
     if outcome is RegistrationOutcome.ALREADY_IN_PROGRESS:
         try:
             control.recover_stale_claim(asset.asset_id, now=clock())
         except ClaimConflictError:
             raise ClaimConflictError(
-                "source file already claimed by another worker"
+                "deletion source file already claimed by another worker"
             ) from None
 
     claim_token = uuid4()
@@ -324,7 +283,7 @@ def _ingest_one_asset(
         lease_expires_at=claimed_at + lease_ttl,
     )
 
-    raw_key = openalex_raw_object_key(asset)
+    raw_key = openalex_deletion_raw_object_key(asset)
     try:
         checksum, retrieved_at = _land_raw(
             asset=asset,
@@ -345,7 +304,7 @@ def _ingest_one_asset(
                 "sha256": checksum,
             }
         )
-        publish_request = AssetPublishRequest(
+        publish_request = DeletionPublishRequest(
             asset_id=asset.asset_id,
             claim_token=claim_token,
             now=clock(),
@@ -353,36 +312,33 @@ def _ingest_one_asset(
             raw_object_key=raw_key,
             source_checksum_sha256=checksum,
             retrieval_provenance=retrieval_provenance,
-            open_records=_record_stream_factory(
-                asset=asset,
-                run_id=run.run_id,
-                checksum=checksum,
+            source_uri=asset.file_uri,
+            source_updated_date=asset.updated_date,
+            open_work_ids=_id_stream_factory(
                 objects=objects,
                 raw_key=raw_key,
-                processed_at=processed_at,
                 decode_limits=decode_limits,
             ),
         )
         if backend == "postgres":
-            from research_platform.persistence.postgres import publish_claimed_asset
+            from research_platform.persistence.postgres.deletion_unit_of_work import (
+                publish_claimed_deletions,
+            )
 
             assert postgres_connection is not None
-            published = publish_claimed_asset(postgres_connection, publish_request)
+            published = publish_claimed_deletions(postgres_connection, publish_request)
         else:
             assert isinstance(control, InMemoryControlStore)
             assert isinstance(canonical, InMemoryCanonicalStore)
-            published = publish_claimed_asset_memory(control, canonical, publish_request)
-
-        stats = _stats_from_counters(
-            asset_id=asset.asset_id,
-            counters=published.counters,
-            canonical=canonical,
-        )
+            published = publish_claimed_deletions_memory(
+                control, canonical, publish_request
+            )
+        stats = _stats(asset.asset_id, published.counters)
         return published.source_file, stats, None
     except Exception as error:
         category, message = _classify_failure(error)
         try:
-            failed = control.mark_source_file_failed(
+            control.mark_source_file_failed(
                 asset.asset_id,
                 claim_token=claim_token,
                 processed_at=clock(),
@@ -390,27 +346,39 @@ def _ingest_one_asset(
                 failure_message=message,
             )
         except ControlError:
-            failed = control_row
-        del failed
+            pass
         if isinstance(
             error,
             IngestionError
             | ControlError
             | ObjectStoreError
             | CanonicalConflictError
-            | RestoreRequiredError
             | ChecksumConflictError
-            | IdempotencyConflictError,
+            | IdempotencyConflictError
+            | RestoreRequiredError,
         ):
             raise
         raise IngestionError(message) from error
 
 
+def _id_stream_factory(
+    *,
+    objects: ObjectStore,
+    raw_key: str,
+    decode_limits: CsvDeletionDecodeLimits,
+) -> Callable[[], Iterator[str]]:
+    def open_work_ids() -> Iterator[str]:
+        with objects.open(raw_key) as handle:
+            yield from iter_deleted_work_ids(handle, limits=decode_limits)
+
+    return open_work_ids
+
+
 def _land_raw(
     *,
-    asset: OpenAlexAssetMetadata,
+    asset: OpenAlexDeletionAssetMetadata,
     run_id: UUID,
-    connector: OpenAlexConnector,
+    connector: _Fetchable,
     objects: ObjectStore,
     raw_key: str,
     max_bytes: int,
@@ -420,7 +388,7 @@ def _land_raw(
     source_asset = asset.to_source_asset()
     digest = hashlib.sha256()
     size = 0
-    with tempfile.NamedTemporaryFile(prefix="oa-ingest-", suffix=".gz") as tmp:
+    with tempfile.NamedTemporaryFile(prefix="oa-del-", suffix=".csv.gz") as tmp:
         with connector.fetch(source_asset) as payload:
             while True:
                 chunk = payload.read(64 * 1024)
@@ -448,9 +416,6 @@ def _land_raw(
         try:
             objects.put_if_absent(raw_key, tmp, provenance)
         except ObjectConflictError:
-            # ObjectStore treats differing retrieval provenance (e.g. new run_id) as
-            # conflict even when bytes match. For FAILED→retry recovery, accept an
-            # already-landed immutable object whose content checksum matches.
             if not _raw_checksum_matches(objects, raw_key, checksum):
                 raise
         return checksum, retrieved_at
@@ -467,82 +432,32 @@ def _raw_checksum_matches(objects: ObjectStore, raw_key: str, checksum: str) -> 
     return digest.hexdigest() == checksum
 
 
-def _record_stream_factory(
-    *,
-    asset: OpenAlexAssetMetadata,
-    run_id: UUID,
-    checksum: str,
-    objects: ObjectStore,
-    raw_key: str,
-    processed_at: datetime,
-    decode_limits: JsonlDecodeLimits,
-) -> Callable[[], Iterator[StreamedWorkRecord]]:
-    """Return a factory that opens raw once and yields mapped records incrementally.
-
-    Invoked inside the one-asset publication transaction. Does not collect every
-    ``CanonicalWorkBundle`` / ``RecordProvenance`` for the file.
-    """
-
-    def open_records() -> Iterator[StreamedWorkRecord]:
-        with objects.open(raw_key) as handle:
-            for record in iter_jsonl_gz_records(handle, limits=decode_limits):
-                lineage = CanonicalLineage.model_validate(
-                    {
-                        "source_asset_id": asset.asset_id,
-                        "source_checksum_sha256": checksum,
-                        "source_updated_date": asset.updated_date,
-                        "run_id": run_id,
-                        "processed_at": processed_at,
-                        "activity_state": CanonicalActivityState.ACTIVE,
-                    }
-                )
-                bundle = map_openalex_work(record, lineage=lineage)
-                provenance = RecordProvenance.model_validate(
-                    {
-                        "record_id": bundle.work.work_id,
-                        "entity_type": "work",
-                        "asset_id": asset.asset_id,
-                        "source_checksum_sha256": checksum,
-                        "run_id": run_id,
-                        "source_uri": asset.file_uri,
-                        "processed_at": processed_at,
-                        "source_updated_date": asset.updated_date,
-                    }
-                )
-                yield StreamedWorkRecord(bundle=bundle, provenance=provenance)
-
-    return open_records
-
-
-def _stats_from_counters(
-    *,
-    asset_id: str,
-    counters: PublishCounters,
-    canonical: CanonicalStore,
-) -> FileIngestStats:
-    return FileIngestStats(
+def _stats(asset_id: str, counters: DeletionCounters) -> DeletionIngestStats:
+    return DeletionIngestStats(
         asset_id=asset_id,
-        works_inserted=counters.works_inserted,
-        works_identical=counters.works_identical,
-        works_replaced=counters.works_replaced,
-        works_stale=counters.works_stale,
-        record_provenance_count=counters.record_provenance_count,
-        relationship_counts=canonical.relationship_counts(),
+        rows_seen=counters.rows_seen,
+        unique_ids=counters.unique_ids,
+        duplicates=counters.duplicates,
+        deleted=counters.deleted,
+        already_deleted=counters.already_deleted,
+        unknown=counters.unknown,
+        stale=counters.stale,
+        conflicts=counters.conflicts,
     )
 
 
 def _require_local_config(config: PlatformConfig) -> None:
     if config.environment != "local":
-        raise IngestionConfigError("local Works ingestion requires environment=local")
+        raise IngestionConfigError("local deletion ingest requires environment=local")
     if config.storage.backend != "local":
-        raise IngestionConfigError("local Works ingestion requires storage.backend=local")
+        raise IngestionConfigError("local deletion ingest requires storage.backend=local")
     if config.sample_selection.max_files != 1:
         raise IngestionConfigError(
-            "default local ingestion requires sample_selection.max_files=1"
+            "default local deletion ingest requires sample_selection.max_files=1"
         )
     if config.sample_selection.max_file_size_bytes > 25_000_000:
         raise IngestionConfigError(
-            "default local ingestion requires max_file_size_bytes <= 25000000"
+            "default local deletion ingest requires max_file_size_bytes <= 25000000"
         )
 
 
@@ -554,16 +469,13 @@ def _classify_failure(error: BaseException) -> tuple[FailureCategory, str]:
     if isinstance(error, IdempotencyConflictError):
         return FailureCategory.VALIDATION, "source identity metadata conflict"
     if isinstance(error, RestoreRequiredError | CanonicalConflictError):
-        return FailureCategory.CANONICAL, "canonical version or entity conflict"
+        return FailureCategory.CANONICAL, "canonical deletion/version conflict"
     if isinstance(error, IngestionDecodeError):
-        return FailureCategory.CANONICAL, "source decode failed"
+        return FailureCategory.CANONICAL, "deletion source decode failed"
     if isinstance(error, IngestionFormatError):
-        return FailureCategory.VALIDATION, "unsupported or invalid source format"
+        return FailureCategory.VALIDATION, "unsupported or invalid deletion format"
     if isinstance(error, IngestionConfigError):
-        return FailureCategory.VALIDATION, "invalid local ingestion configuration"
+        return FailureCategory.VALIDATION, "invalid local deletion configuration"
     if isinstance(error, ObjectStoreError):
         return FailureCategory.LANDING, "immutable landing failed"
-    name = type(error).__name__
-    if "Size" in name or "Network" in name or "Timeout" in name or "Access" in name:
-        return FailureCategory.RETRIEVAL, "source retrieval failed"
-    return FailureCategory.UNKNOWN, "ingestion failed"
+    return FailureCategory.UNKNOWN, "deletion ingest failed"
