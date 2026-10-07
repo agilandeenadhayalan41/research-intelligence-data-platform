@@ -40,6 +40,7 @@ from research_platform.control.reconciliation import (
     identity_fields_match,
     reconcile_registration,
 )
+from research_platform.control.memory import InMemoryControlStore
 from research_platform.control.store import ControlStore, UnimplementedControlStore
 
 __all__ = [
@@ -52,6 +53,7 @@ __all__ = [
     "FailureCategory",
     "IdempotencyConflictError",
     "IllegalTransitionError",
+    "InMemoryControlStore",
     "PIPELINE_RUN_TRANSITIONS",
     "PipelineRun",
     "PipelineRunStatus",

@@ -21,12 +21,12 @@ remain planned.
 | 09 | Immutable local raw landing ([details](immutable-local-landing.md)) | `LocalObjectStore` delivered; GCS deferred to #9 |
 | 10 | Pipeline control and provenance contracts ([details](pipeline-control.md)) | Models, lifecycle, `ControlStore` protocol, DDL specs; no DB adapter |
 | 11 | Canonical OpenAlex logical model ([details](openalex-canonical-model.md)) | Normalized entities/relationships, PyArrow schemas, mapping; no ingestion |
+| 12 | One-file local Works ingestion ([details](local-works-ingestion.md)) | Claim → land → stream map → upsert → provenance; in-memory ControlStore/CanonicalStore |
 
 ## Planned steps
 
 | Step | Work |
 | --- | --- |
-| 12 | Implement incremental ingestion/upsert: manifest → discover → select/claim → download → immutable raw landing → staging → canonical update → provenance → success. Depends on Steps 05–11 plus an explicit local ControlStore/canonical write path behind the Step 10 transaction boundary. PostgreSQL may implement that path if chosen; #7 Warehouse.query adapter is not mandatory. |
 | 13 | Support deletion, changed/new records, schema changes, replay, and reprocessing. |
 | 14 | Build a query-pattern and benchmark registry before choosing operational serving technology. Cover DOI/OpenAlex ID/eISSN/ISSN/publisher lookups; journal/publisher authors; publisher-topic-license-year counts; institution/topic and citation/reference relationships; publication and open-access trends. Measure latency, concurrency, bytes scanned, cost, result size, freshness, frequency, and materialization suitability. |
 | 15 | Implement BigQuery-first analytics on GCP; keep DuckDB for local tests, define SQL dialect contracts, and derive partitioning/clustering from evidence. Keep queries bounded and cost-safe. |
