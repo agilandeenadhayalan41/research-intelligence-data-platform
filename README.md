@@ -11,8 +11,8 @@ access, proprietary data, or cloud credentials are needed for the default tests.
 
 ## Current status
 
-**Steps 01–13 are complete.
-Step 14 / #19 (query patterns + benchmarks) is next.
+**Steps 01–14 are complete.
+Step 15 / #22 (BigQuery analytical models) is next.
 The full end-to-end / cloud pipeline is not implemented.**
 
 | Step | Delivered capability | Implementation boundary |
@@ -30,21 +30,22 @@ The full end-to-end / cloud pipeline is not implemented.**
 | 11 | Canonical OpenAlex model | Normalized entities/relationships, ID rules, PyArrow schemas, source mapping, lineage/version semantics; no ingestion |
 | 12 | One-file local Works ingestion | Manifest → claim → immutable land → stream decode/map/upsert/provenance inside one Postgres txn → SUCCESS; `--backend memory|postgres`; offline + Postgres tests ([#20](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/20)) |
 | 13 | OpenAlex Works deletions | Public `data/jsonl/works/deleted_ids.csv.gz` (`work_id,deleted_date`) → claim → stream tombstones with per-row precedence; no silent resurrection; offline + Postgres tests ([#21](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/21)) |
+| 14 | Query-pattern + benchmark registry | Typed OpenAlex workload registry, grains, fan-out risks, evidence-honest placements, FIXTURE_ONLY local harness; no BigQuery deploy ([#19](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/19)) |
 
 Constructing adapters or loading configuration does not connect to services.
 `LocalObjectStore` writes only under the configured local landing path. Default
 ingestion tests stay offline (fake connector + in-memory control/canonical).
 The GCS adapter remains a skeleton.
 
-**Still planned:** query/benchmark registry, GCS landing, analytical models,
-gold marts, data quality, consumer APIs, and orchestration. There is no
-implemented GCS/BigQuery deployment or production pipeline.
+**Still planned:** GCS landing, BigQuery analytical models, gold marts, data
+quality, consumer APIs, and orchestration. There is no implemented
+GCS/BigQuery deployment or production pipeline.
 
 ### Next scoped work
 
-**Step 14 / [#19](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/19):**
-query patterns and benchmarks. Step 13 deletions are documented in
-[OpenAlex deletions](docs/architecture/openalex-deletions.md).
+**Step 15 / [#22](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/22):**
+BigQuery-first analytical models, driven by the Step 14 registry in
+[query-pattern benchmarks](docs/architecture/query-pattern-benchmarks.md).
 
 Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
@@ -286,7 +287,8 @@ tracked YAML or logs.
 | --- | --- |
 | [Platform architecture](docs/architecture/platform-architecture.md) | Layers, responsibilities, and system boundaries |
 | [GCP / BigQuery-first architecture](docs/architecture/gcp-bigquery-first.md) | Analytical strategy, cost safety, and optional operational storage |
-| [Query routing](docs/architecture/query-routing.md) | Benchmark categories, consumer capabilities, and materialization decisions |
+| [Query routing](docs/architecture/query-routing.md) | Capability routing decision model (pre-registry) |
+| [Query-pattern benchmarks](docs/architecture/query-pattern-benchmarks.md) | Step 14 registry fields, grains, fan-out, evidence, placement rules |
 | [Public data sources](docs/architecture/public-data-sources.md) | Source priorities and source-specific normalization |
 | [OpenAlex contract](docs/architecture/openalex-manifest-contract.md) | Implemented metadata, parser, selector, connector, and public-access evidence |
 | [OpenAlex source profiling](docs/architecture/openalex-source-profiling.md) | Bounded profiler, evidence classes, verified representations, and format decision |
@@ -299,6 +301,7 @@ tracked YAML or logs.
 
 ```text
 config\                       Local and future environment templates
+config\query-patterns\        OpenAlex query-pattern registry YAML (Step 14)
 src\research_platform\
   common\                     Structured JSON logging
   config\                     Validated models and explicit YAML loading
@@ -306,6 +309,7 @@ src\research_platform\
   storage\                    ObjectStore contract; LocalObjectStore; GCS skeleton
   control\                    Pipeline-control models, lifecycle, ControlStore protocol
   canonical\openalex\         Portable OpenAlex canonical models, schemas, mapping
+  benchmarks\                 Query-pattern registry models, fan-out fixtures, FIXTURE_ONLY harness
   warehouse\                  Warehouse contract; DuckDB/BigQuery/PostgreSQL skeletons
   provenance\                 Immutable retrieval-provenance model
   ingestion\ quality\ serving\ Reserved runtime areas
