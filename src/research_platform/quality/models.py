@@ -170,10 +170,18 @@ class QualityResult(SettingsModel):
 
 
 class QualityReport(SettingsModel):
-    """Aggregated quality report with publication blocking rules."""
+    """Aggregated quality report with stage-local publication blocking rules.
+
+    ``publication_allowed`` meaning depends on ``execution_stage``:
+    - PRE_SERVING_BUILD: allowed to proceed to serving/Gold build
+    - PRE_VISIBLE_PUBLICATION: allowed to make staged consumer outputs visible
+
+    A PRE_SERVING_BUILD PASS must never be mistaken for final visible publication.
+    """
 
     run_id: str = Field(min_length=1, max_length=128)
     contract_version: str = Field(default=QUALITY_CONTRACT_VERSION, min_length=1, max_length=64)
+    execution_stage: ExecutionStage
     results: tuple[QualityResult, ...] = ()
     hard_gate_passed: bool
     publication_allowed: bool
@@ -194,17 +202,26 @@ def compute_publication_allowed(
 ) -> tuple[bool, bool]:
     """Return (hard_gate_passed, publication_allowed).
 
-    publication_allowed is TRUE only if every required HARD_GATE result is PASS.
-    Missing required results, FAIL, or ERROR → FALSE.
-    Informational metrics never independently block or permit publication.
+    For every required hard-gate ID:
+    - result must exist
+    - result.check_kind must be HARD_GATE (wrong kind blocks)
+    - result.status must be PASS
+
+    Duplicate result check_ids are rejected (no silent overwrite).
+    Missing required results, FAIL, ERROR, or wrong kind → FALSE.
     """
-    by_id = {r.check_id: r for r in results}
+    seen: dict[str, QualityResult] = {}
+    for result in results:
+        if result.check_id in seen:
+            return False, False
+        seen[result.check_id] = result
+
     for check_id in required_check_ids:
-        result = by_id.get(check_id)
+        result = seen.get(check_id)
         if result is None:
             return False, False
         if result.check_kind is not QualityCheckKind.HARD_GATE:
-            continue
+            return False, False
         if result.status is not QualityStatus.PASS:
             return False, False
     return True, True

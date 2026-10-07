@@ -64,8 +64,45 @@ A check that cannot run is **`ERROR`**, never `PASS`.
 
 ## Execution stages
 
-- `PRE_SERVING_BUILD` — canonical integrity + reconciliation.
-- `PRE_VISIBLE_PUBLICATION` — staged Gold deleted-source exclusion.
+The runner is **stage-aware**. Callers must pass `stage=`:
+
+| Stage | Checks run | `publication_allowed` means |
+|---|---|---|
+| `PRE_SERVING_BUILD` | canonical + reconciliation only | allowed to proceed to serving/Gold build |
+| `PRE_VISIBLE_PUBLICATION` | staged Gold gates only | allowed to make staged consumer outputs visible |
+
+A PRE_SERVING_BUILD PASS must never be treated as final visible publication approval.
+Required hard-gate IDs are **stage-local**.
+
+---
+
+## Missing table vs empty table
+
+| Situation | Behavior |
+|---|---|
+| Required table **missing** (not available) | `ERROR` / `MISSING_TABLE` — never PASS |
+| Required table **present and empty** | integrity gates may PASS (zero violations) |
+
+Do not interpret a missing table as an empty table.
+
+---
+
+## Staged Gold coverage
+
+`gold.deleted_source_work_exclusion` requires:
+
+1. `staged_gold_mart_manifest(mart_id)` with **exact** Step-16 mart inventory membership  
+   (zero-row marts are covered by manifest membership alone — do not infer from contribution row count)
+2. `staged_gold_work_contributions(mart_id, work_id)`
+3. `staged_gold_citation_edges` when `citation_edges` is in the manifest
+4. Every contribution / citation **SOURCE** `work_id` must resolve to canonical `works` **and** be `ACTIVE`
+
+Safe diagnostics:
+
+- `missing_source_work_count`
+- `inactive_source_work_count`
+
+Citation **TARGET** may still be ACTIVE, DELETED, or ABSENT.
 
 ---
 
@@ -126,8 +163,9 @@ Missing required inputs → `ERROR` (never PASS). Quality does not invent counte
 
 | Situation | Behavior |
 |---|---|
-| Zero Works | non-null + unique gates PASS; metrics count=0, denominator=0, rate=NULL |
+| Zero Works (tables present) | non-null + unique gates PASS; metrics count=0, denominator=0, rate=NULL |
 | Relationships present, Works empty | source-work integrity FAIL |
+| Required relationship/dimension table missing | source/dimension integrity ERROR |
 | Empty distributions | empty `metric_points` collection |
 
 Empty data is not evidence that ingestion succeeded — reconciliation may still FAIL if declared source count was non-zero.

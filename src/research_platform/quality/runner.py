@@ -13,7 +13,7 @@ import duckdb
 from research_platform.quality.models import (
     QUALITY_CONTRACT_VERSION,
     ErrorClassification,
-    QualityCheckKind,
+    ExecutionStage,
     QualityMetricPoint,
     QualityReport,
     QualityResult,
@@ -28,8 +28,9 @@ from research_platform.quality.registry import (
     GOLD_MART_IDS,
     OWNED_RELATIONSHIP_TABLES,
     QualityCheckContract,
+    checks_for_stage,
     load_quality_registry,
-    required_hard_gate_ids,
+    required_hard_gate_ids_for_stage,
 )
 
 
@@ -193,36 +194,43 @@ def check_source_work_integrity(
     *,
     run_id: str,
 ) -> QualityResult:
+    """Fail closed: missing required tables → ERROR (not empty/PASS)."""
     if not executor.table_exists("works"):
-        # Relationships may still exist — check below.
-        pass
+        return _error_result(
+            contract,
+            run_id=run_id,
+            classification=ErrorClassification.MISSING_TABLE,
+            message="missing required table works",
+        )
+    missing = [t for t in OWNED_RELATIONSHIP_TABLES if not executor.table_exists(t)]
+    if missing:
+        return _error_result(
+            contract,
+            run_id=run_id,
+            classification=ErrorClassification.MISSING_TABLE,
+            message=f"missing required relationship table(s): {', '.join(missing)}",
+        )
+
     diagnostics: dict[str, int] = {}
     total = 0
     try:
-        works_exists = executor.table_exists("works")
         for table in OWNED_RELATIONSHIP_TABLES:
-            if not executor.table_exists(table):
-                continue
-            if not works_exists:
-                orphan = int(executor.execute_scalar(f"SELECT COUNT(*) FROM {table}") or 0)
-            else:
-                orphan = int(
-                    executor.execute_scalar(
-                        f"""
-                        SELECT COUNT(*) FROM {table} r
-                        LEFT JOIN works w ON w.work_id = r.work_id
-                        WHERE w.work_id IS NULL
-                        """
-                    )
-                    or 0
+            orphan = int(
+                executor.execute_scalar(
+                    f"""
+                    SELECT COUNT(*) FROM {table} r
+                    LEFT JOIN works w ON w.work_id = r.work_id
+                    WHERE w.work_id IS NULL
+                    """
                 )
+                or 0
+            )
             diagnostics[f"{table}_orphan_count"] = orphan
             total += orphan
     except Exception as exc:  # noqa: BLE001
         return _classify_query_error(contract, run_id=run_id, exc=exc)
 
-    # If no relationship tables and no works — empty PASS.
-    # If relationships exist without works — FAIL via orphan counts.
+    # Empty existing tables → PASS. Missing tables already ERRORed above.
     status = QualityStatus.PASS if total == 0 else QualityStatus.FAIL
     diagnostics["total_orphan_count"] = total
     return _base_result(
@@ -243,19 +251,24 @@ def check_dimension_integrity(
     *,
     run_id: str,
 ) -> QualityResult:
+    """Fail closed: missing relation or dimension table → ERROR."""
     diagnostics: dict[str, int] = {}
     total = 0
     try:
         for rel_table, col, dim_table, dim_pk in DIMENSION_FK_SPECS:
             if not executor.table_exists(rel_table):
-                continue
-            if not executor.table_exists(dim_table):
-                # Non-null IDs cannot be validated → ERROR for required gate.
                 return _error_result(
                     contract,
                     run_id=run_id,
                     classification=ErrorClassification.MISSING_TABLE,
-                    message=f"missing dimension table {dim_table}",
+                    message=f"missing required relationship table {rel_table}",
+                )
+            if not executor.table_exists(dim_table):
+                return _error_result(
+                    contract,
+                    run_id=run_id,
+                    classification=ErrorClassification.MISSING_TABLE,
+                    message=f"missing required dimension table {dim_table}",
                 )
             orphan = int(
                 executor.execute_scalar(
@@ -391,27 +404,68 @@ def check_gold_deleted_source_exclusion(
     *,
     run_id: str,
 ) -> QualityResult:
-    """DELETED source Works must not appear in staged consumer Gold fixtures.
+    """Staged Gold coverage + source Work existence/ACTIVE hard gate.
 
-    Expected staged tables (local SEMANTIC_ONLY):
-      staged_gold_research_discovery(work_id)
-      staged_gold_citation_edges(source_work_id, target_activity_state)
-      staged_gold_publication_trends — year aggregates; uses helper mapping table
-      staged_gold_work_contributions(mart_id, work_id) — generic contribution grain
+    Required tables (missing ≠ empty):
+      staged_gold_mart_manifest(mart_id)
+      staged_gold_work_contributions(mart_id, work_id)
+      works
+      staged_gold_citation_edges — required when citation_edges is in the manifest
+
+    Complete Step-16 publication unit: manifest must contain every GOLD_MART_IDS
+    entry (zero-row marts are represented by manifest membership alone).
     """
-    if not executor.table_exists("works"):
-        return _error_result(
-            contract, run_id=run_id, classification=ErrorClassification.MISSING_TABLE
-        )
-    if not executor.table_exists("staged_gold_work_contributions"):
-        return _error_result(
-            contract,
-            run_id=run_id,
-            classification=ErrorClassification.MISSING_TABLE,
-            message="staged_gold_work_contributions required for Gold exclusion gate",
-        )
+    for table in ("works", "staged_gold_mart_manifest", "staged_gold_work_contributions"):
+        if not executor.table_exists(table):
+            return _error_result(
+                contract,
+                run_id=run_id,
+                classification=ErrorClassification.MISSING_TABLE,
+                message=f"missing required table {table}",
+            )
     try:
-        deleted_contrib = int(
+        manifest_rows = executor.execute_rows(
+            "SELECT mart_id FROM staged_gold_mart_manifest ORDER BY mart_id"
+        )
+        manifest_ids = {str(row[0]) for row in manifest_rows if row[0] is not None}
+        expected = set(GOLD_MART_IDS)
+        if manifest_ids != expected:
+            missing = sorted(expected - manifest_ids)
+            extra = sorted(manifest_ids - expected)
+            return _error_result(
+                contract,
+                run_id=run_id,
+                classification=ErrorClassification.MISSING_INPUT,
+                message=(
+                    "incomplete staged Gold mart coverage: "
+                    f"missing={missing}; extra={extra}"
+                ),
+            )
+
+        if "citation_edges" in manifest_ids and not executor.table_exists(
+            "staged_gold_citation_edges"
+        ):
+            return _error_result(
+                contract,
+                run_id=run_id,
+                classification=ErrorClassification.MISSING_TABLE,
+                message=(
+                    "staged_gold_citation_edges required when citation_edges "
+                    "is in the publication manifest"
+                ),
+            )
+
+        missing_contrib = int(
+            executor.execute_scalar(
+                """
+                SELECT COUNT(*) FROM staged_gold_work_contributions g
+                LEFT JOIN works w ON w.work_id = g.work_id
+                WHERE w.work_id IS NULL
+                """
+            )
+            or 0
+        )
+        inactive_contrib = int(
             executor.execute_scalar(
                 """
                 SELECT COUNT(*) FROM staged_gold_work_contributions g
@@ -421,9 +475,20 @@ def check_gold_deleted_source_exclusion(
             )
             or 0
         )
-        citation_deleted_source = 0
+        missing_cite = 0
+        inactive_cite = 0
         if executor.table_exists("staged_gold_citation_edges"):
-            citation_deleted_source = int(
+            missing_cite = int(
+                executor.execute_scalar(
+                    """
+                    SELECT COUNT(*) FROM staged_gold_citation_edges c
+                    LEFT JOIN works w ON w.work_id = c.source_work_id
+                    WHERE w.work_id IS NULL
+                    """
+                )
+                or 0
+            )
+            inactive_cite = int(
                 executor.execute_scalar(
                     """
                     SELECT COUNT(*) FROM staged_gold_citation_edges c
@@ -433,8 +498,10 @@ def check_gold_deleted_source_exclusion(
                 )
                 or 0
             )
-        # Target DELETED must NOT count as a violation.
-        total = deleted_contrib + citation_deleted_source
+        # Citation TARGET DELETED/ABSENT must NOT count as a violation.
+        missing_total = missing_contrib + missing_cite
+        inactive_total = inactive_contrib + inactive_cite
+        total = missing_total + inactive_total
     except Exception as exc:  # noqa: BLE001
         return _classify_query_error(contract, run_id=run_id, exc=exc)
 
@@ -445,13 +512,16 @@ def check_gold_deleted_source_exclusion(
         status=status,
         observed_value=total,
         expected_value=0,
-        unit="deleted_source_contribution_count",
-        message="deleted source in Gold" if status is QualityStatus.FAIL else "ok",
+        unit="violation_count",
+        message="Gold source Work violations" if status is QualityStatus.FAIL else "ok",
         diagnostic_counts={
-            "deleted_source_contribution_count": total,
-            "deleted_contrib_rows": deleted_contrib,
-            "deleted_citation_source_rows": citation_deleted_source,
-            "gold_mart_count": len(GOLD_MART_IDS),
+            "missing_source_work_count": missing_total,
+            "inactive_source_work_count": inactive_total,
+            "missing_contrib_rows": missing_contrib,
+            "inactive_contrib_rows": inactive_contrib,
+            "missing_citation_source_rows": missing_cite,
+            "inactive_citation_source_rows": inactive_cite,
+            "manifest_mart_count": len(manifest_ids),
         },
     )
 
@@ -824,39 +894,58 @@ def run_quality_checks(
     executor: QualityExecutor,
     *,
     run_id: str,
+    stage: ExecutionStage,
     checks: tuple[QualityCheckContract, ...] | None = None,
     expectation: ReconciliationExpectation | None = None,
-    require_all_hard_gates: bool = True,
 ) -> QualityReport:
-    """Run registered checks and build a publication-blocking report.
+    """Run checks for one execution stage and build a stage-local report.
+
+    ``stage`` selects which registered checks run and which required hard gates
+    must PASS:
+
+    - PRE_SERVING_BUILD: canonical + reconciliation only (no staged Gold tables)
+    - PRE_VISIBLE_PUBLICATION: staged Gold gates only
+
+    ``publication_allowed`` is stage-local:
+    - PRE_SERVING_BUILD → allowed to proceed to serving/Gold build
+    - PRE_VISIBLE_PUBLICATION → allowed to make staged consumer outputs visible
 
     Continues after per-check ERROR. Informational metrics never independently
     block or permit publication.
     """
     registry = checks if checks is not None else load_quality_registry()
+    stage_checks = checks_for_stage(stage, registry)
     results: list[QualityResult] = []
-    for contract in registry:
+    for contract in stage_checks:
         results.append(
             execute_check(
                 contract, executor, run_id=run_id, expectation=expectation
             )
         )
 
-    required_ids = required_hard_gate_ids(registry) if require_all_hard_gates else tuple(
-        c.check_id for c in registry if c.kind is QualityCheckKind.HARD_GATE and c.required
-    )
+    required_ids = required_hard_gate_ids_for_stage(stage, registry)
     hard_ok, pub_ok = compute_publication_allowed(
         required_check_ids=required_ids,
         results=tuple(results),
     )
+    stage_note = {
+        ExecutionStage.PRE_SERVING_BUILD: (
+            "publication_allowed means proceed to serving/Gold build"
+        ),
+        ExecutionStage.PRE_VISIBLE_PUBLICATION: (
+            "publication_allowed means staged consumer outputs may become visible"
+        ),
+    }[stage]
     return QualityReport(
         run_id=run_id,
         contract_version=QUALITY_CONTRACT_VERSION,
+        execution_stage=stage,
         results=tuple(results),
         hard_gate_passed=hard_ok,
         publication_allowed=pub_ok,
         validation_label=ValidationLabel.SEMANTIC_ONLY,
         notes=(
+            f"{stage.value}: {stage_note}. "
             "SEMANTIC_ONLY DuckDB/local validation — does not prove BigQuery "
             "syntax, cost, latency, or production scale."
         ),

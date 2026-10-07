@@ -26,8 +26,10 @@ from research_platform.quality.models import (
 )
 from research_platform.quality.registry import (
     GOLD_MART_IDS,
+    checks_for_stage,
     load_quality_registry,
     required_hard_gate_ids,
+    required_hard_gate_ids_for_stage,
     serialize_quality_registry,
 )
 from research_platform.quality.runner import (
@@ -58,10 +60,12 @@ __all__ = [
     "QualityStatus",
     "ReconciliationExpectation",
     "ValidationLabel",
+    "checks_for_stage",
     "compute_publication_allowed",
     "execute_check",
     "load_quality_registry",
     "required_hard_gate_ids",
+    "required_hard_gate_ids_for_stage",
     "run_quality_checks",
     "seed_quality_semantic_fixture",
     "serialize_quality_registry",
