@@ -74,10 +74,24 @@ The runner is **stage-aware**. Callers must pass `stage=`:
 A PRE_SERVING_BUILD PASS must never be treated as final visible publication approval.
 Required hard-gate IDs are **stage-local** and always come from the **authoritative registry**.
 
-Caller-supplied `checks=` may omit informational metrics, but **must include every
-required HARD_GATE for the stage**. Omitting a required gate returns a blocked
+Caller-supplied `checks=` is a **filter over the authoritative registry**, not a
+runtime extension point:
+
+- every supplied `check_id` must exist in `load_quality_registry()`
+- duplicate supplied IDs fail closed
+- supplied contracts are replaced by the authoritative registered objects
+  (callers cannot redefine gates at runtime)
+- informational metrics may be omitted
+- every required HARD_GATE for the stage must be included
+
+Omitting a required gate or injecting unknown contracts returns a blocked
 report (`quality.configuration.required_gates` ERROR) — never
-`publication_allowed=True`.
+`publication_allowed=True`. Custom/unregistered contracts require an explicit
+future registry change/version.
+
+A stage report never reports `hard_gate_passed=True` /
+`publication_allowed=True` when any executed HARD_GATE result is `FAIL` or
+`ERROR`.
 
 ---
 
@@ -100,7 +114,10 @@ Do not interpret a missing table as an empty table.
    - derived from `load_gold_registry()` / `GOLD_MART_IDS`
    - exactly one row per mart_id
    - `missing_manifest_mart_count`, `unexpected_manifest_mart_count`,
-     `duplicate_manifest_mart_count` must all be `0`
+     `duplicate_manifest_mart_count`, `invalid_manifest_mart_count` must all
+     be `0`
+   - `NULL mart_id` rows are invalid (not silently dropped); DuckDB and
+     BigQuery share this rule
    - zero-row marts are covered by manifest membership alone
 2. `staged_gold_work_contributions(mart_id, work_id)`
 3. `staged_gold_citation_edges` when `citation_edges` is in the manifest
