@@ -11,8 +11,8 @@ access, proprietary data, or cloud credentials are needed for the default tests.
 
 ## Current status
 
-**Steps 01-10 are complete, and Step 11 adds the portable OpenAlex canonical
-model. The full data pipeline is not implemented.**
+**Steps 01-11 are complete, and Step 12 adds one-file local Works ingestion.
+The full end-to-end / cloud pipeline is not implemented.**
 
 | Step | Delivered capability | Implementation boundary |
 | --- | --- | --- |
@@ -27,31 +27,26 @@ model. The full data pipeline is not implemented.**
 | 09 | Immutable local raw landing | `LocalObjectStore` with atomic content/provenance publish, OpenAlex raw key layout, replay/conflict, and offline contract tests |
 | 10 | Pipeline control contracts | `PipelineRun`, `SourceFileControl`, `RecordProvenance`, lifecycle/claim rules, `ControlStore` protocol, and versioned PostgreSQL DDL specs |
 | 11 | Canonical OpenAlex model | Normalized entities/relationships, ID rules, PyArrow schemas, source mapping, lineage/version semantics; no ingestion |
+| 12 | One-file local Works ingestion | Manifest → claim → immutable land → stream map → canonical upsert → provenance → SUCCESS; in-memory ControlStore/CanonicalStore + LocalObjectStore |
 
 Constructing adapters or loading configuration does not connect to services.
-`LocalObjectStore` writes only under the configured local landing path. Control
-and canonical packages are contracts/mapping only: no database persistence,
-claims, or ingestion loop. The GCS adapter remains a skeleton.
+`LocalObjectStore` writes only under the configured local landing path. Default
+ingestion tests stay offline (fake connector + in-memory control/canonical).
+The GCS adapter remains a skeleton.
 
-**Still planned:** GCS landing, ingestion, change/deletion processing,
-analytical models, gold marts, data quality, consumer APIs, and orchestration.
-There is no implemented GCS/BigQuery deployment or production pipeline.
+**Still planned:** GCS landing, change/deletion processing, analytical models,
+gold marts, data quality, consumer APIs, and orchestration. There is no
+implemented GCS/BigQuery deployment or production pipeline.
 
 ### Next scoped work
 
-**Step 11: canonical OpenAlex model** is delivered for
-[issue #15](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/15)
-(hardening may follow for contract gaps). See
-[OpenAlex canonical model](docs/architecture/openalex-canonical-model.md) for
-entity grains, relationships, ID normalization, reconciliation, and mapping rules.
+**Step 12: one-file local Works ingestion** is delivered for
+[issue #20](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/20).
+See [local Works ingestion](docs/architecture/local-works-ingestion.md).
+Dependencies are **Steps 05–11** plus an explicit local `ControlStore` /
+canonical write path; **#7 Warehouse.query is not mandatory**.
 
-**Step 12: incremental ingestion**
-([issue #20](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/20))
-is next and requires a separate assignment. Dependencies are **Steps 05–11** plus
-an explicit local `ControlStore` / canonical write implementation behind the
-Step 10 transaction boundary. PostgreSQL may back that local transactional path
-if intentionally selected; the old **#7 PostgreSQL query/connectivity
-(`Warehouse.query`) adapter is not a mandatory architecture dependency**. Keep
+Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
 as the open umbrella roadmap. Assign one scoped issue at a time and stop after
 its reviewable PR; do not reopen completed work or automatically start later steps.
