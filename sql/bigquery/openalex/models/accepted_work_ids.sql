@@ -1,14 +1,21 @@
--- Surface rejected / skipped publication decisions (Step 15).
+-- Accepted Work IDs for analytical relationship publication (Step 15).
 -- DEFINED — NOT YET DEPLOYED / NOT EXECUTED here.
 --
--- Prefer classify_works_staging.sql as the authoritative CASE. This file
--- projects rejected outcomes for ops visibility. Equal-date ACTIVE→DELETED is
--- APPLY_UPDATE (not CONFLICT) and must not appear here.
+-- Contains only Works whose publication_decision is INSERT or APPLY_UPDATE.
+-- Excludes STALE, CONFLICT, RESTORE_REQUIRED, and IDENTICAL.
+--
+-- IDENTICAL: same checksum / canonical version — ordinary publication does not
+-- replace relationships (already published for that version). Recovery of
+-- missing relationships is an explicit publication-recovery path, not IDENTICAL
+-- replay.
+--
+-- Relationship REPLACE_BY_WORK_ID must scope DELETE+INSERT to this set, never
+-- to the raw changed_work_ids / full staging set.
 
 SELECT
-  classified.`work_id`,
-  classified.`publication_decision` AS `issue`
+  classified.`work_id`
 FROM (
+  -- Inline the classify_works_staging contract (same CASE).
   SELECT
     source.`work_id`,
     CASE
@@ -48,8 +55,4 @@ FROM (
   LEFT JOIN `openalex.works` AS target
     ON target.`work_id` = source.`work_id`
 ) AS classified
-WHERE classified.`publication_decision` IN (
-  'RESTORE_REQUIRED',
-  'CONFLICT',
-  'STALE'
-);
+WHERE classified.`publication_decision` IN ('INSERT', 'APPLY_UPDATE');

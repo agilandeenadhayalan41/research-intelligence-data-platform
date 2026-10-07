@@ -19,15 +19,17 @@ from research_platform.analytics.bigquery.contracts import (
     TABLE_GRAINS,
     YEAR_BOUNDED_PATTERN_IDS,
     ActiveFilterBehavior,
-    AnalyticalMergeDecision,
+    ACCEPTED_PUBLICATION_DECISIONS,
     BigQueryTableContract,
     ClusteringSpec,
     IncrementalStrategy,
     PartitioningSpec,
+    PublicationDecision,
     arrow_type_to_bigquery,
     build_table_contracts,
     columns_from_arrow_schema,
     decide_analytical_works_merge,
+    is_accepted_publication_decision,
     render_create_table_ddl,
     render_partition_clause,
 )
@@ -39,6 +41,7 @@ from research_platform.analytics.bigquery.registry import (
 from research_platform.analytics.bigquery.validation import (
     assert_contracts_valid,
     validate_semantics_with_duckdb,
+    validate_stale_relationship_publication_guard,
     validate_static_contracts,
 )
 from research_platform.benchmarks.registry import load_query_pattern_registry
@@ -191,8 +194,15 @@ def test_incremental_merge_key_contracts_valid() -> None:
     assert "COMMIT TRANSACTION" in merge_topics.upper()
     assert "DELETE FROM" in merge_topics.upper()
     assert "INSERT INTO" in merge_topics.upper()
-    assert "changed_work_ids" in merge_topics
+    assert "accepted_work_ids" in merge_topics
+    assert "changed_work_ids" not in _strip_comments(merge_topics)
     assert "lineage_source_updated_date" in merge_topics
+
+
+def _strip_comments(text: str) -> str:
+    from research_platform.analytics.bigquery.validation import _strip_sql_comments
+
+    return _strip_sql_comments(text)
 
 
 def test_works_active_filter_behavior() -> None:
@@ -367,7 +377,8 @@ def test_stale_work_merge_cannot_overwrite_newer_state() -> None:
         source_lineage_date=date(2024, 1, 1),
         source_activity_state="ACTIVE",
     )
-    assert decision is AnalyticalMergeDecision.SKIP_STALE
+    assert decision is PublicationDecision.STALE
+    assert not is_accepted_publication_decision(decision)
 
 
 def test_deleted_to_active_cannot_occur_through_ordinary_merge() -> None:
@@ -380,11 +391,12 @@ def test_deleted_to_active_cannot_occur_through_ordinary_merge() -> None:
         source_lineage_date=date(2024, 8, 1),
         source_activity_state="ACTIVE",
     )
-    assert decision is AnalyticalMergeDecision.SKIP_RESTORE_REQUIRED
+    assert decision is PublicationDecision.RESTORE_REQUIRED
+    assert not is_accepted_publication_decision(decision)
 
 
-def test_same_or_newer_deletion_may_replace_active() -> None:
-    newer = decide_analytical_works_merge(
+def test_active_t1_plus_deletion_t2_applies() -> None:
+    decision = decide_analytical_works_merge(
         target_exists=True,
         target_checksum="aa" * 32,
         target_lineage_date=date(2024, 1, 1),
@@ -393,10 +405,39 @@ def test_same_or_newer_deletion_may_replace_active() -> None:
         source_lineage_date=date(2024, 2, 1),
         source_activity_state="DELETED",
     )
-    assert newer is AnalyticalMergeDecision.APPLY_UPDATE
+    assert decision is PublicationDecision.APPLY_UPDATE
+    assert is_accepted_publication_decision(decision)
 
 
-def test_equal_date_different_checksum_is_conflict() -> None:
+def test_equal_date_active_to_deleted_applies() -> None:
+    """ACTIVE T2 + deletion T2 => tombstone wins (Step 13), not CONFLICT."""
+    decision = decide_analytical_works_merge(
+        target_exists=True,
+        target_checksum="aa" * 32,
+        target_lineage_date=date(2024, 2, 1),
+        target_activity_state="ACTIVE",
+        source_checksum="bb" * 32,
+        source_lineage_date=date(2024, 2, 1),
+        source_activity_state="DELETED",
+    )
+    assert decision is PublicationDecision.APPLY_UPDATE
+
+
+def test_stale_deletion_skipped() -> None:
+    """ACTIVE T3 + deletion T2 => STALE."""
+    decision = decide_analytical_works_merge(
+        target_exists=True,
+        target_checksum="aa" * 32,
+        target_lineage_date=date(2024, 3, 1),
+        target_activity_state="ACTIVE",
+        source_checksum="bb" * 32,
+        source_lineage_date=date(2024, 2, 1),
+        source_activity_state="DELETED",
+    )
+    assert decision is PublicationDecision.STALE
+
+
+def test_equal_date_active_to_active_conflicts() -> None:
     decision = decide_analytical_works_merge(
         target_exists=True,
         target_checksum="aa" * 32,
@@ -406,10 +447,24 @@ def test_equal_date_different_checksum_is_conflict() -> None:
         source_lineage_date=date(2024, 1, 1),
         source_activity_state="ACTIVE",
     )
-    assert decision is AnalyticalMergeDecision.SKIP_CONFLICT
+    assert decision is PublicationDecision.CONFLICT
+    assert not is_accepted_publication_decision(decision)
 
 
-def test_identical_checksum_is_idempotent_noop() -> None:
+def test_equal_date_deleted_to_deleted_conflicts() -> None:
+    decision = decide_analytical_works_merge(
+        target_exists=True,
+        target_checksum="aa" * 32,
+        target_lineage_date=date(2024, 2, 1),
+        target_activity_state="DELETED",
+        source_checksum="bb" * 32,
+        source_lineage_date=date(2024, 2, 1),
+        source_activity_state="DELETED",
+    )
+    assert decision is PublicationDecision.CONFLICT
+
+
+def test_identical_checksum_does_not_accept_relationship_publish() -> None:
     decision = decide_analytical_works_merge(
         target_exists=True,
         target_checksum="aa" * 32,
@@ -419,7 +474,23 @@ def test_identical_checksum_is_idempotent_noop() -> None:
         source_lineage_date=date(2024, 9, 1),
         source_activity_state="ACTIVE",
     )
-    assert decision is AnalyticalMergeDecision.IDENTICAL_NOOP
+    assert decision is PublicationDecision.IDENTICAL
+    assert decision not in ACCEPTED_PUBLICATION_DECISIONS
+    assert not is_accepted_publication_decision(decision)
+
+
+def test_insert_is_accepted() -> None:
+    decision = decide_analytical_works_merge(
+        target_exists=False,
+        target_checksum=None,
+        target_lineage_date=None,
+        target_activity_state=None,
+        source_checksum="aa" * 32,
+        source_lineage_date=date(2024, 1, 1),
+        source_activity_state="ACTIVE",
+    )
+    assert decision is PublicationDecision.INSERT
+    assert is_accepted_publication_decision(decision)
 
 
 def test_merge_sql_encodes_precedence_guards() -> None:
@@ -429,13 +500,19 @@ def test_merge_sql_encodes_precedence_guards() -> None:
     assert "source_checksum_sha256" in text
     assert "lineage_source_updated_date" in text
     assert "DELETED" in text and "ACTIVE" in text
-    assert "RESTORE" in text.upper() or "NOT (" in text
+    # Equal-date deletion apply path present.
+    assert "source.`activity_state` = 'DELETED'" in text
+    assert "target.`activity_state` = 'ACTIVE'" in text
     pre = repo_path(
         "sql/bigquery/openalex/models/merge_works_preconditions.sql"
     ).read_text(encoding="utf-8")
     assert "RESTORE_REQUIRED" in pre
     assert "CONFLICT" in pre
-    assert "STALE_SKIPPED" in pre
+    assert "STALE" in pre
+    classify = repo_path(
+        "sql/bigquery/openalex/models/classify_works_staging.sql"
+    ).read_text(encoding="utf-8")
+    assert "publication_decision" in classify
 
 
 def test_relationship_delete_insert_inside_transaction() -> None:
@@ -450,6 +527,30 @@ def test_relationship_delete_insert_inside_transaction() -> None:
     insert = code.index("INSERT INTO")
     commit = code.index("COMMIT TRANSACTION")
     assert begin < delete < insert < commit
+    assert "ACCEPTED_WORK_IDS" in code
+    assert "CHANGED_WORK_IDS" not in code
+
+
+def test_accepted_work_ids_excludes_rejected_outcomes() -> None:
+    for decision in (
+        PublicationDecision.STALE,
+        PublicationDecision.CONFLICT,
+        PublicationDecision.RESTORE_REQUIRED,
+        PublicationDecision.IDENTICAL,
+    ):
+        assert not is_accepted_publication_decision(decision)
+    for decision in (
+        PublicationDecision.INSERT,
+        PublicationDecision.APPLY_UPDATE,
+    ):
+        assert is_accepted_publication_decision(decision)
+
+
+def test_stale_relationship_publication_guard_fixture() -> None:
+    report = validate_stale_relationship_publication_guard()
+    assert report.ok, report.errors
+    assert report.results["stale_work_decision"] == "STALE"
+    assert report.results["topics_after"] == ("T1", "T2")
 
 
 def test_columns_from_arrow_rejects_duplicate_names() -> None:

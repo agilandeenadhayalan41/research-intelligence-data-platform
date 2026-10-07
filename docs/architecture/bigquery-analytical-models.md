@@ -139,26 +139,40 @@ For `publisher-topic-license-year`:
 
 ## Incremental / MERGE design
 
+### Publication decision contract
+
+`sql/bigquery/openalex/models/classify_works_staging.sql` is the single
+deterministic classification for each staged Work:
+
+| Decision | Meaning |
+| --- | --- |
+| `INSERT` | No target row — publish Work + relationships |
+| `IDENTICAL` | Same checksum — touch lineage clocks only; **no** ordinary relationship REPLACE |
+| `APPLY_UPDATE` | Accepted newer / tombstone projection — publish Work + relationships |
+| `STALE` | Older lineage — skip Work and relationships |
+| `CONFLICT` | Equal date, different checksum (non-deletion-win) — skip both |
+| `RESTORE_REQUIRED` | Target DELETED + staging ACTIVE — skip; no silent resurrection |
+
+`accepted_work_ids` = Works with decision ∈ {`INSERT`, `APPLY_UPDATE`} only.
+
+Offline helper: `decide_analytical_works_merge` / `PublicationDecision` (tests;
+not a BigQuery runtime).
+
 ### Works MERGE precedence
 
-`sql/bigquery/openalex/models/merge_works.sql` does **not** blindly overwrite
-matched rows. It mirrors Steps 11–13:
+`merge_works.sql` mirrors `classify_works_staging.sql` (Steps 11–13):
 
-| Case | Behavior |
+| Case | Decision |
 | --- | --- |
-| Same `source_checksum_sha256` | Idempotent replay (touch `run_id` / `processed_at` only) |
-| Target `DELETED` + staging `ACTIVE` | **No silent resurrection** (skip); surface via preconditions |
-| Staging `lineage_source_updated_date` older | STALE — skip |
-| Equal lineage dates, different checksum | CONFLICT — skip; detect via preconditions |
-| Staging newer lineage date (or dated vs undated target) | APPLY update, including ACTIVE→DELETED tombstones |
+| Same `source_checksum_sha256` | `IDENTICAL` |
+| Target `DELETED` + staging `ACTIVE` | `RESTORE_REQUIRED` |
+| Staging lineage older | `STALE` |
+| ACTIVE T2 + DELETED T2 (equal date) | **`APPLY_UPDATE`** (Step 13 tombstone wins) |
+| ACTIVE T2 + ACTIVE T2, different checksum | `CONFLICT` |
+| DELETED T2 + DELETED T2, different checksum | `CONFLICT` |
+| Staging newer lineage (or dated vs undated) | `APPLY_UPDATE` |
 
-Precondition query: `sql/bigquery/openalex/models/merge_works_preconditions.sql`
-(`RESTORE_REQUIRED`, `CONFLICT`, `STALE_SKIPPED`). Ordinary analytical MERGE
-must not resurrect DELETED Works; newer ACTIVE after DELETE remains
-`RESTORE_REQUIRED` / explicit reconciliation.
-
-Offline decision helper: `decide_analytical_works_merge` (tests only; not a
-BigQuery runtime).
+Rejected outcomes are projected by `merge_works_preconditions.sql`.
 
 ### Relationship tables — transactional REPLACE_BY_WORK_ID
 
@@ -166,16 +180,22 @@ Template (`merge_work_topics.sql`):
 
 ```sql
 BEGIN TRANSACTION;
-DELETE ... changed work_id set ...
-INSERT ... current projection ...
+DELETE ... WHERE work_id IN (SELECT work_id FROM accepted_work_ids);
+INSERT ... WHERE source.work_id IN (SELECT work_id FROM accepted_work_ids);
 COMMIT TRANSACTION;
 ```
 
-Atomic commit/rollback prevents a failed mid-replace from leaving those Works
-with an empty relationship projection. BigQuery multi-statement DML
-transactions can span tables, but they differ operationally from the local
-PostgreSQL ingestion transaction — do not claim identical ACID behavior to
-Step 12.
+**Consistency rule:** Work version acceptance happens before relationship
+publication. Only accepted versions may publish relationships. Therefore
+normal publication cannot produce “newer Work + stale relationships.”
+
+`IDENTICAL` does not refresh relationships (same canonical version already
+published). Missing-relationship recovery is an explicit publication-recovery
+path, not ordinary IDENTICAL replay.
+
+Atomic DELETE+INSERT prevents a failed mid-replace from emptying those Works’
+relationships. This is **not** a claim that all canonical tables commit in one
+global BigQuery transaction.
 
 ## Fan-out avoidance
 

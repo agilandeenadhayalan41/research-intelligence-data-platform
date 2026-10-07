@@ -1,31 +1,30 @@
--- Relationship refresh for `openalex.work_topics` (Step 15 / #22 hardening).
+-- Relationship refresh for `openalex.work_topics` (Step 15 consistency).
 -- DEFINED — NOT YET DEPLOYED / NOT EXECUTED here.
 --
--- Chosen strategy: REPLACE_BY_WORK_ID inside a BigQuery multi-statement
--- transaction so DELETE+INSERT commit atomically. A failure between the
--- statements rolls back; the analytical table is not left empty for those Works.
+-- REPLACE_BY_WORK_ID template for all relationship tables.
 --
--- Template for all REPLACE_BY_WORK_ID relationship tables.
+-- CRITICAL: scope DELETE+INSERT to accepted_work_ids only
+-- (publication_decision IN INSERT, APPLY_UPDATE from classify_works_staging).
+-- Never publish relationships for STALE / CONFLICT / RESTORE_REQUIRED /
+-- IDENTICAL staging rows — even if those work_ids appear in a broader
+-- changed_work_ids discovery set.
 --
--- BigQuery DML transactions can mutate multiple tables atomically, but they
--- differ operationally from the local PostgreSQL ingestion transaction
--- (connection model, scripting, orchestration). Do not claim identical ACID
--- behavior to Step 12 Postgres UoW — do claim atomic replacement of the
--- relationship projection for the changed work_id set.
+-- Consistency model:
+--   1) classify staged Works
+--   2) MERGE works using the same decisions
+--   3) REPLACE relationships only for accepted Work IDs
+-- Therefore newer Work + stale relationships cannot arise from normal publish.
 --
--- Staging tables (logical):
---   openalex.changed_work_ids(work_id STRING)
---   openalex.work_topics_staging(... same columns as work_topics ...)
+-- DELETE+INSERT is atomic per relationship table via multi-statement txn.
+-- This is not a claim that all canonical tables share one global BQ transaction.
 
 BEGIN TRANSACTION;
 
--- Step A: remove current topics for changed Works.
 DELETE FROM `openalex.work_topics` AS target
 WHERE target.`work_id` IN (
-  SELECT `work_id` FROM `openalex.changed_work_ids`
+  SELECT `work_id` FROM `openalex.accepted_work_ids`
 );
 
--- Step B: insert current projection for those Works.
 INSERT INTO `openalex.work_topics` (
   `work_id`,
   `topic_id`,
@@ -51,7 +50,7 @@ SELECT
   source.`deleted_at`
 FROM `openalex.work_topics_staging` AS source
 WHERE source.`work_id` IN (
-  SELECT `work_id` FROM `openalex.changed_work_ids`
+  SELECT `work_id` FROM `openalex.accepted_work_ids`
 );
 
 COMMIT TRANSACTION;
