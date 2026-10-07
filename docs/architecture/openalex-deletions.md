@@ -165,6 +165,12 @@ Step 13 establishes immutable replay, per-row deletion precedence, claim/retry,
 and explicit decode failures. It does **not** ship a generic schema-migration
 framework or full-ledger cloud execution.
 
+Local PostgreSQL `apply_ingestion_schema` may add `deletion_events.deleted_date`
+to empty legacy tables. It **never** fabricates `deleted_date` from file-level
+`source_updated_date` or a sentinel date. Legacy rows lacking a trustworthy
+`deleted_date` fail migration explicitly; recover by truncating/replaying
+immutable raw `deleted_ids.csv.gz` under the `work_id,deleted_date` contract.
+
 ## Out of scope
 
 Step 14 benchmarks (#19), BigQuery models (#22), gold marts (#55), DQ, Data

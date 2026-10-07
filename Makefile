@@ -13,7 +13,7 @@ test-unit:
 
 test-postgres-ingestion:
 	$(PYTHON) -m pip install -e ".[dev,postgres]"
-	$(PYTHON) -m pytest tests/integration/test_postgres_ingestion.py -m postgres
+	$(PYTHON) -m pytest tests/integration/test_postgres_ingestion.py tests/integration/test_postgres_deletion_migration.py -m postgres
 
 check:
 	$(PYTHON) -m compileall -q src tests

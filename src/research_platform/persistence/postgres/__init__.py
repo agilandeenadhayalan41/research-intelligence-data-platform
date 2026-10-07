@@ -2,6 +2,7 @@
 
 from research_platform.persistence.postgres.canonical_store import PostgresCanonicalStore
 from research_platform.persistence.postgres.connection import (
+    SchemaMigrationError,
     apply_ingestion_schema,
     connect_postgres,
     postgres_dsn_from_env,
@@ -21,6 +22,7 @@ __all__ = [
     "PostgresCanonicalStore",
     "PostgresControlStore",
     "PublishCounters",
+    "SchemaMigrationError",
     "StreamedWorkRecord",
     "apply_ingestion_schema",
     "connect_postgres",
