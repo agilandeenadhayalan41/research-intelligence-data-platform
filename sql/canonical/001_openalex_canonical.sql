@@ -193,6 +193,7 @@ CREATE TABLE IF NOT EXISTS work_keywords (
 
 CREATE TABLE IF NOT EXISTS work_references (
     work_id TEXT NOT NULL REFERENCES works (work_id),
+    reference_index INTEGER NOT NULL,
     referenced_work_id TEXT NULL,
     raw_reference TEXT NULL,
     reference_status TEXT NOT NULL,
@@ -203,19 +204,17 @@ CREATE TABLE IF NOT EXISTS work_references (
     processed_at TIMESTAMPTZ NOT NULL,
     activity_state TEXT NOT NULL,
     deleted_at TIMESTAMPTZ NULL,
+    PRIMARY KEY (work_id, reference_index),
     CONSTRAINT work_references_status_check
         CHECK (reference_status IN ('RESOLVED_ID', 'MALFORMED', 'MISSING'))
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS work_references_resolved_uidx
-    ON work_references (work_id, referenced_work_id)
-    WHERE referenced_work_id IS NOT NULL;
-
 CREATE TABLE IF NOT EXISTS work_mesh (
     work_id TEXT NOT NULL REFERENCES works (work_id),
+    mesh_index INTEGER NOT NULL,
     descriptor_ui TEXT NOT NULL,
     descriptor_name TEXT NULL,
-    qualifier_ui TEXT NOT NULL DEFAULT '',
+    qualifier_ui TEXT NULL,
     qualifier_name TEXT NULL,
     is_major_topic BOOLEAN NULL,
     source_asset_id TEXT NOT NULL,
@@ -225,12 +224,13 @@ CREATE TABLE IF NOT EXISTS work_mesh (
     processed_at TIMESTAMPTZ NOT NULL,
     activity_state TEXT NOT NULL,
     deleted_at TIMESTAMPTZ NULL,
-    PRIMARY KEY (work_id, descriptor_ui, qualifier_ui)
+    PRIMARY KEY (work_id, mesh_index)
 );
 
 CREATE TABLE IF NOT EXISTS work_locations (
     work_id TEXT NOT NULL REFERENCES works (work_id),
     location_index INTEGER NOT NULL,
+    location_origin TEXT NOT NULL,
     source_id TEXT NULL,
     is_oa BOOLEAN NULL,
     landing_page_url TEXT NULL,
@@ -245,13 +245,16 @@ CREATE TABLE IF NOT EXISTS work_locations (
     processed_at TIMESTAMPTZ NOT NULL,
     activity_state TEXT NOT NULL,
     deleted_at TIMESTAMPTZ NULL,
-    PRIMARY KEY (work_id, location_index)
+    PRIMARY KEY (work_id, location_index),
+    CONSTRAINT work_locations_origin_check
+        CHECK (location_origin IN ('LOCATIONS_ARRAY', 'PRIMARY_LOCATION_FALLBACK'))
 );
 
 CREATE TABLE IF NOT EXISTS work_grants (
     work_id TEXT NOT NULL REFERENCES works (work_id),
-    funder_id TEXT NOT NULL DEFAULT '',
-    award_id TEXT NOT NULL DEFAULT '',
+    grant_index INTEGER NOT NULL,
+    funder_id TEXT NULL,
+    award_id TEXT NULL,
     funder_display_name TEXT NULL,
     source_asset_id TEXT NOT NULL,
     source_checksum_sha256 TEXT NOT NULL,
@@ -260,10 +263,13 @@ CREATE TABLE IF NOT EXISTS work_grants (
     processed_at TIMESTAMPTZ NOT NULL,
     activity_state TEXT NOT NULL,
     deleted_at TIMESTAMPTZ NULL,
-    PRIMARY KEY (work_id, funder_id, award_id)
+    PRIMARY KEY (work_id, grant_index)
 );
 
 -- Notes:
 -- 1. Referenced works are not required to exist in works (unresolved external refs).
--- 2. CHECK constraints do not encode full lifecycle transitions.
--- 3. BigQuery partitioning/clustering is out of scope for this file.
+-- 2. Relationship PKs use source-array ordinals so nullable semantic fields remain null
+--    (no hidden None <-> '' conversion for qualifier_ui / funder_id / award_id).
+-- 3. CHECK constraints do not encode full lifecycle transitions.
+-- 4. BigQuery partitioning/clustering is out of scope for this file.
+-- 5. PyArrow schemas in research_platform.canonical.openalex.schemas are authoritative.

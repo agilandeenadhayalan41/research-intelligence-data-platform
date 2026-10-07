@@ -26,7 +26,7 @@ remain planned.
 
 | Step | Work |
 | --- | --- |
-| 12 | Implement incremental ingestion/upsert: manifest → discover → select/claim → download → immutable raw landing → staging → canonical update → provenance → success. |
+| 12 | Implement incremental ingestion/upsert: manifest → discover → select/claim → download → immutable raw landing → staging → canonical update → provenance → success. Depends on Steps 05–11 plus an explicit local ControlStore/canonical write path behind the Step 10 transaction boundary. PostgreSQL may implement that path if chosen; #7 Warehouse.query adapter is not mandatory. |
 | 13 | Support deletion, changed/new records, schema changes, replay, and reprocessing. |
 | 14 | Build a query-pattern and benchmark registry before choosing operational serving technology. Cover DOI/OpenAlex ID/eISSN/ISSN/publisher lookups; journal/publisher authors; publisher-topic-license-year counts; institution/topic and citation/reference relationships; publication and open-access trends. Measure latency, concurrency, bytes scanned, cost, result size, freshness, frequency, and materialization suitability. |
 | 15 | Implement BigQuery-first analytics on GCP; keep DuckDB for local tests, define SQL dialect contracts, and derive partitioning/clustering from evidence. Keep queries bounded and cost-safe. |

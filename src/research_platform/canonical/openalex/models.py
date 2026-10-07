@@ -34,6 +34,13 @@ class ReferenceStatus(StrEnum):
     MISSING = "MISSING"
 
 
+class LocationOrigin(StrEnum):
+    """Where a WorkLocation row was observed in the source Work object."""
+
+    LOCATIONS_ARRAY = "LOCATIONS_ARRAY"
+    PRIMARY_LOCATION_FALLBACK = "PRIMARY_LOCATION_FALLBACK"
+
+
 class ArrayPresence(StrEnum):
     """How a multi-valued source array was observed."""
 
@@ -216,7 +223,10 @@ class WorkKeyword(SettingsModel):
 
 
 class WorkReference(SettingsModel):
+    """Grain: ``(work_id, reference_index)`` from the source array position."""
+
     work_id: str = Field(pattern=r"^W\d+$")
+    reference_index: int = Field(strict=True, ge=0)
     referenced_work_id: str | None = Field(default=None, pattern=r"^W\d+$")
     raw_reference: str | None = None
     reference_status: ReferenceStatus
@@ -224,7 +234,10 @@ class WorkReference(SettingsModel):
 
 
 class WorkMesh(SettingsModel):
+    """Grain: ``(work_id, mesh_index)``; ``qualifier_ui`` stays nullable."""
+
     work_id: str = Field(pattern=r"^W\d+$")
+    mesh_index: int = Field(strict=True, ge=0)
     descriptor_ui: str = Field(min_length=1)
     descriptor_name: str | None = None
     qualifier_ui: str | None = None
@@ -234,8 +247,11 @@ class WorkMesh(SettingsModel):
 
 
 class WorkLocation(SettingsModel):
+    """Grain: ``(work_id, location_index)`` within the chosen origin sequence."""
+
     work_id: str = Field(pattern=r"^W\d+$")
     location_index: int = Field(strict=True, ge=0)
+    location_origin: LocationOrigin
     source_id: str | None = Field(default=None, pattern=r"^S\d+$")
     is_oa: bool | None = None
     landing_page_url: str | None = None
@@ -247,11 +263,12 @@ class WorkLocation(SettingsModel):
 
 
 class WorkGrant(SettingsModel):
-    """Grain: (work_id, funder_id, award_id) with empty award_id when absent."""
+    """Grain: ``(work_id, grant_index)``; ``funder_id``/``award_id`` stay nullable."""
 
     work_id: str = Field(pattern=r"^W\d+$")
+    grant_index: int = Field(strict=True, ge=0)
     funder_id: str | None = Field(default=None, pattern=r"^F\d+$")
-    award_id: str = ""
+    award_id: str | None = None
     funder_display_name: str | None = None
     lineage: CanonicalLineage
 

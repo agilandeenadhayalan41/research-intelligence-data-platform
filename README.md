@@ -40,13 +40,18 @@ There is no implemented GCS/BigQuery deployment or production pipeline.
 ### Next scoped work
 
 **Step 11: canonical OpenAlex model** is delivered for
-[issue #15](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/15).
-See [OpenAlex canonical model](docs/architecture/openalex-canonical-model.md) for
-entity grains, relationships, ID normalization, and mapping rules.
+[issue #15](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/15)
+(hardening may follow for contract gaps). See
+[OpenAlex canonical model](docs/architecture/openalex-canonical-model.md) for
+entity grains, relationships, ID normalization, reconciliation, and mapping rules.
 
 **Step 12: incremental ingestion**
 ([issue #20](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/20))
-is next and requires a separate assignment. Keep
+is next and requires a separate assignment. Dependencies are **Steps 05–11** plus
+an explicit local `ControlStore` / canonical write implementation behind the
+Step 10 transaction boundary. PostgreSQL may back that local transactional path
+if intentionally selected; the old **#7 PostgreSQL query/connectivity
+(`Warehouse.query`) adapter is not a mandatory architecture dependency**. Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
 as the open umbrella roadmap. Assign one scoped issue at a time and stop after
 its reviewable PR; do not reopen completed work or automatically start later steps.
