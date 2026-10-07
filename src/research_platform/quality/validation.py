@@ -256,7 +256,26 @@ def seed_quality_semantic_fixture(
         """
     )
 
-    # Staged Gold contributions (work grain for exclusion checks)
+    # Manifest declares participating marts (zero-row marts allowed via membership).
+    conn.execute("DROP TABLE IF EXISTS staged_gold_mart_manifest")
+    conn.execute(
+        """
+        CREATE TABLE staged_gold_mart_manifest AS SELECT * FROM (VALUES
+          ('research_discovery'),
+          ('journal_author_stats'),
+          ('publisher_author_stats'),
+          ('publisher_topic_year_stats'),
+          ('publisher_topic_license_year_stats'),
+          ('institution_topic_stats'),
+          ('publication_trends'),
+          ('open_access_trends'),
+          ('citation_edges')
+        ) AS t(mart_id)
+        """
+    )
+    # Staged Gold contributions (work grain for exclusion checks).
+    # journal_author_stats intentionally has zero contribution rows — coverage
+    # comes from the manifest alone.
     conn.execute("DROP TABLE IF EXISTS staged_gold_work_contributions")
     conn.execute(
         """
@@ -265,7 +284,6 @@ def seed_quality_semantic_fixture(
           ('research_discovery', 'W3'),
           ('research_discovery', 'W4'),
           ('research_discovery', 'W5'),
-          ('journal_author_stats', 'W1'),
           ('publisher_author_stats', 'W1'),
           ('publisher_topic_year_stats', 'W1'),
           ('publisher_topic_license_year_stats', 'W1'),

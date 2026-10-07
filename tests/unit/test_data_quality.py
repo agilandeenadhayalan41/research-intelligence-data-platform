@@ -11,6 +11,7 @@ import pytest
 from research_platform.quality.models import (
     QUALITY_CONTRACT_VERSION,
     ErrorClassification,
+    ExecutionStage,
     QualityCheckKind,
     QualityReport,
     QualityResult,
@@ -22,8 +23,9 @@ from research_platform.quality.models import (
 )
 from research_platform.quality.registry import (
     GOLD_MART_IDS,
+    OWNED_RELATIONSHIP_TABLES,
     load_quality_registry,
-    required_hard_gate_ids,
+    required_hard_gate_ids_for_stage,
     serialize_quality_registry,
 )
 from research_platform.quality.runner import (
@@ -59,20 +61,57 @@ def _conn_with_fixture(**kwargs) -> duckdb.DuckDBPyConnection:
     return conn
 
 
-def _run(**kwargs) -> QualityReport:
+def _run(
+    stage: ExecutionStage = ExecutionStage.PRE_SERVING_BUILD,
+    *,
+    expectation: ReconciliationExpectation | None = _BALANCED,
+    **kwargs,
+) -> QualityReport:
     conn = _conn_with_fixture(**kwargs)
     try:
         return run_quality_checks(
             DuckDBQualityExecutor(conn),
             run_id="test-run",
-            expectation=_BALANCED,
+            stage=stage,
+            expectation=expectation,
         )
     finally:
         conn.close()
 
 
+def _run_gold(**kwargs) -> QualityReport:
+    return _run(ExecutionStage.PRE_VISIBLE_PUBLICATION, expectation=None, **kwargs)
+
+
 def _result(report: QualityReport, check_id: str) -> QualityResult:
     return next(r for r in report.results if r.check_id == check_id)
+
+
+def _empty_owned_relationship_tables(conn: duckdb.DuckDBPyConnection) -> None:
+    """Create all owned relationship tables as empty (present, not missing)."""
+    specs = {
+        "work_authors": (
+            "work_id VARCHAR, authorship_index INTEGER, author_id VARCHAR"
+        ),
+        "work_author_institutions": (
+            "work_id VARCHAR, authorship_index INTEGER, "
+            "institution_index INTEGER, institution_id VARCHAR"
+        ),
+        "work_topics": "work_id VARCHAR, topic_id VARCHAR",
+        "work_keywords": "work_id VARCHAR, keyword_id VARCHAR",
+        "work_references": (
+            "work_id VARCHAR, reference_index INTEGER, "
+            "referenced_work_id VARCHAR, reference_status VARCHAR"
+        ),
+        "work_mesh": "work_id VARCHAR, mesh_index INTEGER, descriptor_ui VARCHAR",
+        "work_locations": (
+            "work_id VARCHAR, location_index INTEGER, source_id VARCHAR, is_primary BOOLEAN"
+        ),
+        "work_grants": "work_id VARCHAR, grant_index INTEGER, funder_id VARCHAR",
+    }
+    for name, cols in specs.items():
+        conn.execute(f"CREATE TABLE {name} ({cols})")
+        assert name in OWNED_RELATIONSHIP_TABLES
 
 
 def test_stable_unique_check_ids() -> None:
@@ -156,19 +195,20 @@ def test_deleted_canonical_work_allowed() -> None:
 
 
 def test_deleted_work_in_staged_gold_fails() -> None:
-    report = _run(include_deleted_in_gold=True)
+    report = _run_gold(include_deleted_in_gold=True)
     r = _result(report, "gold.deleted_source_work_exclusion")
     assert r.status is QualityStatus.FAIL
+    assert r.diagnostic_counts["inactive_source_work_count"] >= 1
     assert report.publication_allowed is False
+    assert report.execution_stage is ExecutionStage.PRE_VISIBLE_PUBLICATION
 
 
 def test_deleted_citation_target_allowed_source_fails() -> None:
-    ok = _run()
+    ok = _run_gold()
     assert _result(ok, "gold.deleted_source_work_exclusion").status is QualityStatus.PASS
-    # Deleted source citation edge is injected by include_deleted_in_gold.
-    bad = _run(include_deleted_in_gold=True)
+    bad = _run_gold(include_deleted_in_gold=True)
     assert _result(bad, "gold.deleted_source_work_exclusion").diagnostic_counts[
-        "deleted_citation_source_rows"
+        "inactive_citation_source_rows"
     ] >= 1
 
 
@@ -223,110 +263,32 @@ def test_empty_works_semantics() -> None:
     conn = duckdb.connect(":memory:")
     conn.execute(
         """
-        CREATE TABLE works AS SELECT * FROM (
-          SELECT CAST(NULL AS VARCHAR) AS work_id, CAST(NULL AS VARCHAR) AS doi,
-                 CAST(NULL AS VARCHAR) AS title, CAST(NULL AS INTEGER) AS publication_year,
-                 CAST(NULL AS VARCHAR) AS work_type, CAST(NULL AS VARCHAR) AS activity_state
-        ) WHERE 1 = 0
+        CREATE TABLE works (
+          work_id VARCHAR, doi VARCHAR, title VARCHAR,
+          publication_year INTEGER, work_type VARCHAR, activity_state VARCHAR
+        )
         """
     )
-    for t in (
-        "work_authors",
-        "work_author_institutions",
-        "work_topics",
-        "work_keywords",
-        "work_references",
-        "work_mesh",
-        "work_locations",
-        "work_grants",
-        "authors",
-        "institutions",
-        "topics",
-        "sources",
-        "funders",
-        "staged_gold_work_contributions",
-        "staged_gold_citation_edges",
+    _empty_owned_relationship_tables(conn)
+    for t, pk in (
+        ("authors", "author_id"),
+        ("institutions", "institution_id"),
+        ("topics", "topic_id"),
+        ("sources", "source_id"),
+        ("funders", "funder_id"),
     ):
-        if t.startswith("work_authors"):
-            conn.execute(
-                "CREATE TABLE work_authors AS SELECT * FROM "
-                "(SELECT CAST(NULL AS VARCHAR) AS work_id, 0 AS authorship_index, "
-                "CAST(NULL AS VARCHAR) AS author_id) WHERE 1=0"
-            )
-        elif t == "work_author_institutions":
-            conn.execute(
-                "CREATE TABLE work_author_institutions AS SELECT * FROM "
-                "(SELECT CAST(NULL AS VARCHAR) AS work_id, 0 AS authorship_index, "
-                "0 AS institution_index, CAST(NULL AS VARCHAR) AS institution_id) WHERE 1=0"
-            )
-        elif t == "work_topics":
-            conn.execute(
-                "CREATE TABLE work_topics AS SELECT * FROM "
-                "(SELECT CAST(NULL AS VARCHAR) AS work_id, CAST(NULL AS VARCHAR) AS topic_id) WHERE 1=0"
-            )
-        elif t == "work_keywords":
-            conn.execute(
-                "CREATE TABLE work_keywords AS SELECT * FROM "
-                "(SELECT CAST(NULL AS VARCHAR) AS work_id, CAST(NULL AS VARCHAR) AS keyword_id) WHERE 1=0"
-            )
-        elif t == "work_references":
-            conn.execute(
-                "CREATE TABLE work_references AS SELECT * FROM "
-                "(SELECT CAST(NULL AS VARCHAR) AS work_id, 0 AS reference_index, "
-                "CAST(NULL AS VARCHAR) AS referenced_work_id, "
-                "CAST(NULL AS VARCHAR) AS reference_status) WHERE 1=0"
-            )
-        elif t == "work_mesh":
-            conn.execute(
-                "CREATE TABLE work_mesh AS SELECT * FROM "
-                "(SELECT CAST(NULL AS VARCHAR) AS work_id, 0 AS mesh_index, "
-                "CAST(NULL AS VARCHAR) AS descriptor_ui) WHERE 1=0"
-            )
-        elif t == "work_locations":
-            conn.execute(
-                "CREATE TABLE work_locations AS SELECT * FROM "
-                "(SELECT CAST(NULL AS VARCHAR) AS work_id, 0 AS location_index, "
-                "CAST(NULL AS VARCHAR) AS source_id, TRUE AS is_primary) WHERE 1=0"
-            )
-        elif t == "work_grants":
-            conn.execute(
-                "CREATE TABLE work_grants AS SELECT * FROM "
-                "(SELECT CAST(NULL AS VARCHAR) AS work_id, 0 AS grant_index, "
-                "CAST(NULL AS VARCHAR) AS funder_id) WHERE 1=0"
-            )
-        elif t in {"authors", "institutions", "topics", "sources", "funders"}:
-            pk = {
-                "authors": "author_id",
-                "institutions": "institution_id",
-                "topics": "topic_id",
-                "sources": "source_id",
-                "funders": "funder_id",
-            }[t]
-            conn.execute(
-                f"CREATE TABLE {t} AS SELECT * FROM "
-                f"(SELECT CAST(NULL AS VARCHAR) AS {pk}) WHERE 1=0"
-            )
-        elif t == "staged_gold_work_contributions":
-            conn.execute(
-                "CREATE TABLE staged_gold_work_contributions AS SELECT * FROM "
-                "(SELECT CAST(NULL AS VARCHAR) AS mart_id, "
-                "CAST(NULL AS VARCHAR) AS work_id) WHERE 1=0"
-            )
-        elif t == "staged_gold_citation_edges":
-            conn.execute(
-                "CREATE TABLE staged_gold_citation_edges AS SELECT * FROM "
-                "(SELECT CAST(NULL AS VARCHAR) AS source_work_id, 0 AS reference_index, "
-                "CAST(NULL AS VARCHAR) AS referenced_work_id, "
-                "CAST(NULL AS VARCHAR) AS target_activity_state) WHERE 1=0"
-            )
+        conn.execute(f"CREATE TABLE {t} ({pk} VARCHAR)")
     report = run_quality_checks(
         DuckDBQualityExecutor(conn),
         run_id="empty",
+        stage=ExecutionStage.PRE_SERVING_BUILD,
         expectation=_BALANCED,
     )
     conn.close()
+    assert report.execution_stage is ExecutionStage.PRE_SERVING_BUILD
     assert _result(report, "canonical.works.work_id_not_null").status is QualityStatus.PASS
     assert _result(report, "canonical.works.work_id_unique").status is QualityStatus.PASS
+    assert _result(report, "canonical.relationships.source_work_integrity").status is QualityStatus.PASS
     doi = _result(report, "metric.active_works.missing_doi")
     assert doi.diagnostic_counts["missing_count"] == 0
     assert doi.diagnostic_counts["active_work_denominator"] == 0
@@ -336,17 +298,14 @@ def test_empty_works_semantics() -> None:
 def test_relationship_only_no_works_fails() -> None:
     conn = duckdb.connect(":memory:")
     conn.execute(
-        "CREATE TABLE work_authors AS SELECT * FROM (VALUES ('W1', 0, 'A1')) "
-        "AS t(work_id, authorship_index, author_id)"
-    )
-    # Minimal empty works
-    conn.execute(
         """
-        CREATE TABLE works AS SELECT * FROM (
-          SELECT CAST(NULL AS VARCHAR) AS work_id, CAST(NULL AS VARCHAR) AS activity_state
-        ) WHERE 1 = 0
+        CREATE TABLE works (
+          work_id VARCHAR, activity_state VARCHAR
+        )
         """
     )
+    _empty_owned_relationship_tables(conn)
+    conn.execute("INSERT INTO work_authors VALUES ('W1', 0, 'A1')")
     contract = next(
         c
         for c in load_quality_registry()
@@ -379,7 +338,10 @@ def test_reconciliation_balances_pass_and_fail() -> None:
         restore_required=0,  # sum 5 == evaluated — decode fails
     )
     report = run_quality_checks(
-        DuckDBQualityExecutor(conn), run_id="bad-recon", expectation=bad_exp
+        DuckDBQualityExecutor(conn),
+        run_id="bad-recon",
+        stage=ExecutionStage.PRE_SERVING_BUILD,
+        expectation=bad_exp,
     )
     conn.close()
     assert _result(report, "reconciliation.decode_balance").status is QualityStatus.FAIL
@@ -389,7 +351,10 @@ def test_reconciliation_balances_pass_and_fail() -> None:
 def test_missing_reconciliation_input_error() -> None:
     conn = _conn_with_fixture()
     report = run_quality_checks(
-        DuckDBQualityExecutor(conn), run_id="no-recon", expectation=None
+        DuckDBQualityExecutor(conn),
+        run_id="no-recon",
+        stage=ExecutionStage.PRE_SERVING_BUILD,
+        expectation=None,
     )
     conn.close()
     r = _result(report, "reconciliation.decode_balance")
@@ -416,18 +381,20 @@ def test_missing_column_produces_error() -> None:
 
 def test_error_required_gate_blocks_publication() -> None:
     conn = duckdb.connect(":memory:")
-    # No tables at all → multiple ERROR hard gates
     report = run_quality_checks(
-        DuckDBQualityExecutor(conn), run_id="empty-db", expectation=None
+        DuckDBQualityExecutor(conn),
+        run_id="empty-db",
+        stage=ExecutionStage.PRE_SERVING_BUILD,
+        expectation=None,
     )
     conn.close()
     assert report.publication_allowed is False
     assert report.hard_gate_passed is False
+    assert report.execution_stage is ExecutionStage.PRE_SERVING_BUILD
     assert any(r.status is QualityStatus.ERROR for r in report.results)
 
 
 def test_missing_required_hard_gate_result_blocks() -> None:
-    # Simulate missing result
     hard_ok, pub_ok = compute_publication_allowed(
         required_check_ids=("canonical.works.work_id_not_null",),
         results=(),
@@ -436,8 +403,52 @@ def test_missing_required_hard_gate_result_blocks() -> None:
     assert pub_ok is False
 
 
+def test_wrong_check_kind_for_required_gate_blocks() -> None:
+    wrong = QualityResult(
+        check_id="canonical.works.work_id_not_null",
+        check_kind=QualityCheckKind.INFORMATIONAL_METRIC,
+        scope=QualityScope.CANONICAL,
+        model_name="works",
+        run_id="x",
+        status=QualityStatus.PASS,
+        observed_value=0,
+    )
+    hard_ok, pub_ok = compute_publication_allowed(
+        required_check_ids=("canonical.works.work_id_not_null",),
+        results=(wrong,),
+    )
+    assert hard_ok is False
+    assert pub_ok is False
+
+
+def test_duplicate_result_ids_block() -> None:
+    r1 = QualityResult(
+        check_id="canonical.works.work_id_not_null",
+        check_kind=QualityCheckKind.HARD_GATE,
+        scope=QualityScope.CANONICAL,
+        model_name="works",
+        run_id="x",
+        status=QualityStatus.PASS,
+        observed_value=0,
+    )
+    r2 = QualityResult(
+        check_id="canonical.works.work_id_not_null",
+        check_kind=QualityCheckKind.HARD_GATE,
+        scope=QualityScope.CANONICAL,
+        model_name="works",
+        run_id="x",
+        status=QualityStatus.PASS,
+        observed_value=0,
+    )
+    hard_ok, pub_ok = compute_publication_allowed(
+        required_check_ids=("canonical.works.work_id_not_null",),
+        results=(r1, r2),
+    )
+    assert hard_ok is False
+    assert pub_ok is False
+
+
 def test_informational_metric_never_blocks_or_permits_alone() -> None:
-    # Only informational results — required hard gates missing → blocked
     info = QualityResult(
         check_id="metric.active_works.missing_doi",
         check_kind=QualityCheckKind.INFORMATIONAL_METRIC,
@@ -448,7 +459,9 @@ def test_informational_metric_never_blocks_or_permits_alone() -> None:
         observed_value=0,
     )
     hard_ok, pub_ok = compute_publication_allowed(
-        required_check_ids=required_hard_gate_ids(),
+        required_check_ids=required_hard_gate_ids_for_stage(
+            ExecutionStage.PRE_SERVING_BUILD
+        ),
         results=(info,),
     )
     assert hard_ok is False
@@ -460,10 +473,10 @@ def test_report_serialization_deterministic_and_safe() -> None:
     a = serialize_report(report)
     b = serialize_report(report)
     assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+    assert a["execution_stage"] == "PRE_SERVING_BUILD"
     blob = json.dumps(a).lower()
     assert "password" not in blob
     assert "postgres://" not in blob
-    # No raw author names / titles as diagnostic keys
     for r in report.results:
         for key in r.diagnostic_counts:
             assert key not in {"title", "doi", "author_name", "payload", "sql"}
@@ -485,9 +498,138 @@ def test_docs_exist() -> None:
     assert (REPO_ROOT / "docs/architecture/data-quality.md").is_file()
 
 
-def test_healthy_fixture_allows_publication() -> None:
-    report = _run()
-    assert report.contract_version == QUALITY_CONTRACT_VERSION
-    assert report.validation_label.value == "SEMANTIC_ONLY"
-    assert report.hard_gate_passed is True
-    assert report.publication_allowed is True
+def test_healthy_fixture_allows_both_stages() -> None:
+    serving = _run()
+    assert serving.contract_version == QUALITY_CONTRACT_VERSION
+    assert serving.validation_label.value == "SEMANTIC_ONLY"
+    assert serving.execution_stage is ExecutionStage.PRE_SERVING_BUILD
+    assert serving.hard_gate_passed is True
+    assert serving.publication_allowed is True
+    assert "gold.deleted_source_work_exclusion" not in {
+        r.check_id for r in serving.results
+    }
+
+    visible = _run_gold()
+    assert visible.execution_stage is ExecutionStage.PRE_VISIBLE_PUBLICATION
+    assert visible.hard_gate_passed is True
+    assert visible.publication_allowed is True
+    assert "canonical.works.work_id_not_null" not in {
+        r.check_id for r in visible.results
+    }
+    gold = _result(visible, "gold.deleted_source_work_exclusion")
+    assert gold.diagnostic_counts["manifest_mart_count"] == 9
+
+
+def test_missing_relationship_table_errors() -> None:
+    conn = _conn_with_fixture()
+    conn.execute("DROP TABLE work_topics")
+    contract = next(
+        c
+        for c in load_quality_registry()
+        if c.check_id == "canonical.relationships.source_work_integrity"
+    )
+    result = execute_check(contract, DuckDBQualityExecutor(conn), run_id="miss-topics")
+    conn.close()
+    assert result.status is QualityStatus.ERROR
+    assert result.error_classification is ErrorClassification.MISSING_TABLE
+
+
+def test_missing_work_references_table_errors() -> None:
+    conn = _conn_with_fixture()
+    conn.execute("DROP TABLE work_references")
+    contract = next(
+        c
+        for c in load_quality_registry()
+        if c.check_id == "canonical.relationships.source_work_integrity"
+    )
+    result = execute_check(contract, DuckDBQualityExecutor(conn), run_id="miss-refs")
+    conn.close()
+    assert result.status is QualityStatus.ERROR
+    assert result.error_classification is ErrorClassification.MISSING_TABLE
+
+
+def test_missing_work_authors_dimension_relation_errors() -> None:
+    conn = _conn_with_fixture()
+    conn.execute("DROP TABLE work_authors")
+    contract = next(
+        c
+        for c in load_quality_registry()
+        if c.check_id == "canonical.relationships.dimension_integrity"
+    )
+    result = execute_check(contract, DuckDBQualityExecutor(conn), run_id="miss-wa")
+    conn.close()
+    assert result.status is QualityStatus.ERROR
+    assert result.error_classification is ErrorClassification.MISSING_TABLE
+
+
+def test_missing_authors_dimension_errors() -> None:
+    conn = _conn_with_fixture()
+    conn.execute("DROP TABLE authors")
+    contract = next(
+        c
+        for c in load_quality_registry()
+        if c.check_id == "canonical.relationships.dimension_integrity"
+    )
+    result = execute_check(contract, DuckDBQualityExecutor(conn), run_id="miss-authors")
+    conn.close()
+    assert result.status is QualityStatus.ERROR
+    assert result.error_classification is ErrorClassification.MISSING_TABLE
+
+
+def test_partial_gold_manifest_errors() -> None:
+    conn = _conn_with_fixture()
+    conn.execute("DELETE FROM staged_gold_mart_manifest WHERE mart_id = 'citation_edges'")
+    report = run_quality_checks(
+        DuckDBQualityExecutor(conn),
+        run_id="partial-manifest",
+        stage=ExecutionStage.PRE_VISIBLE_PUBLICATION,
+    )
+    conn.close()
+    r = _result(report, "gold.deleted_source_work_exclusion")
+    assert r.status is QualityStatus.ERROR
+    assert report.publication_allowed is False
+
+
+def test_missing_citation_table_when_declared_errors() -> None:
+    conn = _conn_with_fixture()
+    conn.execute("DROP TABLE staged_gold_citation_edges")
+    report = run_quality_checks(
+        DuckDBQualityExecutor(conn),
+        run_id="miss-cite-table",
+        stage=ExecutionStage.PRE_VISIBLE_PUBLICATION,
+    )
+    conn.close()
+    r = _result(report, "gold.deleted_source_work_exclusion")
+    assert r.status is QualityStatus.ERROR
+    assert r.error_classification is ErrorClassification.MISSING_TABLE
+    assert report.publication_allowed is False
+
+
+def test_staged_gold_source_absent_from_canonical_fails() -> None:
+    conn = _conn_with_fixture()
+    conn.execute(
+        "INSERT INTO staged_gold_work_contributions VALUES ('research_discovery', 'W999')"
+    )
+    report = run_quality_checks(
+        DuckDBQualityExecutor(conn),
+        run_id="absent-source",
+        stage=ExecutionStage.PRE_VISIBLE_PUBLICATION,
+    )
+    conn.close()
+    r = _result(report, "gold.deleted_source_work_exclusion")
+    assert r.status is QualityStatus.FAIL
+    assert r.diagnostic_counts["missing_source_work_count"] >= 1
+
+
+def test_stage_local_required_ids() -> None:
+    serving_ids = required_hard_gate_ids_for_stage(ExecutionStage.PRE_SERVING_BUILD)
+    visible_ids = required_hard_gate_ids_for_stage(ExecutionStage.PRE_VISIBLE_PUBLICATION)
+    assert "gold.deleted_source_work_exclusion" not in serving_ids
+    assert "canonical.works.work_id_not_null" in serving_ids
+    assert visible_ids == ("gold.deleted_source_work_exclusion",)
+    serving = _run()
+    assert all(
+        c.execution_stage is ExecutionStage.PRE_SERVING_BUILD
+        for c in load_quality_registry()
+        if c.check_id in {r.check_id for r in serving.results}
+    )

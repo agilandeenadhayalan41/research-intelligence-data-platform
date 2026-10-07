@@ -177,20 +177,34 @@ def quality_check_contracts() -> tuple[QualityCheckContract, ...]:
             scope=QualityScope.STAGED_GOLD,
             model_name="staged_gold_marts",
             description=(
-                "Consumer Gold must exclude DELETED/inactive source Works. "
-                "Citation TARGET may be DELETED; citation SOURCE must be ACTIVE."
+                "Complete staged Gold coverage required. Every contribution / "
+                "citation SOURCE work_id must exist in canonical works and be ACTIVE. "
+                "Citation TARGET may be DELETED or ABSENT."
             ),
             required=True,
-            expected_rule="deleted_source_contribution_count == 0",
-            input_tables=("works", "staged_gold_*"),
+            expected_rule=(
+                "complete mart manifest AND missing_source_work_count == 0 "
+                "AND inactive_source_work_count == 0"
+            ),
+            input_tables=(
+                "works",
+                "staged_gold_mart_manifest",
+                "staged_gold_work_contributions",
+                "staged_gold_citation_edges",
+            ),
             execution_stage=ExecutionStage.PRE_VISIBLE_PUBLICATION,
             backend_support=BackendSupport.BOTH,
             sql_path=f"{_QUALITY_SQL}/active_gold_deleted_work_exclusion.sql",
-            diagnostic_fields=("deleted_source_contribution_count",),
+            diagnostic_fields=(
+                "missing_source_work_count",
+                "inactive_source_work_count",
+                "manifest_mart_count",
+            ),
             threshold=0,
             notes=(
-                "CANONICAL may contain DELETED Works. GOLD consumer models must not. "
-                "citation_edges.target_activity_state=DELETED is allowed."
+                "Manifest declares participating marts (zero-row marts allowed). "
+                "Missing required table != empty table. "
+                "citation_edges in manifest requires staged_gold_citation_edges."
             ),
         ),
         # --- Informational metrics ---
@@ -349,6 +363,18 @@ def checks_for_stage(
 ) -> tuple[QualityCheckContract, ...]:
     items = checks if checks is not None else load_quality_registry()
     return tuple(c for c in items if c.execution_stage is stage)
+
+
+def required_hard_gate_ids_for_stage(
+    stage: ExecutionStage,
+    checks: tuple[QualityCheckContract, ...] | None = None,
+) -> tuple[str, ...]:
+    """Required HARD_GATE IDs belonging to one execution stage only."""
+    return tuple(
+        c.check_id
+        for c in checks_for_stage(stage, checks)
+        if c.kind is QualityCheckKind.HARD_GATE and c.required
+    )
 
 
 def serialize_quality_registry(
