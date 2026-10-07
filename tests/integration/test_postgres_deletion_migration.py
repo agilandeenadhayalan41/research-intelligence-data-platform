@@ -17,10 +17,10 @@ pytest.importorskip("psycopg")
 import psycopg
 
 from research_platform.persistence.postgres.connection import (
-    SchemaMigrationError,
     apply_ingestion_schema,
     connect_postgres,
 )
+from research_platform.persistence.postgres.migration_policy import SchemaMigrationError
 
 DSN = os.environ.get("POSTGRES_DSN", "").strip()
 pytestmark = [

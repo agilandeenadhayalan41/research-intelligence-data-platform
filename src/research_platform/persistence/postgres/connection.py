@@ -7,23 +7,22 @@ from pathlib import Path
 
 import psycopg
 
+from research_platform.persistence.postgres.migration_policy import (
+    SchemaMigrationError,
+    assert_deleted_date_rows_migratable,
+)
+
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _CONTROL_DDL = _REPO_ROOT / "sql" / "control" / "001_pipeline_control.sql"
 _DELETION_DDL = _REPO_ROOT / "sql" / "control" / "002_deletion_events.sql"
 _CANONICAL_DDL = _REPO_ROOT / "sql" / "canonical" / "001_openalex_canonical.sql"
 
-_LEGACY_DELETED_DATE_ERROR = (
-    "legacy deletion_events rows lack a trustworthy deleted_date; "
-    "refusing to fabricate source evidence from file-level "
-    "source_updated_date or a sentinel date. Truncate the local "
-    "deletion_events table (or drop it) and replay immutable raw "
-    "deleted_ids.csv.gz assets under the work_id,deleted_date contract, "
-    "then re-run schema apply."
-)
-
-
-class SchemaMigrationError(RuntimeError):
-    """Local PostgreSQL schema cannot be upgraded without inventing data."""
+__all__ = [
+    "SchemaMigrationError",
+    "apply_ingestion_schema",
+    "connect_postgres",
+    "postgres_dsn_from_env",
+]
 
 
 def postgres_dsn_from_env(env_var: str = "POSTGRES_DSN") -> str:
@@ -85,8 +84,7 @@ def _migrate_deletion_events_deleted_date(connection: psycopg.Connection) -> Non
             "SELECT COUNT(*) FROM deletion_events WHERE deleted_date IS NULL"
         )
         null_count = int(cur.fetchone()[0])
-    if null_count > 0:
-        raise SchemaMigrationError(_LEGACY_DELETED_DATE_ERROR)
+    assert_deleted_date_rows_migratable(null_count)
 
     connection.execute(
         """
