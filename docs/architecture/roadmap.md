@@ -2,7 +2,8 @@
 
 This roadmap preserves completed work and sequences implementation from bounded
 source profiling through consumer delivery. It does not authorize work beyond an
-explicitly scoped task. Steps 01–07 are complete; later steps are planned.
+explicitly scoped task. Steps 01–07 are complete, Step 08 profiling is
+implemented, and later steps are planned.
 
 ## Completed foundation
 
@@ -15,12 +16,12 @@ explicitly scoped task. Steps 01–07 are complete; later steps are planned.
 | 05 | Bounded public OpenAlex connector | Complete |
 | 06 | OpenAlex Works manifest parser | Complete |
 | 07 | Bounded deterministic development sample selector | Complete |
+| 08 | Bounded OpenAlex source profiling ([details](openalex-source-profiling.md)) | Implemented; real payload profile pending public network access |
 
 ## Planned steps
 
 | Step | Work |
 | --- | --- |
-| 08 | Profile real/tiny selected OpenAlex data: inspect actual format and nested schema, use PyArrow where Parquet applies, and bound memory/resources. |
 | 09 | Implement immutable raw/canonical landing, local first and GCS later; preserve source bytes, immutable versioned paths, checksums, replay, and conflict semantics. |
 | 10 | Add pipeline control and provenance: runs, source files, record provenance, statuses, retries, lineage, and claim semantics. |
 | 11 | Define the canonical OpenAlex logical model: works, authors, institutions, sources, publishers, topics, funders, authorships, work-topics, work-institutions, work-references, and work-MeSH where available. Keep normalized relationships; do not flatten. |
@@ -57,4 +58,4 @@ source-specific normalization.
 - Spark/Dataproc, Iceberg/BigLake, orchestration, infrastructure, and deployed
   services are not mandatory first-iteration technologies.
 - Preserve completed steps, tests, contracts, sample limits, security rules, and
-  CI. This roadmap does not close or reopen issues or automatically start Step 08.
+  CI. This roadmap does not close or reopen issues or automatically start Step 09.

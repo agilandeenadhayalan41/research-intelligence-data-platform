@@ -159,7 +159,10 @@ assets = parse_openalex_works_manifest(manifest_json)
 `OpenAlexConnector.discover()` reads only the selected format's Works manifest,
 caps the actual manifest bytes at 1,000,000, parses it with the shared parser, and
 applies the shared bounded selector. It returns stable `SourceAsset` values for
-selected files. Discovery never requests a data object.
+selected files. `discover_metadata()` returns the same bounded selection with its
+validated metadata, and `discover()` delegates to it. Discovery never requests a
+data object. Bounded profiling of one selected file is described in
+[OpenAlex source profiling](openalex-source-profiling.md).
 
 Tests use small in-memory synthetic manifests only. No OpenAlex snapshot object
 or manifest file is downloaded. The model fixture at
@@ -236,7 +239,9 @@ MIME types, and treats bounded JSON parsing—not the MIME label—as authoritat
 HTML/XML and malformed JSON are rejected. It checks the actual manifest bytes
 against both the 1,000,000-byte cap and any valid declared `Content-Length`.
 
-`fetch()` streams a selected file through a caller-owned binary stream. Each
+`fetch()` streams a selected file through a caller-owned binary stream
+(`OpenAlexPayloadStream`). That stream also exposes the normalized response media
+type and parsed Content-Length. Each
 underlying read is bounded, cumulative actual returned bytes cannot exceed the
 configured limit, and a one-byte probe detects overflow rather than silently
 truncating. Declared lengths are checked for truncation. EOF, explicit close, and
