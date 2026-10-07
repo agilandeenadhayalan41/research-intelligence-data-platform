@@ -3,8 +3,9 @@
 This roadmap preserves completed work and sequences implementation from bounded
 source profiling through consumer delivery. It does not authorize work beyond an
 explicitly scoped task. Steps 01–17 are complete through data-quality gates
-(no GCP deploy). Step 18 / #26 (Data Service/API) is next; GCS landing and
-later steps remain planned.
+(no GCP deploy). Step 18 / #26 (Data Service domain layer) is implemented
+pending review/merge; Step 19 / #27 is next after merge. GCS landing and later
+steps remain planned.
 
 ## Completed foundation
 
@@ -27,12 +28,12 @@ later steps remain planned.
 | 15 | BigQuery-first analytical contracts ([details](bigquery-analytical-models.md)) | BQ Standard SQL DDL/queries, grains, partition/cluster, MERGE/refresh, cost rules, DuckDB `SEMANTIC_ONLY`; no GCP deploy ([#22](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/22)) |
 | 16 | Gold analytical marts ([details](gold-analytical-marts.md)) | Consumer Gold marts, grains, fan-out-safe SQL, ACTIVE/citation/license semantics, evidence-honest materialization candidates; DuckDB `SEMANTIC_ONLY`; no GCP deploy ([#55](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/55)) |
 | 17 | Data quality gates and metrics ([details](data-quality.md)) | HARD_GATE vs INFORMATIONAL_METRIC, canonical/relationship/reconciliation/Gold exclusion, DuckDB `SEMANTIC_ONLY` runner; no silent repair; no GCP deploy ([#24](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/24)) |
+| 18 | Data Service domain layer ([details](data-service.md)) | Storage-independent capabilities, registry, typed contracts, cursor pagination, freshness/`PUBLISHED_SNAPSHOT`, in-memory `SEMANTIC_ONLY` repo; no HTTP/raw SQL/Postgres serving ([#26](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/26)) — pending review/merge |
 
 ## Planned steps
 
 | Step | Work |
 | --- | --- |
-| 18 | Define storage-independent Data Service/API capabilities for metadata lookup and journal/publisher analytics. Add optional PostgreSQL/AlloyDB only if benchmarks show BigQuery plus cache/API is insufficient ([#26](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/26)). |
 | 19 | Deliver a bounded end-to-end pipeline: discover → ingest → validate → canonicalize → apply deletions → build analytical models → quality gate → publish marts/views → final validation. Default `MAX_FILES=1`. |
 | 20 | After Step 19 works, evaluate local Airflow and future Composer compatibility, CI/CD, Dataform alignment, retries, scheduling, and monitoring. Keep business logic out of DAGs. Include run-scoped analytical publication decision tables (or TEMP tables / single-writer orchestration) so concurrent jobs do not clash on shared `work_publication_decisions` / `accepted_work_ids` / `relationship_publish_work_ids` (Step 15 contracts use shared names for file addressability only). |
 | 21 | Prepare sandbox/dev/QA/prod readiness documentation for IAM, workload identity, secrets, monitoring, recovery, cost controls, deployment, rollback, lineage, and governance. Do not automatically deploy production. |

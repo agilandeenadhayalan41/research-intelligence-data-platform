@@ -12,7 +12,8 @@ access, proprietary data, or cloud credentials are needed for the default tests.
 ## Current status
 
 **Steps 01–17 are complete through data-quality gates and metrics.
-Step 18 / #26 (Data Service/API) is next.
+Step 18 / #26 (Data Service domain layer) is implemented pending review/merge.
+Step 19 / #27 remains next after merge; do not start it from this work.
 The full end-to-end / cloud pipeline is not implemented.**
 
 | Step | Delivered capability | Implementation boundary |
@@ -34,23 +35,28 @@ The full end-to-end / cloud pipeline is not implemented.**
 | 15 | BigQuery-first analytical contracts | BigQuery Standard SQL DDL/queries, grains, partition/cluster, MERGE/refresh, cost rules, DuckDB `SEMANTIC_ONLY` validation; no GCP deploy or paid queries ([#22](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/22)) |
 | 16 | Gold analytical marts | Consumer Gold marts, grains, fan-out-safe SQL, ACTIVE/citation/license semantics, evidence-honest materialization candidates, DuckDB `SEMANTIC_ONLY`; no GCP deploy ([#55](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/55)) |
 | 17 | Data quality gates and metrics | HARD_GATE vs INFORMATIONAL_METRIC, canonical/relationship/reconciliation/Gold exclusion gates, DuckDB `SEMANTIC_ONLY` runner; no silent repair, no GCP deploy ([#24](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/24)) |
+| 18 | Data Service domain layer | Storage-independent capabilities, capability registry, typed request/response contracts, cursor pagination, freshness/`PUBLISHED_SNAPSHOT`, in-memory `SEMANTIC_ONLY` repository; no HTTP deploy, no raw SQL, no Postgres/AlloyDB serving ([#26](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/26)) |
 
 Constructing adapters or loading configuration does not connect to services.
 `LocalObjectStore` writes only under the configured local landing path. Default
 ingestion tests stay offline (fake connector + in-memory control/canonical).
 The GCS adapter remains a skeleton.
 
-**Still planned:** GCS landing, consumer APIs, and orchestration.
+**Still planned:** GCS landing, HTTP consumer deployment, and orchestration.
 There is no implemented GCS/BigQuery deployment or production pipeline.
-Steps 15–17 define BigQuery/Gold/quality contracts only — nothing is deployed or MEASURED.
+Steps 15–18 define BigQuery/Gold/quality/Data Service contracts only — nothing
+is deployed or MEASURED. Step 18 adds no HTTP service and no Postgres serving.
 
 ### Next scoped work
 
-**Step 18 / [#26](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/26):**
-Storage-independent Data Service/API capabilities for metadata lookup and
-journal/publisher analytics. Driven by
-[Data quality](docs/architecture/data-quality.md) and prior Gold/analytical
-contracts.
+**Step 18 / [#26](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/26)**
+(this PR, pending review/merge): storage-independent Data Service domain layer.
+See [Data Service](docs/architecture/data-service.md).
+
+**After merge — Step 19 / [#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27):**
+bounded end-to-end pipeline (discover → ingest → validate → canonicalize →
+deletions → analytical models → quality gate → publish). Do not start #27 from
+this PR.
 
 Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
