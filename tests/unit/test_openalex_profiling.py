@@ -750,6 +750,30 @@ def test_jsonl_configured_record_budget() -> None:
         )
 
 
+def test_jsonl_preflight_does_not_count_structure_inside_escaped_strings() -> None:
+    content = jsonl([{"value": '"\\\\[[{not structure}]]"'}])
+    sample = sample_jsonl(
+        io.BytesIO(content), compression=None, max_records=100, max_decoded_bytes=100,
+        limits=ProfilingLimits(max_nesting_depth=1, max_profile_nodes=3),
+    )
+    assert sample.sampled_record_count == 1
+    assert sample.fields[0].sampled_evidence["sampled_null_count"] is (
+        EvidenceType.SAMPLED_OBSERVATION
+    )
+    assert sample.fields[0].nullable is None
+
+
+def test_jsonl_preflight_checks_cooperative_cpu_deadline(monkeypatch) -> None:
+    ticks = iter(range(100))
+    monkeypatch.setattr(profile_models.time, "monotonic", lambda: float(next(ticks)))
+    with pytest.raises(OpenAlexProfileLimitError, match="time budget"):
+        sample_jsonl(
+            io.BytesIO(b'{"a":[1,2,3,4]}\n'), compression=None,
+            max_records=100, max_decoded_bytes=100,
+            limits=ProfilingLimits(max_profile_seconds=5),
+        )
+
+
 def test_jsonl_eof_probe_is_counted_in_decoded_budget() -> None:
     line = b'{"a":1}\n'
     sample = sample_jsonl(
@@ -819,13 +843,33 @@ def test_parquet_expansion_guard_prevents_value_read(tmp_path: Path, monkeypatch
         )
 
 
+def test_parquet_dictionary_repetition_is_guarded_before_values(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "dictionary.parquet"
+    pq.write_table(
+        pa.table({"values": [["x" * 1000] * 50]}), path,
+        use_dictionary=True, write_statistics=False,
+    )
+    with pq.ParquetFile(path) as source:
+        assert source.metadata.row_group(0).column(0).total_uncompressed_size < 2000
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("one row can expand a dictionary value many times")
+
+    monkeypatch.setattr(pq.ParquetFile, "iter_batches", forbidden)
+    with pytest.raises(OpenAlexProfileLimitError):
+        inspect_parquet(
+            path, max_records=100, limits=ProfilingLimits(max_decoded_sample_bytes=2000)
+        )
+
+
 def test_parquet_metadata_guard_rejects_before_values_and_closes(tmp_path: Path, monkeypatch) -> None:
     from types import SimpleNamespace
 
     path = tmp_path / "metadata.parquet"
     pq.write_table(pa.table({"a": [1]}), path)
     column = SimpleNamespace(
-        compression="SNAPPY", is_stats_set=False, total_uncompressed_size=1001
+        compression="SNAPPY", is_stats_set=False, total_uncompressed_size=1001,
+        num_values=1,
     )
     group = SimpleNamespace(num_columns=1, column=lambda index: column)
     metadata = SimpleNamespace(
@@ -953,6 +997,15 @@ def test_parquet_field_schema_and_sample_evidence_are_separate(tmp_path: Path) -
     )
     with pytest.raises(ValidationError):
         OpenAlexSourceProfile.model_validate(data)
+
+
+def test_empty_parquet_has_unknown_field_observations(tmp_path: Path) -> None:
+    body = write_parquet(tmp_path / "empty-evidence.parquet", pa.table({"a": pa.array([], pa.int64())}))
+    result, _ = profile_parquet_bytes(body)
+    assert all(
+        evidence is EvidenceType.UNKNOWN
+        for evidence in result.schema_fields[0].sampled_evidence.values()
+    )
 
 
 # Common report behavior

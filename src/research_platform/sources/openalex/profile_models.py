@@ -2,6 +2,8 @@
 
 import json
 import re
+import time
+from collections.abc import Callable
 from datetime import date
 from enum import StrEnum
 from typing import Literal
@@ -55,7 +57,7 @@ class OpenAlexEmptySourceError(OpenAlexProfileError):
 
 
 class OpenAlexProfileLimitError(OpenAlexProfileError):
-    """A profiling bound (files, bytes, decoded bytes, or fields) was exceeded."""
+    """A profiling byte, structure, work, or cooperative time bound was exceeded."""
 
 
 class OpenAlexSizeMismatchError(OpenAlexProfileError):
@@ -75,11 +77,41 @@ class ProfilingLimits(BaseModel):
     max_decoded_sample_bytes: int = Field(
         default=MAX_DECODED_SAMPLE_BYTES, strict=True, gt=0
     )
+    max_record_bytes: int = Field(default=1_000_000, strict=True, gt=0, le=25_000_000)
+    max_nesting_depth: int = Field(default=64, strict=True, gt=0, le=128)
+    max_profile_nodes: int = Field(default=100_000, strict=True, gt=0, le=1_000_000)
+    max_schema_fields: int = Field(default=10_000, strict=True, gt=0, le=100_000)
+    max_profile_seconds: int = Field(default=10, strict=True, gt=0, le=60)
+    max_parquet_footer_bytes: int = Field(
+        default=1_000_000, strict=True, gt=0, le=25_000_000
+    )
 
     def sample_selection(self) -> SampleSelectionConfig:
         return SampleSelectionConfig(
             max_files=self.max_files, max_file_size_bytes=self.max_file_size_bytes
         )
+
+
+class ProfileBudget:
+    """Shared cooperative deadline and structural-work accounting for one file."""
+
+    def __init__(
+        self, limits: ProfilingLimits, *, clock: Callable[[], float] | None = None
+    ) -> None:
+        self.limits = limits
+        self._clock = time.monotonic if clock is None else clock
+        self._deadline = self._clock() + limits.max_profile_seconds
+        self._nodes = 0
+
+    def check(self) -> None:
+        if self._clock() >= self._deadline:
+            raise OpenAlexProfileLimitError("profiling exceeded its time budget")
+
+    def visit(self) -> None:
+        self.check()
+        self._nodes += 1
+        if self._nodes > self.limits.max_profile_nodes:
+            raise OpenAlexProfileLimitError("profiling exceeded its structural work budget")
 
 
 FieldKind = Literal["scalar", "struct", "list", "map"]
@@ -94,8 +126,22 @@ def child_path(parent: str, key: str) -> str:
     return f"{parent}{component}" if component.startswith("[") else f"{parent}.{component}"
 
 
+_SAMPLED_COUNT_FIELDS = (
+    "sampled_present_count", "sampled_missing_count", "sampled_null_count"
+)
+
+
+def sampled_count_evidence(
+    present: int | None, missing: int | None, nulls: int | None
+) -> dict[str, EvidenceType]:
+    return {
+        name: EvidenceType.UNKNOWN if value is None else EvidenceType.SAMPLED_OBSERVATION
+        for name, value in zip(_SAMPLED_COUNT_FIELDS, (present, missing, nulls), strict=True)
+    }
+
+
 class FieldProfile(BaseModel):
-    """One schema path. ``a.b`` is an object member, ``a[]`` an array element."""
+    """One path: ``evidence`` classifies schema only, ``sampled_evidence`` its counts."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -104,9 +150,21 @@ class FieldProfile(BaseModel):
     kind: FieldKind
     nullable: bool | None
     evidence: Literal[EvidenceType.EXACT_FILE_METADATA, EvidenceType.SAMPLED_OBSERVATION]
-    sampled_present_count: int | None = Field(default=None, ge=0)
-    sampled_missing_count: int | None = Field(default=None, ge=0)
-    sampled_null_count: int | None = Field(default=None, ge=0)
+    sampled_present_count: int | None = Field(default=None, strict=True, ge=0)
+    sampled_missing_count: int | None = Field(default=None, strict=True, ge=0)
+    sampled_null_count: int | None = Field(default=None, strict=True, ge=0)
+    sampled_evidence: dict[str, EvidenceType]
+
+    @model_validator(mode="after")
+    def validate_sampled_evidence(self) -> "FieldProfile":
+        expected = sampled_count_evidence(
+            self.sampled_present_count, self.sampled_missing_count, self.sampled_null_count
+        )
+        if self.sampled_evidence != expected:
+            raise ValueError("field counts must be sampled observations or unavailable")
+        if self.evidence is EvidenceType.SAMPLED_OBSERVATION and self.nullable is False:
+            raise ValueError("a sample cannot prove whole-file non-nullability")
+        return self
 
 
 EVIDENCE_FIELDS = (

@@ -29,10 +29,24 @@ selection logic is duplicated.
 | `max_files` | 1 | Strict integer, exactly 1 is allowed |
 | `max_file_size_bytes` | 25,000,000 | Strict positive integer |
 | `max_profile_records` | 100 | Strict positive integer, at most 10,000 |
-| `max_decoded_sample_bytes` | 25,000,000 | Strict positive integer; caps decompressed bytes consumed while sampling |
+| `max_decoded_sample_bytes` | 25,000,000 | Strict positive integer; JSONL consumed decoded bytes, or conservative Parquet expansion bound and actual batch bytes |
+| `max_record_bytes` | 1,000,000 | Strict positive integer, at most 25,000,000; one JSONL line including its terminator |
+| `max_nesting_depth` | 64 | Strict positive integer, at most 128 |
+| `max_profile_nodes` | 100,000 | Strict positive integer, at most 1,000,000; cumulative structural work |
+| `max_schema_fields` | 10,000 | Strict positive integer, at most 100,000 |
+| `max_profile_seconds` | 10 | Strict positive integer, at most 60; cooperative per-file deadline |
+| `max_parquet_footer_bytes` | 1,000,000 | Strict positive integer, at most 25,000,000; checked before native footer decoding |
 
 Zero, negative, missing (`None`), boolean, string, and fractional values are
 rejected. They are never interpreted as unlimited.
+
+The deadline starts before the single-file fetch and is checked around reads,
+JSON preflight/observation, metadata/schema traversal, and native calls. It does
+not include the two independent manifest discoveries. It cannot interrupt an
+in-flight connector, gzip, JSON decoder, or PyArrow native call; the connector's
+own network deadlines remain active. Resource limits are not an exact Python or
+Arrow heap/RSS cap. Hard native-memory/time isolation for arbitrary corrupt
+inputs would require a separate process/sandbox, which this step does not add.
 
 ## Processing order
 
@@ -49,6 +63,11 @@ rejected. They are never interpreted as unlimited.
    limit. When a file is read to the end, the observed size must equal the
    declared size. When the observed record or row count is exact, it must equal
    any manifest `record_count`.
+   Every profiler read requests at most the remaining smaller byte/declared-size
+   budget plus one overflow-probe byte. `bytes_read` counts bytes consumed from
+   the connector stream, not additional bytes in the connector's internal
+   buffer. The opt-in CLI aligns the connector and profiler limits; supplying a
+   connector with a larger limit does not disable that connector's read-ahead.
 4. **No relabeling.** The first bytes must match the declared representation.
    Parquet needs `PAR1`, and OpenAlex `.gz` JSONL needs the gzip header. Parquet
    bytes declared as JSONL, or gzip bytes declared as Parquet, fail with
@@ -59,11 +78,23 @@ rejected. They are never interpreted as unlimited.
 ### JSONL / JSONL.GZ
 
 - gzip is decompressed as a stream (`gzip.GzipFile` over the bounded reader).
-  Plain JSONL streams are also supported by `sample_jsonl()`.
+  Plain JSONL streams are supported by
+  `research_platform.sources.openalex.profile_jsonl.sample_jsonl(stream,
+  compression=None, max_records=100, max_decoded_bytes=25_000_000,
+  limits=ProfilingLimits())`. The caller owns the supplied binary stream; the
+  helper closes only its own gzip wrapper. This does not weaken the remote
+  metadata/URI contract, which still requires `.gz` for OpenAlex JSONL assets.
 - Reads at most `max_profile_records` lines. Each `readline` is limited to the
-  remaining decoded-byte budget, so long lines and decompression expansion fail
-  explicitly (`OpenAlexProfileLimitError`) rather than being truncated or loaded.
+  smaller remaining decoded-byte and per-record budget, plus one overflow
+  probe. Before `json.loads`, a byte-level structural preflight caps nesting and
+  cumulative nodes (containers, member names, and scalar values). Wide
+  containers are observed with a depth-sized iterator stack, not an auxiliary
+  list of every element. Limit failures raise `OpenAlexProfileLimitError`;
+  observations are never silently truncated.
 - After the record bound, a one-byte probe only checks whether EOF was reached.
+  It is included in `decoded_bytes_sampled`. Successful reports never exceed the
+  decoded cap; at most one extra byte may be consumed to detect overflow. Gzip
+  can internally decode/read ahead beyond the bytes consumed by this helper.
   The profiler does not read to EOF just to count records.
 - Each line must be one UTF-8 JSON object. Duplicate keys, `NaN`/`Infinity`,
   blank lines, and non-object values raise `OpenAlexMalformedJSONLError`.
@@ -77,8 +108,8 @@ rejected. They are never interpreted as unlimited.
   paths stay unambiguous. Empty keys are quoted the same way.
 - `abstract_inverted_index` uses abstract words as keys, so those keys are data,
   not schema. It is reported as a `map`, and its values are collapsed into
-  `abstract_inverted_index{value}`. At most 10,000 distinct field paths are
-  tracked; beyond that the profile fails with `OpenAlexProfileLimitError`.
+  `abstract_inverted_index{value}`. At most `max_schema_fields` distinct field
+  paths are tracked; beyond that the profile fails with `OpenAlexProfileLimitError`.
 
 ### Parquet
 
@@ -86,15 +117,29 @@ rejected. They are never interpreted as unlimited.
   because the footer is at the end of the file. The temporary directory is
   deleted before the function returns. The file is never stored in the
   repository.
-- Leading/trailing `PAR1` magic is checked, and then the footer is read with
-  `pyarrow.parquet.ParquetFile`. The profiler reports the Arrow schema with
+- Leading/trailing `PAR1` magic and the footer length are checked before the
+  footer is read with `pyarrow.parquet.ParquetFile`. Thrift string allocations
+  use `max_parquet_footer_bytes`; container allocations use `max_profile_nodes`.
+  Row-group/column traversal, schema fields, and nesting are bounded before any
+  batch is requested. The profiler reports the Arrow schema with
   struct/list/map paths (`a.b`, `a[]`, `a{key}`, `a{value}`), declared
   nullability, row count, row-group count, top-level and physical column counts,
   column-chunk codecs, statistics availability (`all`/`partial`/`none`), and
   `created_by`.
-- Value inspection uses `iter_batches(batch_size=max_profile_records)` and only
-  the first batch. It never uses `read()`, a whole-table conversion, or pandas.
-  The sampled present and null counts cover top-level columns only.
+- Value inspection first requires the sum of
+  `column.total_uncompressed_size * max(1, column.num_values)` over all column
+  chunks to fit `max_decoded_sample_bytes`. The deliberately conservative
+  multiplier accounts for dictionary values repeated many times, including in
+  a single nested-list row. It can reject otherwise readable files; it is not a
+  precise memory estimate. A rejected file produces `OpenAlexProfileLimitError`,
+  not a silently reduced or success-shaped profile.
+- Only then does `iter_batches(batch_size=max_profile_records,
+  use_threads=False)` read its first batch, with pre-buffering disabled. The
+  batch's actual `nbytes` is also checked before observations are returned.
+  Neither row count alone nor untrusted footer sizes guarantee a native memory
+  ceiling: Arrow can allocate before returning, especially for corrupt inputs.
+  There is no whole-table `read()`, pandas conversion, or hidden unbounded retry.
+  Sampled present/null counts cover top-level columns only.
 - Zero-row files are valid and report their exact schema with a limitation.
   Invalid footers and truncated files raise `OpenAlexMalformedParquetError`.
 
@@ -113,6 +158,25 @@ rejects `UNKNOWN` for an available value.
 
 The sampled counts are never presented as full-file or full-dataset facts.
 Every profile also describes one development file, not the full snapshot.
+
+`FieldProfile.evidence` and the report's `schema_fields` classification apply to
+path/type/kind/nullability only. Each field additionally contains
+`sampled_evidence`, with one classification for each of `sampled_present_count`,
+`sampled_missing_count`, and `sampled_null_count`. A present count must be
+`SAMPLED_OBSERVATION`, and an unavailable count must be `UNKNOWN`; validation
+rejects counts labeled exact. Parquet nested fields and zero-row files have no
+sampled value counts. Exact Arrow-declared nullability is kept separate from
+sample null counts. JSONL samples cannot claim `nullable=false`.
+
+## Offline fixture provenance
+
+All tests use deterministic synthetic JSON values, gzip streams with fixed
+timestamps, or genuine Parquet generated by PyArrow in temporary directories.
+No source data or generated binary fixture is committed. The exact 25,000,000
+and 25,000,001-byte accounting tests generate bounded chunks on demand instead
+of storing large files. Small compressible Parquet fixtures and fake metadata
+verify guards run before value access; fake clocks test cooperative deadlines
+without sleeps. No normal test calls OpenAlex or cloud services.
 
 ## Opt-in public command
 
@@ -159,7 +223,7 @@ verified only with offline synthetic fixtures.
 | --- | --- | --- |
 | Availability | Manifest verified | Manifest verified |
 | Exact file facts without reading the whole file | None beyond size and gzip header. Row counts need a full read | Footer gives exact schema, nullability, row/row-group counts, codecs, and statistics availability |
-| Bounded profiling cost | Streams leading records only, with constant memory per bounded line | Requires the whole file (≤ byte bound) on local disk before the footer is readable |
+| Bounded profiling cost | Streams leading records with line/structure/work limits; Python memory is not an exact byte cap | Requires the whole file (≤ byte bound) on temporary disk; conservative expansion guards may reject value inspection |
 | Schema evidence | Sampled. Absent fields/nulls in the sample are unknown | Exact declared schema. Values are sampled |
 | Fidelity to the OpenAlex record | One original JSON object per line. Keys and nesting are as published | Depends on OpenAlex's Parquet schema mapping (unverified for dynamic-key objects and deep nesting) |
 

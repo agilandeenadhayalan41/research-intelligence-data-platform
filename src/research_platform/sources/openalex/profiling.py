@@ -41,6 +41,7 @@ from research_platform.sources.openalex.profile_models import (
     OpenAlexSizeMismatchError,
     OpenAlexSourceProfile,
     OpenAlexUnsupportedFormatError,
+    ProfileBudget,
     ProfilingLimits,
     RepresentationEvidence,
 )
@@ -59,11 +60,15 @@ _E = EvidenceType
 class _CountingReader(io.RawIOBase):
     """Count actual payload bytes and enforce byte/declared-size bounds."""
 
-    def __init__(self, stream: BinaryIO, *, max_bytes: int, declared_bytes: int | None):
+    def __init__(
+        self, stream: BinaryIO, *, max_bytes: int, declared_bytes: int | None,
+        budget: ProfileBudget | None = None,
+    ):
         super().__init__()
         self._stream = stream
         self._max_bytes = max_bytes
         self._declared_bytes = declared_bytes
+        self._budget = budget
         self._pending = b""
         self.bytes_read = 0
 
@@ -100,7 +105,16 @@ class _CountingReader(io.RawIOBase):
         return self.bytes_read
 
     def _read_raw(self, size: int) -> bytes:
-        chunk = self._stream.read(min(size, _CHUNK_SIZE))
+        if self._budget is not None:
+            self._budget.check()
+        bound = self._max_bytes
+        if self._declared_bytes is not None:
+            bound = min(bound, self._declared_bytes)
+        if self.bytes_read > bound:
+            raise OpenAlexProfileLimitError("cannot read after a payload bound was exceeded")
+        chunk = self._stream.read(min(size, _CHUNK_SIZE, bound - self.bytes_read + 1))
+        if self._budget is not None:
+            self._budget.check()
         if not chunk:
             return b""
         self.bytes_read += len(chunk)
@@ -123,19 +137,24 @@ def profile_openalex_asset(
     signature, decompression, and sampling bounds. The stream is always closed.
     """
     limits = ProfilingLimits.model_validate(limits.model_dump())
+    budget = ProfileBudget(limits)
     compression = _check_metadata(asset, limits)
     stream = connector.fetch(asset.to_source_asset())
     try:
+        budget.check()
         content_type = getattr(stream, "content_type", None)
         content_length = getattr(stream, "content_length", None)
         if content_length is not None and content_length != asset.byte_size:
             raise OpenAlexSizeMismatchError("Content-Length differs from manifest metadata")
         reader = _CountingReader(
-            stream, max_bytes=limits.max_file_size_bytes, declared_bytes=asset.byte_size
+            stream, max_bytes=limits.max_file_size_bytes, declared_bytes=asset.byte_size,
+            budget=budget,
         )
         if asset.content_format == "parquet":
-            return _profile_parquet(reader, asset, content_type, content_length, limits)
-        return _profile_jsonl(reader, asset, compression, content_type, content_length, limits)
+            return _profile_parquet(reader, asset, content_type, content_length, limits, budget)
+        return _profile_jsonl(
+            reader, asset, compression, content_type, content_length, limits, budget
+        )
     finally:
         stream.close()
 
@@ -252,23 +271,26 @@ def _profile_jsonl(
     content_type: str | None,
     content_length: int | None,
     limits: ProfilingLimits,
+    budget: ProfileBudget,
 ) -> OpenAlexSourceProfile:
     _check_signature(reader.signature(len(PARQUET_MAGIC)), "jsonl", compression)
-    buffered = io.BufferedReader(reader, buffer_size=_CHUNK_SIZE)
-    sample = sample_jsonl(
-        buffered,  # type: ignore[arg-type]
-        compression="gzip" if compression == "gzip" else None,
-        max_records=limits.max_profile_records,
-        max_decoded_bytes=limits.max_decoded_sample_bytes,
-    )
     observed_size = None
     row_count = None
-    if sample.reached_eof:
-        while buffered.read(_CHUNK_SIZE):
-            pass
-        observed_size = reader.verify_complete()
-        row_count = sample.sampled_record_count
-        _check_record_count(asset, row_count)
+    with io.BufferedReader(reader, buffer_size=_CHUNK_SIZE) as buffered:
+        sample = sample_jsonl(
+            buffered,
+            compression="gzip" if compression == "gzip" else None,
+            max_records=limits.max_profile_records,
+            max_decoded_bytes=limits.max_decoded_sample_bytes,
+            limits=limits,
+            _budget=budget,
+        )
+        if sample.reached_eof:
+            while buffered.read(_CHUNK_SIZE):
+                pass
+            observed_size = reader.verify_complete()
+            row_count = sample.sampled_record_count
+            _check_record_count(asset, row_count)
     limitations = [
         "Profiles one bounded development file; facts do not describe the full snapshot.",
         f"Schema, nesting, types, and nullability come from at most "
@@ -277,6 +299,9 @@ def _profile_jsonl(
         "Field paths use '.' for object members and '[]' for array elements; unusual "
         "keys are JSON-quoted, and abstract_inverted_index word keys are collapsed "
         "into one map value path.",
+        "Decoded bytes include the EOF probe. Limits bound consumed bytes and JSON "
+        "structure, not gzip's internal read-ahead or exact Python heap usage. "
+        "The deadline is cooperative and cannot interrupt a native call.",
     ]
     if not sample.reached_eof:
         limitations.append(
@@ -312,6 +337,7 @@ def _profile_parquet(
     content_type: str | None,
     content_length: int | None,
     limits: ProfilingLimits,
+    budget: ProfileBudget,
 ) -> OpenAlexSourceProfile:
     _check_signature(reader.signature(len(PARQUET_MAGIC)), "parquet", None)
     with tempfile.TemporaryDirectory(prefix="openalex-profile-") as directory:
@@ -320,7 +346,9 @@ def _profile_parquet(
             while chunk := reader.read(_CHUNK_SIZE):
                 handle.write(chunk)
         observed_size = reader.verify_complete()
-        inspection = inspect_parquet(path, max_records=limits.max_profile_records)
+        inspection = inspect_parquet(
+            path, max_records=limits.max_profile_records, limits=limits, _budget=budget
+        )
     _check_record_count(asset, inspection.row_count)
     limitations = [
         "Profiles one bounded development file; facts do not describe the full snapshot.",
@@ -329,6 +357,9 @@ def _profile_parquet(
         f"sampled_* counts cover only top-level columns in the first bounded batch of "
         f"at most {limits.max_profile_records} rows.",
         "Types are PyArrow's interpretation of the Parquet schema.",
+        "Footer byte/Thrift, schema/work, conservative dictionary-expansion, and "
+        "batch-byte guards apply. Footer declarations are not a hard native-memory "
+        "sandbox, and cooperative deadlines cannot interrupt native Arrow calls.",
         "Bytes were spooled to a temporary local file, deleted after profiling, "
         "because the Parquet footer is at the end of the file.",
     ]
