@@ -1,0 +1,585 @@
+# OpenAlex Research Intelligence query-pattern registry (Step 14 / #19)
+# Storage-independent workload definitions. No BigQuery deployment or measured
+# cloud evidence is claimed here.
+
+version: "1.0.0"
+source: openalex
+
+decision_order:
+  - "1. Can BigQuery analytical query satisfy the workload? -> BIGQUERY_ANALYTICAL"
+  - "2. Expensive and repeatedly reused? -> MATERIALIZED_AGGREGATE candidate"
+  - "3. Lookup latency/frequency concern? -> evaluate BIGQUERY_PLUS_CACHE"
+  - "4. Only if measured BigQuery + API/cache fails a concrete requirement -> OPTIONAL_OPERATIONAL_STORE"
+  - "5. Without evidence -> UNRESOLVED"
+
+measurement_defaults:
+  pattern_id: measurement-defaults
+  cold_latency_ms: true
+  warm_latency_ms: true
+  p50_latency_ms: true
+  p95_latency_ms: true
+  p99_latency_ms: true
+  concurrency: true
+  bytes_scanned: true
+  estimated_query_cost: true
+  result_row_count: true
+  result_bytes: true
+  freshness_lag: true
+  execution_frequency: true
+  cache_hit_rate: true
+  materialization_refresh_cost: true
+  notes: >-
+    Local DuckDB/fixture timings are FIXTURE_ONLY and are not BigQuery evidence.
+
+materialization_candidates:
+  - candidate_id: journal-author-counts
+    name: Unique authors per journal
+    input_grain: work_authors × works × sources (ACTIVE works only)
+    output_grain: one row per source_id (journal)
+    refresh_dependency: works, work_authors, work_locations/sources linkage
+    expected_reuse: journal metrics capabilities; dashboard cards
+    freshness_requirement: daily-to-weekly acceptable until measured
+    notes: Aggregate work_authors independently before joining journal dims.
+
+  - candidate_id: publisher-author-counts
+    name: Unique authors per publisher
+    input_grain: work_authors × works × publishers
+    output_grain: one row per publisher_id
+    refresh_dependency: works, work_authors, publisher linkage via locations/sources
+    expected_reuse: publisher analytics
+    freshness_requirement: daily-to-weekly acceptable until measured
+
+  - candidate_id: publisher-topic-year-counts
+    name: Publisher × topic × year article counts
+    input_grain: works × work_topics × publisher
+    output_grain: one row per publisher_id + topic_id + publication_year
+    refresh_dependency: works, work_topics, publisher dims
+    expected_reuse: publisher-topic analytics; license/year extensions
+    freshness_requirement: daily-to-weekly acceptable until measured
+    notes: Aggregate topics and publishers independently to avoid author×topic fan-out.
+
+  - candidate_id: publication-trends
+    name: Publication trends by year
+    input_grain: ACTIVE works
+    output_grain: one row per publication_year (+ optional dimensions)
+    refresh_dependency: works
+    expected_reuse: trend charts
+    freshness_requirement: weekly acceptable until measured
+
+  - candidate_id: oa-trends
+    name: Open-access trends by year
+    input_grain: ACTIVE works with OA fields
+    output_grain: one row per publication_year + oa_status
+    refresh_dependency: works
+    expected_reuse: OA dashboards
+    freshness_requirement: weekly acceptable until measured
+
+patterns:
+  - pattern_id: doi-work-lookup
+    name: DOI → Work lookup
+    capability: Resolve a normalized DOI to at most one ACTIVE Work
+    category: DOI_LOOKUP
+    expected_result_grain: zero or one Work row (never many for a single normalized DOI)
+    relevant_entities: [works]
+    relevant_relationships: []
+    parameters:
+      - name: doi
+        description: "Normalized DOI string (lowercase, without doi prefix)"
+        value_type: string
+        required: true
+    filters:
+      - "works.activity_state = ACTIVE"
+      - "works.doi = :doi"
+    active_work_filter: REQUIRED_ACTIVE
+    freshness_requirement: UNKNOWN — prefer near-current snapshot; SLA not measured
+    expected_frequency: UNKNOWN
+    expected_concurrency: null
+    expected_result_size: 0–1 Work payload
+    known_scale: UNKNOWN
+    assumed_scale: Point lookup over full Works corpus
+    aggregation_risk: NONE
+    fanout_risk: NONE
+    candidate_materialization: null
+    placement: BIGQUERY_PLUS_CACHE
+    placement_rationale: >-
+      Architecture expects analytical warehouse plus API/cache for hot DOI
+      lookups. No measured BigQuery latency yet; OPTIONAL_OPERATIONAL_STORE
+      is forbidden without MEASURED evidence.
+    evidence_status: ASSUMED
+    service_level:
+      desired_p95_latency_ms: null
+      max_freshness_lag: null
+      expected_concurrency: null
+      expected_frequency: UNKNOWN
+      expected_result_size: 0-1 work
+      notes: UNKNOWN — no Wiley production SLA invented
+    logical_query_shape: |
+      SELECT w.*
+      FROM works AS w
+      WHERE w.activity_state = 'ACTIVE'
+        AND w.doi = :doi
+      LIMIT 1
+    cache_key_hint: "work:doi:{normalized_doi}"
+    notes: >-
+      Normalization is lowercase DOI without URL or doi prefix;
+      uniqueness assumed but not proven.
+
+  - pattern_id: openalex-work-id-lookup
+    name: OpenAlex Work ID → Work lookup
+    capability: Resolve OpenAlex Work ID (W…) to at most one ACTIVE Work
+    category: OPENALEX_ID_LOOKUP
+    expected_result_grain: zero or one Work row keyed by work_id
+    relevant_entities: [works]
+    relevant_relationships: []
+    parameters:
+      - {name: work_id, description: Normalized OpenAlex Work ID (W…), value_type: string, required: true}
+    filters:
+      - "works.activity_state = ACTIVE"
+      - "works.work_id = :work_id"
+    active_work_filter: REQUIRED_ACTIVE
+    freshness_requirement: UNKNOWN
+    expected_frequency: UNKNOWN
+    expected_concurrency: null
+    expected_result_size: 0–1 Work payload
+    known_scale: UNKNOWN
+    assumed_scale: Point lookup by primary key
+    aggregation_risk: NONE
+    fanout_risk: NONE
+    candidate_materialization: null
+    placement: BIGQUERY_PLUS_CACHE
+    placement_rationale: >-
+      Primary-key style lookup; BigQuery + API/cache is the first path to
+      evaluate. Placement remains evidence-honest (ASSUMED), not MEASURED.
+    evidence_status: ASSUMED
+    logical_query_shape: |
+      SELECT w.*
+      FROM works AS w
+      WHERE w.activity_state = 'ACTIVE'
+        AND w.work_id = :work_id
+      LIMIT 1
+    cache_key_hint: "work:id:{work_id}"
+
+  - pattern_id: issn-source-lookup
+    name: eISSN/ISSN → Source lookup
+    capability: Resolve ISSN or eISSN to Source (journal) metadata
+    category: ISSN_LOOKUP
+    expected_result_grain: zero, one, or rarely many Source rows if ISSN collisions exist
+    relevant_entities: [sources]
+    relevant_relationships: []
+    parameters:
+      - {name: issn, description: Normalized ISSN/eISSN (8 digits with hyphen), value_type: string, required: true}
+    filters:
+      - "sources.issn = :issn OR sources.eissn = :issn"
+    active_work_filter: NOT_APPLICABLE
+    freshness_requirement: UNKNOWN
+    expected_frequency: UNKNOWN
+    expected_concurrency: null
+    expected_result_size: 0–N Source rows (document multiplicity)
+    known_scale: UNKNOWN
+    assumed_scale: Small Sources dimension
+    aggregation_risk: NONE
+    fanout_risk: NONE
+    candidate_materialization: null
+    placement: BIGQUERY_PLUS_CACHE
+    placement_rationale: >-
+      Dimension lookup; evaluate BigQuery + cache first. Multiplicity must be
+      surfaced to the API contract rather than silently collapsed.
+    evidence_status: ASSUMED
+    logical_query_shape: |
+      SELECT s.*
+      FROM sources AS s
+      WHERE s.issn = :issn OR s.eissn = :issn
+    cache_key_hint: "source:issn:{normalized_issn}"
+    notes: Does not invent uniqueness; consumers must handle 0/1/N.
+
+  - pattern_id: publisher-lookup
+    name: Publisher ID → Publisher lookup
+    capability: Resolve publisher_id to publisher metadata
+    category: PUBLISHER_LOOKUP
+    expected_result_grain: zero or one Publisher row
+    relevant_entities: [publishers]
+    relevant_relationships: []
+    parameters:
+      - {name: publisher_id, description: Normalized OpenAlex Publisher ID (P…), value_type: string, required: true}
+    filters:
+      - "publishers.publisher_id = :publisher_id"
+    active_work_filter: NOT_APPLICABLE
+    freshness_requirement: UNKNOWN
+    expected_frequency: UNKNOWN
+    expected_concurrency: null
+    expected_result_size: 0–1 Publisher payload
+    known_scale: UNKNOWN
+    assumed_scale: Small Publishers dimension
+    aggregation_risk: NONE
+    fanout_risk: NONE
+    candidate_materialization: null
+    placement: BIGQUERY_PLUS_CACHE
+    placement_rationale: Dimension point lookup via BigQuery + cache until measured.
+    evidence_status: ASSUMED
+    logical_query_shape: |
+      SELECT p.*
+      FROM publishers AS p
+      WHERE p.publisher_id = :publisher_id
+      LIMIT 1
+    cache_key_hint: "publisher:id:{publisher_id}"
+
+  - pattern_id: unique-authors-per-journal
+    name: Unique authors per journal
+    capability: Count distinct authors contributing to ACTIVE works for a journal/source
+    category: AUTHORS_PER_JOURNAL
+    expected_result_grain: one row per source_id (journal) with unique_author_count
+    relevant_entities: [works, authors, sources]
+    relevant_relationships:
+      - relationship: work_authors
+        cardinality: "1:N"
+        join_expansion_risk: MEDIUM
+        notes: Aggregate distinct author_id per work/source independently.
+      - relationship: work_locations
+        cardinality: "1:N"
+        join_expansion_risk: MEDIUM
+        notes: Journal linkage via locations/sources; do not cross-join with topics.
+    parameters:
+      - {name: source_id, description: OpenAlex Source ID (S…), value_type: string, required: true}
+    filters:
+      - "works.activity_state = ACTIVE"
+      - "source_id = :source_id"
+    active_work_filter: REQUIRED_ACTIVE
+    freshness_requirement: daily-to-weekly assumed
+    expected_frequency: OCCASIONAL
+    expected_concurrency: null
+    expected_result_size: 1 aggregate row
+    known_scale: UNKNOWN
+    assumed_scale: Per-journal author sets can be large
+    aggregation_risk: HIGH
+    fanout_risk: HIGH
+    candidate_materialization: journal-author-counts
+    placement: MATERIALIZED_AGGREGATE
+    placement_rationale: >-
+      Repeated expensive distinct-count over relationships; architecture
+      candidate for materialization. Not yet MEASURED on BigQuery.
+    evidence_status: ARCHITECTURE
+    logical_query_shape: |
+      -- Safe shape: aggregate authorships first, then filter journal.
+      WITH journal_works AS (
+        SELECT DISTINCT wl.work_id
+        FROM work_locations AS wl
+        JOIN works AS w ON w.work_id = wl.work_id
+        WHERE w.activity_state = 'ACTIVE'
+          AND wl.source_id = :source_id
+      )
+      SELECT :source_id AS source_id,
+             COUNT(DISTINCT wa.author_id) AS unique_author_count
+      FROM journal_works AS jw
+      JOIN work_authors AS wa ON wa.work_id = jw.work_id
+      WHERE wa.author_id IS NOT NULL
+
+  - pattern_id: unique-authors-per-publisher
+    name: Unique authors per publisher
+    capability: Count distinct authors for ACTIVE works linked to a publisher
+    category: AUTHORS_PER_PUBLISHER
+    expected_result_grain: one row per publisher_id with unique_author_count
+    relevant_entities: [works, authors, publishers]
+    relevant_relationships:
+      - relationship: work_authors
+        cardinality: "1:N"
+        join_expansion_risk: MEDIUM
+      - relationship: work_locations
+        cardinality: "1:N"
+        join_expansion_risk: MEDIUM
+        notes: Publisher may be reached via source/publisher dims.
+    parameters:
+      - {name: publisher_id, description: OpenAlex Publisher ID (P…), value_type: string, required: true}
+    filters:
+      - "works.activity_state = ACTIVE"
+      - "publisher_id = :publisher_id"
+    active_work_filter: REQUIRED_ACTIVE
+    freshness_requirement: daily-to-weekly assumed
+    expected_frequency: OCCASIONAL
+    expected_concurrency: null
+    expected_result_size: 1 aggregate row
+    known_scale: UNKNOWN
+    assumed_scale: Large publisher corpora
+    aggregation_risk: HIGH
+    fanout_risk: HIGH
+    candidate_materialization: publisher-author-counts
+    placement: MATERIALIZED_AGGREGATE
+    placement_rationale: Distinct-count aggregate candidate; BigQuery materialization path first.
+    evidence_status: ARCHITECTURE
+    logical_query_shape: |
+      WITH publisher_works AS (
+        SELECT DISTINCT w.work_id
+        FROM works AS w
+        WHERE w.activity_state = 'ACTIVE'
+          AND w.primary_publisher_id = :publisher_id
+      )
+      SELECT :publisher_id AS publisher_id,
+             COUNT(DISTINCT wa.author_id) AS unique_author_count
+      FROM publisher_works AS pw
+      JOIN work_authors AS wa ON wa.work_id = pw.work_id
+      WHERE wa.author_id IS NOT NULL
+
+  - pattern_id: publisher-topic-counts
+    name: Publisher × topic article counts
+    capability: Count ACTIVE works for a publisher broken down by topic
+    category: PUBLISHER_TOPIC_COUNTS
+    expected_result_grain: one row per publisher_id + topic_id
+    relevant_entities: [works, publishers, topics]
+    relevant_relationships:
+      - relationship: work_topics
+        cardinality: "N:M"
+        join_expansion_risk: HIGH
+        notes: Never join work_topics to work_authors in the same unaggregated query.
+    parameters:
+      - {name: publisher_id, description: OpenAlex Publisher ID (P…), value_type: string, required: true}
+    filters:
+      - "works.activity_state = ACTIVE"
+      - "publisher_id = :publisher_id"
+    active_work_filter: REQUIRED_ACTIVE
+    freshness_requirement: daily-to-weekly assumed
+    expected_frequency: OCCASIONAL
+    expected_concurrency: null
+    expected_result_size: 1 row per topic for the publisher
+    known_scale: UNKNOWN
+    assumed_scale: Topics per publisher can be wide
+    aggregation_risk: HIGH
+    fanout_risk: HIGH
+    candidate_materialization: publisher-topic-year-counts
+    placement: BIGQUERY_ANALYTICAL
+    placement_rationale: Analytical relationship aggregate belongs in BigQuery; materialize if reused.
+    evidence_status: ARCHITECTURE
+    logical_query_shape: |
+      SELECT w.primary_publisher_id AS publisher_id,
+             wt.topic_id,
+             COUNT(DISTINCT w.work_id) AS work_count
+      FROM works AS w
+      JOIN work_topics AS wt ON wt.work_id = w.work_id
+      WHERE w.activity_state = 'ACTIVE'
+        AND w.primary_publisher_id = :publisher_id
+      GROUP BY w.primary_publisher_id, wt.topic_id
+
+  - pattern_id: publisher-topic-license-year
+    name: Publisher × topic × license × year counts
+    capability: Count ACTIVE works by publisher, topic, license, and publication year
+    category: PUBLISHER_TOPIC_LICENSE_YEAR
+    expected_result_grain: one row per publisher_id + topic_id + license + publication_year
+    relevant_entities: [works, publishers, topics]
+    relevant_relationships:
+      - relationship: work_topics
+        cardinality: "N:M"
+        join_expansion_risk: HIGH
+      - relationship: work_locations
+        cardinality: "1:N"
+        join_expansion_risk: MEDIUM
+        notes: License may come from locations; aggregate locations independently.
+    parameters:
+      - {name: publisher_id, description: OpenAlex Publisher ID (P…), value_type: string, required: false}
+      - {name: year_from, description: Inclusive publication year lower bound, value_type: integer, required: false}
+      - {name: year_to, description: Inclusive publication year upper bound, value_type: integer, required: false}
+    filters:
+      - "works.activity_state = ACTIVE"
+      - "optional publisher_id / year bounds"
+    active_work_filter: REQUIRED_ACTIVE
+    freshness_requirement: daily-to-weekly assumed
+    expected_frequency: OCCASIONAL
+    expected_concurrency: null
+    expected_result_size: many rows at publisher×topic×license×year grain
+    known_scale: UNKNOWN
+    assumed_scale: High cardinality combination grain
+    aggregation_risk: HIGH
+    fanout_risk: HIGH
+    candidate_materialization: publisher-topic-year-counts
+    placement: MATERIALIZED_AGGREGATE
+    placement_rationale: >-
+      Expensive multi-dimension aggregate; candidate for materialization after
+      reuse evidence. Until then BigQuery analytical scans are expected.
+    evidence_status: ARCHITECTURE
+    logical_query_shape: |
+      WITH work_license AS (
+        SELECT work_id, MIN(license) AS license
+        FROM work_locations
+        GROUP BY work_id
+      )
+      SELECT w.primary_publisher_id AS publisher_id,
+             wt.topic_id,
+             wl.license,
+             w.publication_year,
+             COUNT(DISTINCT w.work_id) AS work_count
+      FROM works AS w
+      JOIN work_topics AS wt ON wt.work_id = w.work_id
+      LEFT JOIN work_license AS wl ON wl.work_id = w.work_id
+      WHERE w.activity_state = 'ACTIVE'
+        AND (:publisher_id IS NULL OR w.primary_publisher_id = :publisher_id)
+        AND (:year_from IS NULL OR w.publication_year >= :year_from)
+        AND (:year_to IS NULL OR w.publication_year <= :year_to)
+      GROUP BY 1, 2, 3, 4
+
+  - pattern_id: institution-topic-relationships
+    name: Institution × topic relationships
+    capability: Count ACTIVE works linking an institution to topics
+    category: INSTITUTION_TOPIC
+    expected_result_grain: one row per institution_id + topic_id
+    relevant_entities: [works, institutions, topics]
+    relevant_relationships:
+      - relationship: work_author_institutions
+        cardinality: "N:M"
+        join_expansion_risk: HIGH
+      - relationship: work_authors
+        cardinality: "1:N"
+        join_expansion_risk: MEDIUM
+      - relationship: work_topics
+        cardinality: "N:M"
+        join_expansion_risk: HIGH
+        notes: Aggregate institution links and topics separately, then join aggregates.
+    parameters:
+      - {name: institution_id, description: OpenAlex Institution ID (I…), value_type: string, required: true}
+    filters:
+      - "works.activity_state = ACTIVE"
+      - "institution_id = :institution_id"
+    active_work_filter: REQUIRED_ACTIVE
+    freshness_requirement: daily-to-weekly assumed
+    expected_frequency: OCCASIONAL
+    expected_concurrency: null
+    expected_result_size: 1 row per topic for the institution
+    known_scale: UNKNOWN
+    assumed_scale: High fan-out via authorships × topics
+    aggregation_risk: HIGH
+    fanout_risk: HIGH
+    candidate_materialization: null
+    placement: BIGQUERY_ANALYTICAL
+    placement_rationale: Relationship analysis is a BigQuery analytical workload; avoid flattened joins.
+    evidence_status: ARCHITECTURE
+    logical_query_shape: |
+      WITH inst_works AS (
+        SELECT DISTINCT wai.work_id
+        FROM work_author_institutions AS wai
+        JOIN works AS w ON w.work_id = wai.work_id
+        WHERE w.activity_state = 'ACTIVE'
+          AND wai.institution_id = :institution_id
+      )
+      SELECT :institution_id AS institution_id,
+             wt.topic_id,
+             COUNT(DISTINCT iw.work_id) AS work_count
+      FROM inst_works AS iw
+      JOIN work_topics AS wt ON wt.work_id = iw.work_id
+      GROUP BY wt.topic_id
+
+  - pattern_id: citation-relationships
+    name: Citation / reference relationships
+    capability: List source-observed references from an ACTIVE Work
+    category: CITATION_RELATIONSHIPS
+    expected_result_grain: one row per (source_work_id, reference_index) relationship
+    relevant_entities: [works]
+    relevant_relationships:
+      - relationship: work_references
+        cardinality: "1:N"
+        join_expansion_risk: LOW
+        notes: >-
+          referenced_work_id may be ACTIVE, DELETED, or unresolved/absent.
+          Do not treat missing/deleted targets as orphan errors (Step 13).
+    parameters:
+      - {name: work_id, description: Source Work ID (W…), value_type: string, required: true}
+    filters:
+      - "source works.activity_state = ACTIVE"
+      - "work_references.work_id = :work_id"
+    active_work_filter: REFERENCE_TARGET_MAY_BE_DELETED
+    freshness_requirement: UNKNOWN
+    expected_frequency: OCCASIONAL
+    expected_concurrency: null
+    expected_result_size: 0–N reference rows
+    known_scale: UNKNOWN
+    assumed_scale: Long-tail reference lists
+    aggregation_risk: LOW
+    fanout_risk: LOW
+    candidate_materialization: null
+    placement: BIGQUERY_ANALYTICAL
+    placement_rationale: Relationship scan over references is analytical; no operational store without evidence.
+    evidence_status: ARCHITECTURE
+    logical_query_shape: |
+      SELECT wr.work_id AS source_work_id,
+             wr.reference_index,
+             wr.referenced_work_id,
+             wr.reference_status,
+             tw.activity_state AS target_activity_state
+      FROM work_references AS wr
+      JOIN works AS sw
+        ON sw.work_id = wr.work_id
+       AND sw.activity_state = 'ACTIVE'
+      LEFT JOIN works AS tw
+        ON tw.work_id = wr.referenced_work_id
+      WHERE wr.work_id = :work_id
+    notes: >-
+      Target may be DELETED or absent; keep the source-observed reference row.
+      Consumer-facing lists of "citing works" must still filter citing works to ACTIVE.
+
+  - pattern_id: publication-trends
+    name: Publication trends by year
+    capability: Count ACTIVE works by publication year (optional dimensions later)
+    category: PUBLICATION_TRENDS
+    expected_result_grain: one row per publication_year time bucket
+    relevant_entities: [works]
+    relevant_relationships: []
+    parameters:
+      - {name: year_from, description: Inclusive year lower bound, value_type: integer, required: false}
+      - {name: year_to, description: Inclusive year upper bound, value_type: integer, required: false}
+    filters:
+      - "works.activity_state = ACTIVE"
+      - "optional year bounds"
+    active_work_filter: REQUIRED_ACTIVE
+    freshness_requirement: weekly assumed
+    expected_frequency: FREQUENT
+    expected_concurrency: null
+    expected_result_size: one row per year in range
+    known_scale: UNKNOWN
+    assumed_scale: Full ACTIVE works scan or partitioned year filter
+    aggregation_risk: LOW
+    fanout_risk: NONE
+    candidate_materialization: publication-trends
+    placement: BIGQUERY_ANALYTICAL
+    placement_rationale: Classic analytical trend query; materialize if dashboards reuse heavily.
+    evidence_status: ARCHITECTURE
+    logical_query_shape: |
+      SELECT w.publication_year,
+             COUNT(*) AS work_count
+      FROM works AS w
+      WHERE w.activity_state = 'ACTIVE'
+        AND (:year_from IS NULL OR w.publication_year >= :year_from)
+        AND (:year_to IS NULL OR w.publication_year <= :year_to)
+      GROUP BY w.publication_year
+      ORDER BY w.publication_year
+
+  - pattern_id: open-access-trends
+    name: Open-access trends by year
+    capability: Count ACTIVE works by publication year and OA status
+    category: OPEN_ACCESS_TRENDS
+    expected_result_grain: one row per publication_year + oa_status
+    relevant_entities: [works]
+    relevant_relationships: []
+    parameters:
+      - {name: year_from, description: Inclusive year lower bound, value_type: integer, required: false}
+      - {name: year_to, description: Inclusive year upper bound, value_type: integer, required: false}
+    filters:
+      - "works.activity_state = ACTIVE"
+      - "optional year bounds"
+    active_work_filter: REQUIRED_ACTIVE
+    freshness_requirement: weekly assumed
+    expected_frequency: FREQUENT
+    expected_concurrency: null
+    expected_result_size: one row per year×oa_status
+    known_scale: UNKNOWN
+    assumed_scale: Full ACTIVE works scan or partitioned year filter
+    aggregation_risk: LOW
+    fanout_risk: NONE
+    candidate_materialization: oa-trends
+    placement: BIGQUERY_ANALYTICAL
+    placement_rationale: Analytical trend/breakdown in BigQuery; materialize for reused dashboards.
+    evidence_status: ARCHITECTURE
+    logical_query_shape: |
+      SELECT w.publication_year,
+             w.oa_status,
+             COUNT(*) AS work_count
+      FROM works AS w
+      WHERE w.activity_state = 'ACTIVE'
+        AND (:year_from IS NULL OR w.publication_year >= :year_from)
+        AND (:year_to IS NULL OR w.publication_year <= :year_to)
+      GROUP BY w.publication_year, w.oa_status
+      ORDER BY w.publication_year, w.oa_status

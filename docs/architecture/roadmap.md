@@ -2,8 +2,8 @@
 
 This roadmap preserves completed work and sequences implementation from bounded
 source profiling through consumer delivery. It does not authorize work beyond an
-explicitly scoped task. Steps 01–13 are complete through durable local Works
-ingestion and deletion tombstones. Step 14 / #19 (query patterns + benchmarks)
+explicitly scoped task. Steps 01–14 are complete through the OpenAlex
+query-pattern and benchmark registry. Step 15 / #22 (BigQuery analytical models)
 is next; GCS landing and later steps remain planned.
 
 ## Completed foundation
@@ -23,13 +23,13 @@ is next; GCS landing and later steps remain planned.
 | 11 | Canonical OpenAlex logical model ([details](openalex-canonical-model.md)) | Normalized entities/relationships, PyArrow schemas, mapping |
 | 12 | One-file local Works ingestion ([details](local-works-ingestion.md)) | Claim → land → stream decode/map/upsert/provenance in one txn → SUCCESS; memory + Postgres backends |
 | 13 | OpenAlex Works deletions ([details](openalex-deletions.md)) | `deleted_ids.csv.gz` tombstones, precedence/no resurrection, deletion lineage; memory + Postgres |
+| 14 | Query-pattern + benchmark registry ([details](query-pattern-benchmarks.md)) | Typed workloads, grains, fan-out risks, evidence-honest placements; FIXTURE_ONLY local harness; no BigQuery deploy ([#19](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/19)) |
 
 ## Planned steps
 
 | Step | Work |
 | --- | --- |
-| 14 | Build a query-pattern and benchmark registry before choosing operational serving technology ([#19](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/19)). Cover DOI/OpenAlex ID/eISSN/ISSN/publisher lookups; journal/publisher authors; publisher-topic-license-year counts; institution/topic and citation/reference relationships; publication and open-access trends. Measure latency, concurrency, bytes scanned, cost, result size, freshness, frequency, and materialization suitability. |
-| 15 | Implement BigQuery-first analytics on GCP; keep DuckDB for local tests, define SQL dialect contracts, and derive partitioning/clustering from evidence. Keep queries bounded and cost-safe. |
+| 15 | Implement BigQuery-first analytics on GCP; keep DuckDB for local tests, define SQL dialect contracts, and derive partitioning/clustering from evidence. Keep queries bounded and cost-safe ([#22](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/22)). |
 | 16 | Build gold models, analytical marts, and justified materialized aggregates for research discovery, journal/publisher-topic/institution-topic metrics, trends, open access, and citations. Avoid relationship fan-out. |
 | 17 | Add data quality gates for non-null/unique canonical IDs, valid relationships, deleted-record exclusion, and reconciliation; measure DOI/title/topic gaps, authorless works, publication-year/type distributions, and reference reconciliation. |
 | 18 | Define storage-independent Data Service/API capabilities for metadata lookup and journal/publisher analytics. Add optional PostgreSQL/AlloyDB only if benchmarks show BigQuery plus cache/API is insufficient. |
