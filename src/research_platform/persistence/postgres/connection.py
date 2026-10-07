@@ -1,4 +1,4 @@
-"""PostgreSQL connection helpers for local Step 12 ingestion."""
+"""PostgreSQL connection helpers for local Step 12/13 ingestion."""
 
 from __future__ import annotations
 
@@ -11,6 +11,19 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 _CONTROL_DDL = _REPO_ROOT / "sql" / "control" / "001_pipeline_control.sql"
 _DELETION_DDL = _REPO_ROOT / "sql" / "control" / "002_deletion_events.sql"
 _CANONICAL_DDL = _REPO_ROOT / "sql" / "canonical" / "001_openalex_canonical.sql"
+
+_LEGACY_DELETED_DATE_ERROR = (
+    "legacy deletion_events rows lack a trustworthy deleted_date; "
+    "refusing to fabricate source evidence from file-level "
+    "source_updated_date or a sentinel date. Truncate the local "
+    "deletion_events table (or drop it) and replay immutable raw "
+    "deleted_ids.csv.gz assets under the work_id,deleted_date contract, "
+    "then re-run schema apply."
+)
+
+
+class SchemaMigrationError(RuntimeError):
+    """Local PostgreSQL schema cannot be upgraded without inventing data."""
 
 
 def postgres_dsn_from_env(env_var: str = "POSTGRES_DSN") -> str:
@@ -50,42 +63,52 @@ def apply_ingestion_schema(connection: psycopg.Connection) -> None:
             CHECK (content_format IN ('jsonl', 'parquet', 'csv'))
             """
         )
-        # Harden DBs created before per-row deleted_date was required.
-        # Must run before any index that references deleted_date.
-        connection.execute(
-            """
-            ALTER TABLE deletion_events
-            ADD COLUMN IF NOT EXISTS deleted_date DATE
-            """
+        _migrate_deletion_events_deleted_date(connection)
+
+
+def _migrate_deletion_events_deleted_date(connection: psycopg.Connection) -> None:
+    """Ensure ``deleted_date`` exists without fabricating source evidence.
+
+    Fresh tables already define ``deleted_date DATE NOT NULL``.
+    Legacy empty tables receive a nullable column, then NOT NULL.
+    Legacy tables with rows missing ``deleted_date`` fail explicitly so
+    operators can replay immutable raw deletion assets.
+    """
+    connection.execute(
+        """
+        ALTER TABLE deletion_events
+        ADD COLUMN IF NOT EXISTS deleted_date DATE
+        """
+    )
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM deletion_events WHERE deleted_date IS NULL"
         )
-        connection.execute(
-            """
-            UPDATE deletion_events
-            SET deleted_date = COALESCE(deleted_date, source_updated_date, DATE '1970-01-01')
-            WHERE deleted_date IS NULL
-            """
-        )
-        # Only enforce NOT NULL once every row has a value (fresh tables already do).
-        connection.execute(
-            """
-            DO $$
-            BEGIN
-                IF EXISTS (
-                    SELECT 1
-                    FROM information_schema.columns
-                    WHERE table_name = 'deletion_events'
-                      AND column_name = 'deleted_date'
-                      AND is_nullable = 'YES'
-                ) THEN
-                    ALTER TABLE deletion_events
-                    ALTER COLUMN deleted_date SET NOT NULL;
-                END IF;
-            END $$
-            """
-        )
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS deletion_events_deleted_date_idx
-            ON deletion_events (deleted_date)
-            """
-        )
+        null_count = int(cur.fetchone()[0])
+    if null_count > 0:
+        raise SchemaMigrationError(_LEGACY_DELETED_DATE_ERROR)
+
+    connection.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'deletion_events'
+                  AND column_name = 'deleted_date'
+                  AND is_nullable = 'YES'
+            ) THEN
+                ALTER TABLE deletion_events
+                ALTER COLUMN deleted_date SET NOT NULL;
+            END IF;
+        END $$
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS deletion_events_deleted_date_idx
+        ON deletion_events (deleted_date)
+        """
+    )
