@@ -1,7 +1,9 @@
 -- Gold: publisher_topic_year_stats
 -- Grain: publisher_id + topic_id + publication_year
 -- Fan-out safety: ACTIVE works JOIN work_topics only (no authors/locations).
--- Materialization: MATERIALIZATION_CANDIDATE (publisher-topic-year-counts)
+-- Materialization: MATERIALIZATION_CANDIDATE
+-- Evidence: Step 14 publisher-topic-counts (candidate_materialization:
+-- publisher-topic-counts); year grain may intentionally roll up to publisher+topic.
 
 SELECT
   w.`primary_publisher_id` AS `publisher_id`,

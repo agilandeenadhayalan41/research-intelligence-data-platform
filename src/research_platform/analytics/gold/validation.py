@@ -171,6 +171,10 @@ def validate_static_gold_contracts(
             lower = stripped.lower()
             for cte in _RESEARCH_DISCOVERY_CTES:
                 ok(cte in lower, f"research_discovery: missing independent CTE {cte}")
+            ok(
+                "coalesce" in lower and "array<string>[]" in lower,
+                "research_discovery: must COALESCE absent aggregates to ARRAY<STRING>[]",
+            )
 
         if mart.mart_id in ("journal_author_stats", "institution_topic_stats"):
             ok(
@@ -220,7 +224,10 @@ def _seed_gold_semantic_fixture(conn: duckdb.DuckDBPyConnection) -> None:
             -- W5: NULL oa_status (unknown — do not fabricate closed)
             ('W5', '10.1/ddd', CAST(NULL AS VARCHAR), CAST(NULL AS INTEGER),
              CAST(NULL AS DATE), 'article', 'en', CAST(NULL AS BOOLEAN),
-             CAST(NULL AS VARCHAR), 'S3', 'P3', 'ACTIVE')
+             CAST(NULL AS VARCHAR), 'S3', 'P3', 'ACTIVE'),
+            -- W6: ACTIVE with no author/topic/institution observations
+            ('W6', '10.1/eee', 'Zeta', 2022, DATE '2022-01-01', 'article', 'en',
+             FALSE, 'closed', 'S4', 'P4', 'ACTIVE')
         ) AS t(
           work_id, doi, title, publication_year, publication_date, work_type,
           language, is_oa, oa_status, primary_source_id, primary_publisher_id,
@@ -345,7 +352,11 @@ def validate_gold_semantics_with_duckdb() -> SemanticValidationReport:
                 AND work_id IN (SELECT work_id FROM active_works)
               GROUP BY work_id
             )
-            SELECT aw.work_id, aa.author_ids, ta.topic_ids, ia.institution_ids
+            SELECT
+              aw.work_id,
+              COALESCE(aa.author_ids, CAST([] AS VARCHAR[])) AS author_ids,
+              COALESCE(ta.topic_ids, CAST([] AS VARCHAR[])) AS topic_ids,
+              COALESCE(ia.institution_ids, CAST([] AS VARCHAR[])) AS institution_ids
             FROM active_works aw
             LEFT JOIN authors_agg aa ON aa.work_id = aw.work_id
             LEFT JOIN topics_agg ta ON ta.work_id = aw.work_id
@@ -355,7 +366,7 @@ def validate_gold_semantics_with_duckdb() -> SemanticValidationReport:
         ).fetchall()
         results["research_discovery"] = discovery
         work_ids = [r[0] for r in discovery]
-        if work_ids != ["W1", "W3", "W4", "W5"]:
+        if work_ids != ["W1", "W3", "W4", "W5", "W6"]:
             errors.append(f"discovery ACTIVE works unexpected: {work_ids}")
         if "W2" in work_ids:
             errors.append("deleted W2 must be excluded from research_discovery")
@@ -366,6 +377,17 @@ def validate_gold_semantics_with_duckdb() -> SemanticValidationReport:
             errors.append(f"W1 topic_ids unexpected: {w1[2]}")
         if list(w1[3]) != ["I1", "I2"]:
             errors.append(f"W1 institution_ids unexpected: {w1[3]}")
+        w6 = next(r for r in discovery if r[0] == "W6")
+        if w6[1] is None or w6[2] is None or w6[3] is None:
+            errors.append(f"W6 relationship arrays must not be NULL: {w6}")
+        elif list(w6[1]) != [] or list(w6[2]) != [] or list(w6[3]) != []:
+            errors.append(f"W6 expected empty relationship arrays: {w6}")
+        results["research_discovery_empty_arrays"] = {
+            "work_id": w6[0],
+            "author_ids": list(w6[1]) if w6[1] is not None else None,
+            "topic_ids": list(w6[2]) if w6[2] is not None else None,
+            "institution_ids": list(w6[3]) if w6[3] is not None else None,
+        }
 
         # Unsafe Cartesian inflation vs safe independent agg
         unsafe = conn.execute(

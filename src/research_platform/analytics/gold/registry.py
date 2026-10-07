@@ -62,14 +62,16 @@ def gold_mart_contracts() -> tuple[GoldMartContract, ...]:
                 _col("oa_status", "STRING"),
                 _col("primary_source_id", "STRING"),
                 _col("primary_publisher_id", "STRING"),
-                _col("author_ids", "ARRAY<STRING>"),
-                _col("topic_ids", "ARRAY<STRING>"),
-                _col("institution_ids", "ARRAY<STRING>"),
+                _col("author_ids", "ARRAY<STRING>", nullable=False),
+                _col("topic_ids", "ARRAY<STRING>", nullable=False),
+                _col("institution_ids", "ARRAY<STRING>", nullable=False),
             ),
             fanout_strategy=FanoutStrategy.INDEPENDENT_AGG_THEN_JOIN,
             null_handling=(
                 "Missing DOI/title/year/OA/source/publisher remain NULL. "
-                "Empty relationship arrays when no ACTIVE-scoped observations. "
+                "Empty relationship arrays when no ACTIVE-scoped observations "
+                "(COALESCE to ARRAY<STRING>[]; never NULL arrays). "
+                "NULL identifiers are omitted from arrays. "
                 "Do not fabricate identifiers or year 0."
             ),
             refresh_strategy=RefreshStrategy.RECOMPUTE_CHANGED_WORK_ROWS,
@@ -175,9 +177,9 @@ def gold_mart_contracts() -> tuple[GoldMartContract, ...]:
             sql_path=f"{_GOLD_SQL}/publisher_topic_year_stats.sql",
             source_pattern_ids=("publisher-topic-counts",),
             consumer_purpose=(
-                "ACTIVE work counts by publisher + topic + publication_year "
-                "(extends Step 14 publisher-topic-counts with year grain for "
-                "materialization candidate publisher-topic-year-counts)."
+                "ACTIVE work counts by publisher + topic + publication_year, "
+                "sourced from the Step 14 publisher-topic-counts workload with "
+                "an intentional year grain that may roll up to publisher+topic."
             ),
             result_grain="one row per publisher_id + topic_id + publication_year",
             grain_keys=("publisher_id", "topic_id", "publication_year"),
@@ -198,12 +200,17 @@ def gold_mart_contracts() -> tuple[GoldMartContract, ...]:
             materialization_mode=MaterializationMode.MATERIALIZATION_CANDIDATE,
             evidence_status=EvidenceStatus.ASSUMED,
             materialization_rationale=(
-                "Step 14 candidate_materialization publisher-topic-year-counts. "
-                "Year grain aligns with works INTEGER_RANGE partition."
+                "Sourced from Step 14 publisher-topic-counts "
+                "(candidate_materialization: publisher-topic-counts). "
+                "Step 14 explicitly notes a year-grained aggregate may "
+                "intentionally roll up to publisher+topic; year grain also "
+                "aligns with works INTEGER_RANGE partition. "
+                "No MEASURED BigQuery evidence yet."
             ),
             future_measurement_required=(
-                "MEASURED reuse vs refresh for publisher-topic-year-counts; "
-                "confirm year-partition pruning benefit."
+                "MEASURED reuse vs refresh for year-grained publisher-topic "
+                "workloads; confirm year-partition pruning benefit and "
+                "intentional rollup to publisher+topic."
             ),
             partition_candidate="publication_year",
             clustering_candidates=("publisher_id", "topic_id"),

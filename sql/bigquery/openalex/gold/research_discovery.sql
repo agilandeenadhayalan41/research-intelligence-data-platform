@@ -48,25 +48,26 @@ institutions_agg AS (
   GROUP BY wai.work_id
 )
 SELECT
-  aw.work_id,
-  aw.doi,
-  aw.title,
-  aw.publication_year,
-  aw.publication_date,
-  aw.work_type,
-  aw.language,
-  aw.is_oa,
-  aw.oa_status,
-  aw.primary_source_id,
-  aw.primary_publisher_id,
-  aa.author_ids,
-  ta.topic_ids,
-  ia.institution_ids
+  aw.`work_id`,
+  aw.`doi`,
+  aw.`title`,
+  aw.`publication_year`,
+  aw.`publication_date`,
+  aw.`work_type`,
+  aw.`language`,
+  aw.`is_oa`,
+  aw.`oa_status`,
+  aw.`primary_source_id`,
+  aw.`primary_publisher_id`,
+  -- Absent relationship aggregates → deterministic empty arrays (not NULL).
+  COALESCE(aa.`author_ids`, ARRAY<STRING>[]) AS `author_ids`,
+  COALESCE(ta.`topic_ids`, ARRAY<STRING>[]) AS `topic_ids`,
+  COALESCE(ia.`institution_ids`, ARRAY<STRING>[]) AS `institution_ids`
 FROM active_works AS aw
 LEFT JOIN authors_agg AS aa
-  ON aa.work_id = aw.work_id
+  ON aa.`work_id` = aw.`work_id`
 LEFT JOIN topics_agg AS ta
-  ON ta.work_id = aw.work_id
+  ON ta.`work_id` = aw.`work_id`
 LEFT JOIN institutions_agg AS ia
-  ON ia.work_id = aw.work_id
+  ON ia.`work_id` = aw.`work_id`
 ;
