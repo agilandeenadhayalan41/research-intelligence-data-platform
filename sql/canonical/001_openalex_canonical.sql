@@ -1,9 +1,11 @@
 -- OpenAlex canonical logical schema specification (Step 11 / issue #15)
 --
--- Target dialect: PostgreSQL 16+ for local contract review only.
+-- Target dialect: PostgreSQL 16+ for local contract review and for the optional
+-- local Step 12 durable ingestion path (PostgresCanonicalStore /
+-- apply_ingestion_schema).
 -- PyArrow schemas in research_platform.canonical.openalex.schemas are the
 -- portable source of truth. This SQL does NOT define the future BigQuery
--- physical model (Step 15) and is not auto-applied by tests/CI.
+-- physical model (Step 15). Default offline tests/CI do not require applying it.
 --
 -- DuckDB validation of this file would not prove PostgreSQL or BigQuery
 -- dialect compatibility.

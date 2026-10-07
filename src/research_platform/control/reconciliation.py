@@ -39,6 +39,15 @@ def checksums_conflict(existing: SourceFileControl, incoming: SourceFileControl)
     return existing.source_checksum_sha256 != incoming.source_checksum_sha256
 
 
+def declared_sizes_conflict(
+    existing: SourceFileControl, incoming: SourceFileControl
+) -> bool:
+    """True when both sides declare byte sizes and they differ."""
+    if existing.declared_size_bytes is None or incoming.declared_size_bytes is None:
+        return False
+    return existing.declared_size_bytes != incoming.declared_size_bytes
+
+
 def reconcile_registration(
     existing: SourceFileControl | None,
     incoming: SourceFileControl,
@@ -49,14 +58,18 @@ def reconcile_registration(
 
     Rules:
     - No existing row → ``CREATED`` (caller persists DISCOVERED).
-    - Same identity + same/unknown checksum + DISCOVERED → ``IDEMPOTENT_REPLAY``.
-    - Same identity + SUCCESS + same checksum → ``ALREADY_SUCCESS`` (no reprocess).
+    - Conflicting identity metadata (uri/dates/format) → ``IdempotencyConflictError``.
+    - Conflicting declared sizes when both known → ``IdempotencyConflictError``.
+    - Same identity + different known checksum → ``CHECKSUM_CONFLICT``.
+    - Same identity + SUCCESS + matching known metadata → ``ALREADY_SUCCESS``
+      (trusted immutable replay; byte-level re-fetch is skipped).
     - Same identity + PROCESSING → ``ALREADY_IN_PROGRESS``.
     - Same identity + FAILED + same/unknown checksum → ``RETRYABLE_FAILURE``.
-    - Same identity + different known checksum → ``CHECKSUM_CONFLICT``.
+    - Same identity + DISCOVERED → ``IDEMPOTENT_REPLAY``.
 
-    A changed checksum for the same immutable asset identity must never be
-    silently overwritten.
+    OpenAlex snapshot object identity is treated as immutable for Step 12:
+    ``ALREADY_SUCCESS`` does not re-fetch bytes. Conflicting declared metadata
+    for the same asset id must fail rather than silently skip.
     """
     if incoming.status is not ControlStatus.DISCOVERED:
         raise IdempotencyConflictError("registration requires DISCOVERED incoming status")
@@ -67,6 +80,10 @@ def reconcile_registration(
     if not identity_fields_match(existing, incoming):
         raise IdempotencyConflictError(
             "asset identity metadata conflicts with an existing control row"
+        )
+    if declared_sizes_conflict(existing, incoming):
+        raise IdempotencyConflictError(
+            "declared_size_bytes conflicts with an existing control row"
         )
     if checksums_conflict(existing, incoming):
         if raise_on_conflict:

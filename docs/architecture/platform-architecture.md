@@ -45,12 +45,14 @@ BigQuery runtime, a Data Service/API, or downstream consumers. See
 - **Pipeline control (contracts):** typed `PipelineRun` / `SourceFileControl` /
   `RecordProvenance` models, explicit DISCOVERED→PROCESSING→SUCCESS|FAILED
   lifecycle, claim/lease rules, and a `ControlStore` write protocol separate from
-  `Warehouse.query()`. Persistence adapters are a later step.
+  `Warehouse.query()`. Local durable adapters (`PostgresControlStore` /
+  `PostgresCanonicalStore`) back Step 12 when `--backend postgres` is selected;
+  they are not the production serving architecture.
 - **Canonical layer:** normalized, portable OpenAlex entities/relationships with
   PyArrow schemas and explicit ID rules
   (`research_platform.canonical.openalex`). Independent of PostgreSQL/BigQuery
-  physical design. Keep relationships separate; do not flatten. Ingestion that
-  writes these tables is a later step.
+  physical design. Keep relationships separate; do not flatten. Step 12 writes
+  these through the local ingestion transaction boundary.
 - **Analytical layer:** BigQuery is the first GCP analytical implementation;
   DuckDB supports local analytical tests. Work-author, work-topic,
   work-institution, and work-citation/reference relationships primarily remain

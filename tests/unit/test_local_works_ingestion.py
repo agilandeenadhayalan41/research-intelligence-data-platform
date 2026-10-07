@@ -578,3 +578,150 @@ def test_register_outcome_created(tmp_path: Path) -> None:
     )
     assert outcome is RegistrationOutcome.CREATED
     assert row.status is ControlStatus.DISCOVERED
+
+
+def test_changed_declared_size_rejects_already_success_skip(tmp_path: Path) -> None:
+    from research_platform.control.errors import IdempotencyConflictError
+
+    first, control, canonical, _, _, asset, _ = _run_ingest(tmp_path)
+    assert first.skipped_reason is None
+    assert first.source_file is not None
+    assert first.source_file.status is ControlStatus.SUCCESS
+    larger = asset.model_copy(update={"byte_size": asset.byte_size + 1})
+    with pytest.raises(IdempotencyConflictError, match="declared_size"):
+        _run_ingest(
+            tmp_path / "replay",
+            asset=larger,
+            control=control,
+            canonical=canonical,
+            connector=FakeConnector(
+                assets=[larger],
+                payloads={larger.file_uri: _gz_jsonl([_work("W1")])},
+            ),
+        )
+    assert control.get_source_file(asset.asset_id).status is ControlStatus.SUCCESS  # type: ignore[union-attr]
+    assert canonical.work_count() == 1
+
+
+def test_conflicting_update_metadata_rejects_replay(tmp_path: Path) -> None:
+    from research_platform.control.errors import IdempotencyConflictError
+
+    first, control, canonical, _, _, asset, _ = _run_ingest(tmp_path)
+    assert first.source_file is not None
+    # Same asset_id identity key but conflicting updated_date metadata.
+    conflicting = asset.model_copy(update={"updated_date": date(2024, 3, 1)})
+    with pytest.raises(IdempotencyConflictError, match="identity metadata"):
+        _run_ingest(
+            tmp_path / "meta",
+            asset=conflicting,
+            control=control,
+            canonical=canonical,
+            connector=FakeConnector(
+                assets=[conflicting],
+                payloads={conflicting.file_uri: _gz_jsonl([_work("W1")])},
+            ),
+        )
+
+
+def test_publish_failure_rolls_back_prior_canonical_and_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asset = _asset()
+    payload = _gz_jsonl([_work("W1"), _work("W2"), _work("W3")])
+    landing = tmp_path / "landing"
+    config_path = _write_config(tmp_path, landing)
+    control = InMemoryControlStore()
+    canonical = InMemoryCanonicalStore()
+    object_store = LocalObjectStore(StorageConfig(backend="local", landing_path=landing))
+    connector = FakeConnector(assets=[asset], payloads={asset.file_uri: payload})
+
+    original = InMemoryCanonicalStore.upsert_work_bundle
+    calls = {"n": 0}
+
+    def flaky(self, bundle):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] >= 3:
+            raise RuntimeError("forced persistence failure at record 3")
+        return original(self, bundle)
+
+    monkeypatch.setattr(InMemoryCanonicalStore, "upsert_work_bundle", flaky)
+    with pytest.raises(Exception) as raised:
+        run_openalex_works_local_ingest(
+            config_path,
+            control_store=control,
+            canonical_store=canonical,
+            object_store=object_store,
+            connector=connector,  # type: ignore[arg-type]
+            now=_clock(),
+        )
+    assert "forced persistence failure" in str(raised.value) or "forced persistence failure" in str(
+        raised.value.__cause__
+    )
+    row = control.get_source_file(asset.asset_id)
+    assert row is not None
+    assert row.status is ControlStatus.FAILED
+    assert canonical.work_count() == 0
+    assert control.list_record_provenance(asset_id=asset.asset_id) == ()
+    key = openalex_raw_object_key(asset)
+    with object_store.open(key) as handle:
+        assert handle.read() == payload
+
+    # Retry with healthy upsert path.
+    monkeypatch.setattr(InMemoryCanonicalStore, "upsert_work_bundle", original)
+    result = run_openalex_works_local_ingest(
+        config_path,
+        control_store=control,
+        canonical_store=canonical,
+        object_store=object_store,
+        connector=FakeConnector(assets=[asset], payloads={asset.file_uri: payload}),  # type: ignore[arg-type]
+        now=_clock(),
+    )
+    assert result.run.status is PipelineRunStatus.SUCCESS
+    assert result.source_file is not None
+    assert result.source_file.status is ControlStatus.SUCCESS
+    assert canonical.work_count() == 3
+    assert len(control.list_record_provenance(asset_id=asset.asset_id)) == 3
+
+
+def test_cli_requires_backend_and_prints_persistence_mode(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from research_platform.ingestion import cli as cli_mod
+    from research_platform.ingestion.pipeline import LocalWorksIngestResult
+    from research_platform.control.models import PipelineRun, PipelineRunStatus
+
+    landing = tmp_path / "landing"
+    config_path = _write_config(tmp_path, landing)
+
+    with pytest.raises(SystemExit) as exited:
+        cli_mod.main(["--config", str(config_path)])
+    assert exited.value.code == 2
+
+    def fake_run(config, *, backend="memory", **kwargs):  # type: ignore[no-untyped-def]
+        del config, kwargs
+        return LocalWorksIngestResult(
+            run=PipelineRun.model_validate(
+                {
+                    "run_id": uuid4(),
+                    "source": "openalex",
+                    "pipeline_name": "openalex-works-ingest",
+                    "status": PipelineRunStatus.SUCCESS,
+                    "attempt": 1,
+                    "started_at": _ts(hour=1),
+                    "completed_at": _ts(hour=2),
+                    "created_at": _ts(hour=1),
+                    "updated_at": _ts(hour=2),
+                }
+            ),
+            source_file=None,
+            stats=None,
+            skipped_reason="NO_ELIGIBLE_FILE",
+            persistence_backend=backend,
+        )
+
+    monkeypatch.setattr(cli_mod, "run_openalex_works_local_ingest", fake_run)
+    code = cli_mod.main(["--config", str(config_path), "--backend", "memory"])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert '"persistence": "memory"' in out
+    assert '"durable": false' in out
