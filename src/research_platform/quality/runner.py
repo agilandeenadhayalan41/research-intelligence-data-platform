@@ -429,6 +429,8 @@ def check_gold_deleted_source_exclusion(
         manifest_rows = executor.execute_rows(
             "SELECT mart_id FROM staged_gold_mart_manifest ORDER BY mart_id"
         )
+        # NULL mart_id is invalid (not silently dropped) — aligns with BigQuery.
+        invalid_manifest_mart_count = sum(1 for row in manifest_rows if row[0] is None)
         manifest_list = [str(row[0]) for row in manifest_rows if row[0] is not None]
         manifest_ids = set(manifest_list)
         expected = set(GOLD_MART_IDS)
@@ -439,6 +441,7 @@ def check_gold_deleted_source_exclusion(
             missing_manifest_mart_count
             + unexpected_manifest_mart_count
             + duplicate_manifest_mart_count
+            + invalid_manifest_mart_count
         )
         if coverage_violations > 0:
             return _base_result(
@@ -453,6 +456,7 @@ def check_gold_deleted_source_exclusion(
                     "missing_manifest_mart_count": missing_manifest_mart_count,
                     "unexpected_manifest_mart_count": unexpected_manifest_mart_count,
                     "duplicate_manifest_mart_count": duplicate_manifest_mart_count,
+                    "invalid_manifest_mart_count": invalid_manifest_mart_count,
                     "missing_source_work_count": 0,
                     "inactive_source_work_count": 0,
                 },
@@ -534,6 +538,7 @@ def check_gold_deleted_source_exclusion(
             "missing_manifest_mart_count": 0,
             "unexpected_manifest_mart_count": 0,
             "duplicate_manifest_mart_count": 0,
+            "invalid_manifest_mart_count": 0,
             "missing_source_work_count": missing_total,
             "inactive_source_work_count": inactive_total,
             "missing_contrib_rows": missing_contrib,
@@ -908,13 +913,14 @@ def execute_check(
         )
 
 
-def _blocked_incomplete_required_gates_report(
+def _blocked_configuration_report(
     *,
     run_id: str,
     stage: ExecutionStage,
-    missing_required: tuple[str, ...],
+    message: str,
+    diagnostic_counts: dict[str, int],
 ) -> QualityReport:
-    """Fail closed when a caller omits authoritative required HARD_GATE checks."""
+    """Fail-closed configuration error for invalid checks= selection."""
     result = QualityResult(
         check_id="quality.configuration.required_gates",
         check_kind=QualityCheckKind.HARD_GATE,
@@ -923,14 +929,11 @@ def _blocked_incomplete_required_gates_report(
         run_id=run_id,
         contract_version=QUALITY_CONTRACT_VERSION,
         status=QualityStatus.ERROR,
-        observed_value=len(missing_required),
+        observed_value=sum(diagnostic_counts.values()),
         expected_value=0,
-        unit="missing_required_gate_count",
-        message=(
-            "caller checks= omitted required HARD_GATE(s) for stage; "
-            f"count={len(missing_required)}"
-        ),
-        diagnostic_counts={"missing_required_gate_count": len(missing_required)},
+        unit="configuration_error_count",
+        message=message,
+        diagnostic_counts=diagnostic_counts,
         error_classification=ErrorClassification.MISSING_INPUT,
     )
     return QualityReport(
@@ -942,10 +945,62 @@ def _blocked_incomplete_required_gates_report(
         publication_allowed=False,
         validation_label=ValidationLabel.SEMANTIC_ONLY,
         notes=(
-            f"{stage.value}: required HARD_GATE checks cannot be silently disabled. "
-            "Authoritative registry owns the required gate set."
+            f"{stage.value}: checks= is a filter over the authoritative registry "
+            "(not a runtime extension point)."
         ),
     )
+
+
+def _resolve_authoritative_check_selection(
+    checks: tuple[QualityCheckContract, ...],
+    *,
+    authoritative: tuple[QualityCheckContract, ...],
+    stage: ExecutionStage,
+    run_id: str,
+) -> tuple[QualityCheckContract, ...] | QualityReport:
+    """Treat checks= as a selection of authoritative IDs; reject unknown/duplicates.
+
+    Known IDs are replaced with the authoritative registered contract objects.
+    """
+    by_id = {c.check_id: c for c in authoritative}
+    seen: set[str] = set()
+    resolved: list[QualityCheckContract] = []
+    for contract in checks:
+        if contract.check_id in seen:
+            return _blocked_configuration_report(
+                run_id=run_id,
+                stage=stage,
+                message="duplicate check_id in checks= selection",
+                diagnostic_counts={"duplicate_supplied_check_count": 1},
+            )
+        seen.add(contract.check_id)
+        authoritative_contract = by_id.get(contract.check_id)
+        if authoritative_contract is None:
+            return _blocked_configuration_report(
+                run_id=run_id,
+                stage=stage,
+                message="unknown check_id in checks=; not in authoritative registry",
+                diagnostic_counts={"unknown_supplied_check_count": 1},
+            )
+        resolved.append(authoritative_contract)
+
+    stage_checks = checks_for_stage(stage, tuple(resolved))
+    required_ids = required_hard_gate_ids_for_stage(stage, authoritative)
+    requested_ids = {c.check_id for c in stage_checks}
+    missing_required = tuple(
+        sorted(check_id for check_id in required_ids if check_id not in requested_ids)
+    )
+    if missing_required:
+        return _blocked_configuration_report(
+            run_id=run_id,
+            stage=stage,
+            message=(
+                "caller checks= omitted required HARD_GATE(s) for stage; "
+                f"count={len(missing_required)}"
+            ),
+            diagnostic_counts={"missing_required_gate_count": len(missing_required)},
+        )
+    return stage_checks
 
 
 def run_quality_checks(
@@ -960,8 +1015,12 @@ def run_quality_checks(
 
     Required HARD_GATE IDs always come from the authoritative registry for
     ``stage``. A caller-supplied ``checks=`` filter may omit informational
-    metrics, but must include every required hard gate for the stage — otherwise
-    the report is blocked (never publication_allowed=True).
+    metrics, but:
+
+    - every supplied check_id must exist in the authoritative registry
+    - duplicate supplied IDs fail closed
+    - supplied contracts are replaced by authoritative objects (no redefinition)
+    - every required hard gate for the stage must be included
 
     ``publication_allowed`` is stage-local:
     - PRE_SERVING_BUILD → allowed to proceed to serving/Gold build
@@ -973,17 +1032,15 @@ def run_quality_checks(
     if checks is None:
         stage_checks = checks_for_stage(stage, authoritative)
     else:
-        stage_checks = checks_for_stage(stage, checks)
-        requested_ids = {c.check_id for c in stage_checks}
-        missing_required = tuple(
-            sorted(check_id for check_id in required_ids if check_id not in requested_ids)
+        resolved = _resolve_authoritative_check_selection(
+            checks,
+            authoritative=authoritative,
+            stage=stage,
+            run_id=run_id,
         )
-        if missing_required:
-            return _blocked_incomplete_required_gates_report(
-                run_id=run_id,
-                stage=stage,
-                missing_required=missing_required,
-            )
+        if isinstance(resolved, QualityReport):
+            return resolved
+        stage_checks = resolved
 
     results: list[QualityResult] = []
     for contract in stage_checks:

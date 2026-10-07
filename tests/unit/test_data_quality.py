@@ -520,6 +520,7 @@ def test_healthy_fixture_allows_both_stages() -> None:
     assert gold.diagnostic_counts["missing_manifest_mart_count"] == 0
     assert gold.diagnostic_counts["unexpected_manifest_mart_count"] == 0
     assert gold.diagnostic_counts["duplicate_manifest_mart_count"] == 0
+    assert gold.diagnostic_counts["invalid_manifest_mart_count"] == 0
 
 
 def test_missing_relationship_table_errors() -> None:
@@ -751,6 +752,156 @@ def test_bigquery_gold_sql_has_exact_coverage_diagnostics() -> None:
     assert "missing_manifest_mart_count" in text
     assert "unexpected_manifest_mart_count" in text
     assert "duplicate_manifest_mart_count" in text
+    assert "invalid_manifest_mart_count" in text
     assert "UNNEST" in text
     for mart_id in GOLD_MART_IDS:
         assert mart_id in text
+
+
+def test_null_manifest_mart_id_fails() -> None:
+    conn = _conn_with_fixture()
+    conn.execute(
+        "INSERT INTO staged_gold_mart_manifest VALUES (CAST(NULL AS VARCHAR))"
+    )
+    report = run_quality_checks(
+        DuckDBQualityExecutor(conn),
+        run_id="null-manifest",
+        stage=ExecutionStage.PRE_VISIBLE_PUBLICATION,
+    )
+    conn.close()
+    r = _result(report, "gold.deleted_source_work_exclusion")
+    assert r.status is QualityStatus.FAIL
+    assert r.diagnostic_counts["invalid_manifest_mart_count"] == 1
+    assert report.publication_allowed is False
+
+
+def test_unknown_custom_check_blocked() -> None:
+    custom = next(
+        c
+        for c in load_quality_registry()
+        if c.check_id == "canonical.works.work_id_not_null"
+    ).model_copy(update={"check_id": "custom.unregistered.gate"})
+    required = tuple(
+        c
+        for c in load_quality_registry()
+        if c.execution_stage is ExecutionStage.PRE_SERVING_BUILD
+        and c.kind is QualityCheckKind.HARD_GATE
+        and c.required
+    )
+    conn = _conn_with_fixture()
+    report = run_quality_checks(
+        DuckDBQualityExecutor(conn),
+        run_id="unknown-check",
+        stage=ExecutionStage.PRE_SERVING_BUILD,
+        checks=(*required, custom),
+        expectation=_BALANCED,
+    )
+    conn.close()
+    assert report.publication_allowed is False
+    assert any(
+        r.check_id == "quality.configuration.required_gates"
+        and r.diagnostic_counts.get("unknown_supplied_check_count") == 1
+        for r in report.results
+    )
+
+
+def test_modified_contract_normalized_to_authoritative() -> None:
+    """Same check_id with altered description is replaced by registry object."""
+    required = [
+        c
+        for c in load_quality_registry()
+        if c.execution_stage is ExecutionStage.PRE_SERVING_BUILD
+        and c.kind is QualityCheckKind.HARD_GATE
+        and c.required
+    ]
+    altered = required[0].model_copy(update={"description": "tampered description"})
+    selection = (altered, *required[1:])
+    conn = _conn_with_fixture()
+    report = run_quality_checks(
+        DuckDBQualityExecutor(conn),
+        run_id="normalized",
+        stage=ExecutionStage.PRE_SERVING_BUILD,
+        checks=tuple(selection),
+        expectation=_BALANCED,
+    )
+    conn.close()
+    assert report.publication_allowed is True
+
+
+def test_duplicate_supplied_check_ids_blocked() -> None:
+    gate = next(
+        c
+        for c in load_quality_registry()
+        if c.check_id == "canonical.works.work_id_not_null"
+    )
+    required = tuple(
+        c
+        for c in load_quality_registry()
+        if c.execution_stage is ExecutionStage.PRE_SERVING_BUILD
+        and c.kind is QualityCheckKind.HARD_GATE
+        and c.required
+    )
+    conn = _conn_with_fixture()
+    report = run_quality_checks(
+        DuckDBQualityExecutor(conn),
+        run_id="dup-supplied",
+        stage=ExecutionStage.PRE_SERVING_BUILD,
+        checks=(gate, *required),
+        expectation=_BALANCED,
+    )
+    conn.close()
+    assert report.publication_allowed is False
+    assert any(
+        r.diagnostic_counts.get("duplicate_supplied_check_count") == 1
+        for r in report.results
+    )
+
+
+def test_report_rejects_hard_gate_passed_with_failed_gate() -> None:
+    with pytest.raises(ValueError, match="hard_gate_passed cannot be true"):
+        QualityReport(
+            run_id="x",
+            execution_stage=ExecutionStage.PRE_SERVING_BUILD,
+            results=(
+                QualityResult(
+                    check_id="canonical.works.work_id_not_null",
+                    check_kind=QualityCheckKind.HARD_GATE,
+                    scope=QualityScope.CANONICAL,
+                    model_name="works",
+                    run_id="x",
+                    status=QualityStatus.FAIL,
+                    observed_value=1,
+                    expected_value=0,
+                ),
+            ),
+            hard_gate_passed=True,
+            publication_allowed=True,
+        )
+
+
+def test_compute_blocks_when_any_hard_gate_errors() -> None:
+    required_pass = QualityResult(
+        check_id="canonical.works.work_id_not_null",
+        check_kind=QualityCheckKind.HARD_GATE,
+        scope=QualityScope.CANONICAL,
+        model_name="works",
+        run_id="x",
+        status=QualityStatus.PASS,
+        observed_value=0,
+    )
+    extra_error = QualityResult(
+        check_id="quality.configuration.required_gates",
+        check_kind=QualityCheckKind.HARD_GATE,
+        scope=QualityScope.CANONICAL,
+        model_name="quality_registry",
+        run_id="x",
+        status=QualityStatus.ERROR,
+        error_classification=ErrorClassification.MISSING_INPUT,
+        observed_value=1,
+    )
+    hard_ok, pub_ok = compute_publication_allowed(
+        required_check_ids=("canonical.works.work_id_not_null",),
+        results=(required_pass, extra_error),
+    )
+    assert hard_ok is False
+    assert pub_ok is False

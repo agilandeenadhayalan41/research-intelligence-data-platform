@@ -196,6 +196,7 @@ def quality_check_contracts() -> tuple[QualityCheckContract, ...]:
                 "missing_manifest_mart_count",
                 "unexpected_manifest_mart_count",
                 "duplicate_manifest_mart_count",
+                "invalid_manifest_mart_count",
                 "missing_source_work_count",
                 "inactive_source_work_count",
             ),

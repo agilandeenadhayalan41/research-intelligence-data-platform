@@ -192,6 +192,16 @@ class QualityReport(SettingsModel):
     def consistent_flags(self) -> Self:
         if self.publication_allowed and not self.hard_gate_passed:
             raise ValueError("publication_allowed cannot be true when hard_gate_passed is false")
+        if self.hard_gate_passed:
+            for result in self.results:
+                if (
+                    result.check_kind is QualityCheckKind.HARD_GATE
+                    and result.status in (QualityStatus.FAIL, QualityStatus.ERROR)
+                ):
+                    raise ValueError(
+                        "hard_gate_passed cannot be true when an executed HARD_GATE "
+                        f"is {result.status.value}"
+                    )
         return self
 
 
@@ -207,6 +217,9 @@ def compute_publication_allowed(
     - result.check_kind must be HARD_GATE (wrong kind blocks)
     - result.status must be PASS
 
+    Additionally, no executed HARD_GATE result may be FAIL or ERROR while
+    hard_gate_passed is TRUE (report consistency).
+
     Duplicate result check_ids are rejected (no silent overwrite).
     Missing required results, FAIL, ERROR, or wrong kind → FALSE.
     """
@@ -215,6 +228,11 @@ def compute_publication_allowed(
         if result.check_id in seen:
             return False, False
         seen[result.check_id] = result
+        if (
+            result.check_kind is QualityCheckKind.HARD_GATE
+            and result.status in (QualityStatus.FAIL, QualityStatus.ERROR)
+        ):
+            return False, False
 
     for check_id in required_check_ids:
         result = seen.get(check_id)

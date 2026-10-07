@@ -23,10 +23,12 @@ manifest AS (
   FROM `openalex.staged_gold_mart_manifest` AS m
 ),
 manifest_counts AS (
+  -- Non-NULL mart_ids only; NULL rows counted separately as invalid.
   SELECT
     m.`mart_id`,
     COUNT(*) AS `row_count`
   FROM manifest AS m
+  WHERE m.`mart_id` IS NOT NULL
   GROUP BY m.`mart_id`
 ),
 coverage AS (
@@ -49,7 +51,12 @@ coverage AS (
       SELECT COALESCE(SUM(mc.`row_count` - 1), 0)
       FROM manifest_counts AS mc
       WHERE mc.`row_count` > 1
-    ) AS `duplicate_manifest_mart_count`
+    ) AS `duplicate_manifest_mart_count`,
+    (
+      SELECT COUNT(*)
+      FROM manifest AS m
+      WHERE m.`mart_id` IS NULL
+    ) AS `invalid_manifest_mart_count`
 ),
 contrib_missing AS (
   SELECT
@@ -87,6 +94,7 @@ SELECT
   cov.`missing_manifest_mart_count`,
   cov.`unexpected_manifest_mart_count`,
   cov.`duplicate_manifest_mart_count`,
+  cov.`invalid_manifest_mart_count`,
   cm.`missing_source_work_count`
     + xm.`missing_citation_source_count` AS `missing_source_work_count`,
   ci.`inactive_source_work_count`
