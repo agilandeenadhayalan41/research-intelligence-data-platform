@@ -72,7 +72,12 @@ The runner is **stage-aware**. Callers must pass `stage=`:
 | `PRE_VISIBLE_PUBLICATION` | staged Gold gates only | allowed to make staged consumer outputs visible |
 
 A PRE_SERVING_BUILD PASS must never be treated as final visible publication approval.
-Required hard-gate IDs are **stage-local**.
+Required hard-gate IDs are **stage-local** and always come from the **authoritative registry**.
+
+Caller-supplied `checks=` may omit informational metrics, but **must include every
+required HARD_GATE for the stage**. Omitting a required gate returns a blocked
+report (`quality.configuration.required_gates` ERROR) — never
+`publication_allowed=True`.
 
 ---
 
@@ -91,18 +96,24 @@ Do not interpret a missing table as an empty table.
 
 `gold.deleted_source_work_exclusion` requires:
 
-1. `staged_gold_mart_manifest(mart_id)` with **exact** Step-16 mart inventory membership  
-   (zero-row marts are covered by manifest membership alone — do not infer from contribution row count)
+1. `staged_gold_mart_manifest(mart_id)` with **exact** Step-16 inventory:
+   - derived from `load_gold_registry()` / `GOLD_MART_IDS`
+   - exactly one row per mart_id
+   - `missing_manifest_mart_count`, `unexpected_manifest_mart_count`,
+     `duplicate_manifest_mart_count` must all be `0`
+   - zero-row marts are covered by manifest membership alone
 2. `staged_gold_work_contributions(mart_id, work_id)`
 3. `staged_gold_citation_edges` when `citation_edges` is in the manifest
 4. Every contribution / citation **SOURCE** `work_id` must resolve to canonical `works` **and** be `ACTIVE`
 
-Safe diagnostics:
+Safe diagnostics also include:
 
 - `missing_source_work_count`
 - `inactive_source_work_count`
 
-Citation **TARGET** may still be ACTIVE, DELETED, or ABSENT.
+DuckDB SEMANTIC_ONLY and BigQuery SQL contracts share the same exact-membership
+rule (BQ uses an explicit `UNNEST` expected-mart set). Citation **TARGET** may
+still be ACTIVE, DELETED, or ABSENT.
 
 ---
 

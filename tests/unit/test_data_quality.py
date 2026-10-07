@@ -517,7 +517,9 @@ def test_healthy_fixture_allows_both_stages() -> None:
         r.check_id for r in visible.results
     }
     gold = _result(visible, "gold.deleted_source_work_exclusion")
-    assert gold.diagnostic_counts["manifest_mart_count"] == 9
+    assert gold.diagnostic_counts["missing_manifest_mart_count"] == 0
+    assert gold.diagnostic_counts["unexpected_manifest_mart_count"] == 0
+    assert gold.diagnostic_counts["duplicate_manifest_mart_count"] == 0
 
 
 def test_missing_relationship_table_errors() -> None:
@@ -586,7 +588,8 @@ def test_partial_gold_manifest_errors() -> None:
     )
     conn.close()
     r = _result(report, "gold.deleted_source_work_exclusion")
-    assert r.status is QualityStatus.ERROR
+    assert r.status is QualityStatus.FAIL
+    assert r.diagnostic_counts["missing_manifest_mart_count"] == 1
     assert report.publication_allowed is False
 
 
@@ -633,3 +636,121 @@ def test_stage_local_required_ids() -> None:
         for c in load_quality_registry()
         if c.check_id in {r.check_id for r in serving.results}
     )
+
+
+def test_checks_filter_cannot_omit_required_hard_gates() -> None:
+    one = next(
+        c
+        for c in load_quality_registry()
+        if c.check_id == "canonical.works.work_id_not_null"
+    )
+    conn = _conn_with_fixture()
+    report = run_quality_checks(
+        DuckDBQualityExecutor(conn),
+        run_id="omit-required",
+        stage=ExecutionStage.PRE_SERVING_BUILD,
+        checks=(one,),
+        expectation=_BALANCED,
+    )
+    conn.close()
+    assert report.publication_allowed is False
+    assert report.hard_gate_passed is False
+    assert any(
+        r.check_id == "quality.configuration.required_gates"
+        and r.status is QualityStatus.ERROR
+        for r in report.results
+    )
+
+
+def test_checks_filter_may_omit_informational_metrics() -> None:
+    required = tuple(
+        c
+        for c in load_quality_registry()
+        if c.execution_stage is ExecutionStage.PRE_SERVING_BUILD
+        and c.kind is QualityCheckKind.HARD_GATE
+        and c.required
+    )
+    assert len(required) == 6
+    conn = _conn_with_fixture()
+    report = run_quality_checks(
+        DuckDBQualityExecutor(conn),
+        run_id="gates-only",
+        stage=ExecutionStage.PRE_SERVING_BUILD,
+        checks=required,
+        expectation=_BALANCED,
+    )
+    conn.close()
+    assert report.publication_allowed is True
+    assert all(r.check_kind is QualityCheckKind.HARD_GATE for r in report.results)
+
+
+def test_omit_visible_publication_gate_blocked() -> None:
+    # Supply only a PRE_SERVING informational metric; stage filter yields empty
+    # PRE_VISIBLE selection → required gold gate missing → blocked.
+    info = next(
+        c
+        for c in load_quality_registry()
+        if c.check_id == "metric.active_works.missing_doi"
+    )
+    conn = _conn_with_fixture()
+    report = run_quality_checks(
+        DuckDBQualityExecutor(conn),
+        run_id="omit-gold-gate",
+        stage=ExecutionStage.PRE_VISIBLE_PUBLICATION,
+        checks=(info,),
+    )
+    conn.close()
+    assert report.publication_allowed is False
+    assert any(
+        r.check_id == "quality.configuration.required_gates" for r in report.results
+    )
+
+
+def test_duplicate_manifest_mart_id_fails() -> None:
+    conn = _conn_with_fixture()
+    conn.execute(
+        "INSERT INTO staged_gold_mart_manifest VALUES ('research_discovery')"
+    )
+    report = run_quality_checks(
+        DuckDBQualityExecutor(conn),
+        run_id="dup-manifest",
+        stage=ExecutionStage.PRE_VISIBLE_PUBLICATION,
+    )
+    conn.close()
+    r = _result(report, "gold.deleted_source_work_exclusion")
+    assert r.status is QualityStatus.FAIL
+    assert r.diagnostic_counts["duplicate_manifest_mart_count"] == 1
+
+
+def test_unexpected_manifest_mart_id_fails() -> None:
+    conn = _conn_with_fixture()
+    conn.execute("INSERT INTO staged_gold_mart_manifest VALUES ('not_a_real_mart')")
+    report = run_quality_checks(
+        DuckDBQualityExecutor(conn),
+        run_id="unexpected-mart",
+        stage=ExecutionStage.PRE_VISIBLE_PUBLICATION,
+    )
+    conn.close()
+    r = _result(report, "gold.deleted_source_work_exclusion")
+    assert r.status is QualityStatus.FAIL
+    assert r.diagnostic_counts["unexpected_manifest_mart_count"] == 1
+
+
+def test_gold_mart_ids_match_step16_registry_exactly() -> None:
+    from research_platform.analytics.gold.registry import load_gold_registry
+
+    assert set(GOLD_MART_IDS) == {m.mart_id for m in load_gold_registry()}
+    assert tuple(GOLD_MART_IDS) == tuple(m.mart_id for m in load_gold_registry())
+
+
+def test_bigquery_gold_sql_has_exact_coverage_diagnostics() -> None:
+    text = (
+        REPO_ROOT
+        / "sql/bigquery/openalex/quality/active_gold_deleted_work_exclusion.sql"
+    ).read_text()
+    assert "missing_manifest_mart_count" in text
+    assert "unexpected_manifest_mart_count" in text
+    assert "duplicate_manifest_mart_count" in text
+    assert "UNNEST" in text
+    for mart_id in GOLD_MART_IDS:
+        assert mart_id in text
