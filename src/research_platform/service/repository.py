@@ -12,11 +12,16 @@ from research_platform.service.contracts import (
     WorkMetadataRequest,
 )
 from research_platform.service.models import (
+    MAX_PUBLICATION_YEAR,
+    MIN_PUBLICATION_YEAR,
     FreshnessMetadata,
     FreshnessStatus,
     JournalMetricsRecord,
     PublisherSummaryRecord,
     PublisherTopicMetricRecord,
+    ServiceError,
+    ServiceErrorCode,
+    ServiceErrorException,
     WorkMetadataRecord,
 )
 from research_platform.service.pagination import decode_cursor, encode_cursor, page_slice
@@ -117,13 +122,7 @@ class InMemoryConsumerRepository:
                 expected_capability_id="research_discovery",
             )
             after_work_id = keys.get("last_work_id")
-            if not isinstance(after_work_id, str) or not after_work_id:
-                from research_platform.service.models import (
-                    ServiceError,
-                    ServiceErrorCode,
-                    ServiceErrorException,
-                )
-
+            if not isinstance(after_work_id, str) or not after_work_id.strip():
                 raise ServiceErrorException(
                     ServiceError(
                         code=ServiceErrorCode.INVALID_CURSOR,
@@ -175,38 +174,7 @@ class InMemoryConsumerRepository:
                 request.page.cursor,
                 expected_capability_id="publisher_topic_analytics",
             )
-            if "last_publication_year" not in keys or "last_topic_id" not in keys:
-                from research_platform.service.models import (
-                    ServiceError,
-                    ServiceErrorCode,
-                    ServiceErrorException,
-                )
-
-                raise ServiceErrorException(
-                    ServiceError(
-                        code=ServiceErrorCode.INVALID_CURSOR,
-                        message="cursor missing sort keys",
-                        capability_id="publisher_topic_analytics",
-                        field="cursor",
-                    )
-                )
-            after_year = keys["last_publication_year"]
-            after_topic = keys["last_topic_id"]
-            if after_topic is not None and not isinstance(after_topic, str):
-                from research_platform.service.models import (
-                    ServiceError,
-                    ServiceErrorCode,
-                    ServiceErrorException,
-                )
-
-                raise ServiceErrorException(
-                    ServiceError(
-                        code=ServiceErrorCode.INVALID_CURSOR,
-                        message="cursor topic_id invalid",
-                        capability_id="publisher_topic_analytics",
-                        field="cursor",
-                    )
-                )
+            after_year, after_topic = parse_publisher_topic_cursor_keys(keys)
 
         pid = request.publisher_id.strip()
         rows = [
@@ -224,9 +192,11 @@ class InMemoryConsumerRepository:
         )
 
         if after_year is not _MISSING:
+            assert isinstance(after_topic, str)
+            year_key: int | None = after_year  # type: ignore[assignment]
             filtered: list[PublisherTopicMetricRecord] = []
             for r in rows:
-                if _after_topic_cursor(r, after_year, after_topic):  # type: ignore[arg-type]
+                if _after_topic_cursor(r, year_key, after_topic):
                     filtered.append(r)
             rows = filtered
 
@@ -245,12 +215,6 @@ class InMemoryConsumerRepository:
 
     def _require_published(self) -> None:
         if not self._published:
-            from research_platform.service.models import (
-                ServiceError,
-                ServiceErrorCode,
-                ServiceErrorException,
-            )
-
             raise ServiceErrorException(
                 ServiceError(
                     code=ServiceErrorCode.QUALITY_NOT_PUBLISHED,
@@ -262,6 +226,58 @@ class InMemoryConsumerRepository:
 
 
 _MISSING = object()
+
+
+def parse_publisher_topic_cursor_keys(keys: dict[str, object]) -> tuple[int | None, str]:
+    """Validate publisher_topic_analytics cursor sort keys.
+
+    last_publication_year: int in [1000, 3000] or NULL (NULLS LAST bucket).
+    bool is rejected (bool is a subclass of int).
+    last_topic_id: non-empty string; NULL/empty invalid.
+    """
+    if "last_publication_year" not in keys or "last_topic_id" not in keys:
+        raise ServiceErrorException(
+            ServiceError(
+                code=ServiceErrorCode.INVALID_CURSOR,
+                message="cursor missing sort keys",
+                capability_id="publisher_topic_analytics",
+                field="cursor",
+            )
+        )
+    year = keys["last_publication_year"]
+    topic = keys["last_topic_id"]
+
+    if year is not None:
+        # bool is a subclass of int — reject explicitly.
+        if isinstance(year, bool) or not isinstance(year, int):
+            raise ServiceErrorException(
+                ServiceError(
+                    code=ServiceErrorCode.INVALID_CURSOR,
+                    message="cursor last_publication_year invalid",
+                    capability_id="publisher_topic_analytics",
+                    field="cursor",
+                )
+            )
+        if year < MIN_PUBLICATION_YEAR or year > MAX_PUBLICATION_YEAR:
+            raise ServiceErrorException(
+                ServiceError(
+                    code=ServiceErrorCode.INVALID_CURSOR,
+                    message="cursor last_publication_year out of range",
+                    capability_id="publisher_topic_analytics",
+                    field="cursor",
+                )
+            )
+
+    if not isinstance(topic, str) or not topic.strip():
+        raise ServiceErrorException(
+            ServiceError(
+                code=ServiceErrorCode.INVALID_CURSOR,
+                message="cursor last_topic_id invalid",
+                capability_id="publisher_topic_analytics",
+                field="cursor",
+            )
+        )
+    return year, topic
 
 
 def _discovery_matches(work: WorkMetadataRecord, request: ResearchDiscoveryRequest) -> bool:
@@ -330,7 +346,7 @@ def _topic_metric_matches(
 def _after_topic_cursor(
     row: PublisherTopicMetricRecord,
     after_year: int | None,
-    after_topic: str | None,
+    after_topic: str,
 ) -> bool:
     """Strictly after (publication_year ASC NULLS LAST, topic_id ASC)."""
     # NULLS LAST: non-null years come first.
@@ -344,7 +360,6 @@ def _after_topic_cursor(
         if row.publication_year != after_year:
             return row.publication_year > after_year
     # same year bucket (including both NULL): compare topic_id
-    assert after_topic is not None
     return row.topic_id > after_topic
 
 
