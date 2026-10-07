@@ -14,6 +14,8 @@ class Warehouse(ABC):
         """Run a trusted query with bound parameters, returning an Arrow table.
 
         SQL dialects and parameter naming remain adapter-specific. Never format
-        untrusted values into SQL. Writes and migrations need separate contracts.
+        untrusted values into SQL. Writes, migrations, and pipeline-control
+        claims belong on separate contracts (see ``ControlStore``), not this
+        read query interface.
         """
         raise NotImplementedError
