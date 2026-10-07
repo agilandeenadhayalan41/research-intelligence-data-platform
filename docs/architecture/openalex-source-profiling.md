@@ -73,6 +73,12 @@ rejected. They are never interpreted as unlimited.
   elements), observed JSON types, present, missing, and null counts, nested
   fields, and fields with observed nulls or missing values. Fields where no
   null/missing value was observed have `nullable = null` (unknown), not `false`.
+- Keys outside `[A-Za-z0-9_$@:-]` are JSON-quoted (for example `a["x.y"]`), so
+  paths stay unambiguous. Empty keys are quoted the same way.
+- `abstract_inverted_index` uses abstract words as keys, so those keys are data,
+  not schema. It is reported as a `map`, and its values are collapsed into
+  `abstract_inverted_index{value}`. At most 10,000 distinct field paths are
+  tracked; beyond that the profile fails with `OpenAlexProfileLimitError`.
 
 ### Parquet
 

@@ -274,8 +274,9 @@ def _profile_jsonl(
         f"Schema, nesting, types, and nullability come from at most "
         f"{limits.max_profile_records} leading records; not observing nulls does not "
         "prove a field is non-nullable.",
-        "Field paths use '.' for object members and '[]' for array elements; source "
-        "keys containing those characters are ambiguous.",
+        "Field paths use '.' for object members and '[]' for array elements; unusual "
+        "keys are JSON-quoted, and abstract_inverted_index word keys are collapsed "
+        "into one map value path.",
     ]
     if not sample.reached_eof:
         limitations.append(

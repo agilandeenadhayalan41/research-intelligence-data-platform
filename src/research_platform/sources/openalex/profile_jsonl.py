@@ -14,9 +14,12 @@ from research_platform.sources.openalex.profile_models import (
     OpenAlexEmptySourceError,
     OpenAlexMalformedJSONLError,
     OpenAlexProfileLimitError,
+    child_path,
 )
 
 _MAX_FIELD_PATHS = 10_000
+# Objects whose keys are data rather than schema (OpenAlex abstract word index).
+DYNAMIC_KEY_OBJECTS = frozenset({"abstract_inverted_index"})
 
 
 @dataclass(frozen=True)
@@ -149,22 +152,30 @@ class _Observer:
         self._nulls: dict[str, int] = defaultdict(int)
         self._object_counts: dict[str, int] = defaultdict(int)
         self._parents: dict[str, str] = {}
-        self._array_elements: set[str] = set()
+        self._repeated: set[str] = set()
+        self._maps: set[str] = set()
 
     def observe_record(self, record: dict[str, Any]) -> None:
         stack: list[tuple[str, object]] = [("", record)]
         while stack:
             path, value = stack.pop()
-            if isinstance(value, dict):
+            if isinstance(value, dict) and path in DYNAMIC_KEY_OBJECTS:
+                self._maps.add(path)
+                value_path = f"{path}{{value}}"
+                self._repeated.add(value_path)
+                for child in value.values():
+                    self._record(value_path, child)
+                    stack.append((value_path, child))
+            elif isinstance(value, dict):
                 self._object_counts[path] += 1
                 for key, child in value.items():
-                    child_path = f"{path}.{key}" if path else key
-                    self._record(child_path, child)
-                    self._parents.setdefault(child_path, path)
-                    stack.append((child_path, child))
+                    member_path = child_path(path, key)
+                    self._record(member_path, child)
+                    self._parents.setdefault(member_path, path)
+                    stack.append((member_path, child))
             elif isinstance(value, list):
                 element_path = f"{path}[]"
-                self._array_elements.add(element_path)
+                self._repeated.add(element_path)
                 for element in value:
                     self._record(element_path, element)
                     stack.append((element_path, element))
@@ -182,14 +193,14 @@ class _Observer:
         for path in sorted(self._types):
             types = self._types[path]
             missing = None
-            if path not in self._array_elements:
+            if path not in self._repeated:
                 missing = self._object_counts[self._parents[path]] - self._present[path]
             nulls = self._nulls[path]
             profiles.append(
                 FieldProfile(
                     path=path,
                     data_type="|".join(sorted(types)),
-                    kind=_kind(types),
+                    kind="map" if path in self._maps else _kind(types),
                     nullable=True if nulls or missing else None,
                     evidence=EvidenceType.SAMPLED_OBSERVATION,
                     sampled_present_count=self._present[path],

@@ -275,6 +275,47 @@ def test_plain_jsonl_stream_is_sampled() -> None:
     ]
 
 
+def test_abstract_inverted_index_keys_are_collapsed_not_treated_as_schema() -> None:
+    records = [
+        {"id": f"W{index}", "abstract_inverted_index": {f"word{index}_{n}": [n] for n in range(200)}}
+        for index in range(100)
+    ]
+    sample = sample_jsonl(
+        io.BytesIO(jsonl(records)), compression=None, max_records=100, max_decoded_bytes=10_000_000
+    )
+    assert [(item.path, item.kind) for item in sample.fields] == [
+        ("abstract_inverted_index", "map"),
+        ("abstract_inverted_index{value}", "list"),
+        ("abstract_inverted_index{value}[]", "scalar"),
+        ("id", "scalar"),
+    ]
+    value = sample.fields[1]
+    assert (value.sampled_present_count, value.sampled_missing_count) == (20_000, None)
+
+
+def test_unusual_keys_are_quoted_and_unambiguous() -> None:
+    sample = sample_jsonl(
+        io.BytesIO(b'{"": 1, "a.b": 2, "a": {"b": 3, "c[]": 4}}\n'),
+        compression=None,
+        max_records=100,
+        max_decoded_bytes=1_000,
+    )
+    paths = {item.path: item for item in sample.fields}
+    assert set(paths) == {'[""]', '["a.b"]', "a", "a.b", 'a["c[]"]'}
+    assert all(item.sampled_missing_count == 0 for item in paths.values())
+
+
+def test_field_path_limit_is_explicit() -> None:
+    record = {f"k{index}": index for index in range(10_001)}
+    with pytest.raises(OpenAlexProfileLimitError):
+        sample_jsonl(
+            io.BytesIO(jsonl([record])),
+            compression=None,
+            max_records=1,
+            max_decoded_bytes=1_000_000,
+        )
+
+
 @pytest.mark.parametrize(
     "body",
     [

@@ -1,5 +1,7 @@
 """Typed limits, evidence classes, reports, and errors for OpenAlex source profiling."""
 
+import json
+import re
 from datetime import date
 from enum import StrEnum
 from typing import Literal
@@ -81,6 +83,15 @@ class ProfilingLimits(BaseModel):
 
 
 FieldKind = Literal["scalar", "struct", "list", "map"]
+_PLAIN_KEY = re.compile(r"[A-Za-z0-9_$@:-]+")
+
+
+def child_path(parent: str, key: str) -> str:
+    """Join an object member path; unusual keys are JSON-quoted to stay unambiguous."""
+    component = key if _PLAIN_KEY.fullmatch(key) else f"[{json.dumps(key)}]"
+    if not parent:
+        return component
+    return f"{parent}{component}" if component.startswith("[") else f"{parent}.{component}"
 
 
 class FieldProfile(BaseModel):

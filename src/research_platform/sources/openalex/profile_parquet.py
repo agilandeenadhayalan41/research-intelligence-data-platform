@@ -11,6 +11,7 @@ from research_platform.sources.openalex.profile_models import (
     EvidenceType,
     FieldProfile,
     OpenAlexMalformedParquetError,
+    child_path,
 )
 
 PARQUET_MAGIC = b"PAR1"
@@ -52,13 +53,13 @@ def inspect_parquet(path: Path, *, max_records: int) -> ParquetInspection:
                     batch = batch.slice(0, max_records)
                     sampled_records = batch.num_rows
                     for index, field in enumerate(schema):
-                        sampled_counts[field.name] = (
+                        sampled_counts[child_path("", field.name)] = (
                             batch.num_rows,
                             batch.column(index).null_count,
                         )
             fields: list[FieldProfile] = []
             for field in schema:
-                _walk(field.name, field, fields, sampled_counts)
+                _walk(child_path("", field.name), field, fields, sampled_counts)
             return ParquetInspection(
                 row_count=metadata.num_rows,
                 row_group_count=metadata.num_row_groups,
@@ -121,7 +122,7 @@ def _walk(
         kind = "struct"
         type_name = "struct"
         children = [
-            (f"{path}.{data_type.field(index).name}", data_type.field(index))
+            (child_path(path, data_type.field(index).name), data_type.field(index))
             for index in range(data_type.num_fields)
         ]
     elif pa.types.is_map(data_type):
@@ -156,5 +157,5 @@ def _walk(
             sampled_null_count=nulls,
         )
     )
-    for child_path, child in children:
-        _walk(child_path, child, out, {})
+    for nested_path, child in children:
+        _walk(nested_path, child, out, {})
