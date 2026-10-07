@@ -6,6 +6,9 @@ from pathlib import Path
 
 import yaml
 
+from research_platform.benchmarks.canonical_contract import (
+    assert_registry_matches_canonical_contract,
+)
 from research_platform.benchmarks.models import (
     QueryCategory,
     QueryPattern,
@@ -28,6 +31,7 @@ def load_query_pattern_registry(
         raise ValueError("query pattern registry must be a YAML mapping")
     registry = QueryPatternRegistry.model_validate(raw)
     assert_required_categories(registry)
+    assert_registry_matches_canonical_contract(registry)
     return registry
 
 

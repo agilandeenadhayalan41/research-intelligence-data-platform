@@ -158,3 +158,75 @@ def test_no_optional_operational_store_without_measured() -> None:
             assert pattern.evidence_status is EvidenceStatus.MEASURED
         # Step 14 has no measured operational-store evidence.
         assert pattern.placement is not Placement.OPTIONAL_OPERATIONAL_STORE
+
+
+def test_issn_lookup_is_unresolved_canonical_gap() -> None:
+    import re
+
+    registry = load_query_pattern_registry()
+    issn = next(p for p in registry.patterns if p.category is QueryCategory.ISSN_LOOKUP)
+    assert issn.placement is Placement.UNRESOLVED
+    assert issn.required_fields == ()
+    shape = issn.logical_query_shape
+    assert re.search(r"\bsources\.issn\b", shape, re.I) is None
+    assert re.search(r"\bsources\.eissn\b", shape, re.I) is None
+    assert "issn_l" in issn.placement_rationale or "issn_l" in issn.notes
+
+
+def test_license_metric_uses_primary_location_not_min_max() -> None:
+    registry = load_query_pattern_registry()
+    pattern = next(
+        p for p in registry.patterns if p.category is QueryCategory.PUBLISHER_TOPIC_LICENSE_YEAR
+    )
+    shape = pattern.logical_query_shape.lower()
+    assert "is_primary" in shape
+    assert "min(license)" not in shape
+    assert "max(license)" not in shape
+    assert "primary_location_license" in pattern.expected_result_grain
+    assert pattern.candidate_materialization == "publisher-topic-license-year-counts"
+
+
+def test_materialization_candidates_are_referenced_consistently() -> None:
+    registry = load_query_pattern_registry()
+    candidate_ids = {c.candidate_id for c in registry.materialization_candidates}
+    for pattern in registry.patterns:
+        if pattern.candidate_materialization is not None:
+            assert pattern.candidate_materialization in candidate_ids
+    topic = next(
+        p for p in registry.patterns if p.category is QueryCategory.PUBLISHER_TOPIC_COUNTS
+    )
+    assert topic.candidate_materialization == "publisher-topic-counts"
+
+
+def test_required_fields_and_entities_are_canonical() -> None:
+    from research_platform.benchmarks.canonical_contract import (
+        CANONICAL_ENTITIES,
+        CANONICAL_FIELDS,
+        CANONICAL_RELATIONSHIPS,
+    )
+
+    registry = load_query_pattern_registry()
+    for pattern in registry.patterns:
+        assert set(pattern.relevant_entities) <= CANONICAL_ENTITIES
+        assert set(pattern.required_fields) <= CANONICAL_FIELDS
+        rels = {item.relationship for item in pattern.relevant_relationships}
+        assert rels <= CANONICAL_RELATIONSHIPS
+
+
+def test_loader_rejects_invented_issn_columns() -> None:
+    from research_platform.benchmarks.canonical_contract import (
+        assert_registry_matches_canonical_contract,
+    )
+
+    registry = load_query_pattern_registry()
+    broken = registry.patterns[0].model_copy(
+        update={
+            "pattern_id": "broken-issn-shape",
+            "logical_query_shape": "SELECT * FROM sources WHERE sources.issn = :issn",
+        }
+    )
+    bad = registry.model_copy(
+        update={"patterns": (*registry.patterns, broken)}
+    )
+    with pytest.raises(ValueError, match="forbidden fragment"):
+        assert_registry_matches_canonical_contract(bad)

@@ -49,14 +49,40 @@ materialization_candidates:
     expected_reuse: publisher analytics
     freshness_requirement: daily-to-weekly acceptable until measured
 
+  - candidate_id: publisher-topic-counts
+    name: Publisher × topic article counts
+    input_grain: works × work_topics × publisher (ACTIVE works only)
+    output_grain: one row per publisher_id + topic_id
+    refresh_dependency: works, work_topics, publisher dims
+    expected_reuse: publisher-topic analytics without year breakdown
+    freshness_requirement: daily-to-weekly acceptable until measured
+    notes: >-
+      Distinct from the year-grained candidate. Rolling up year grains is
+      allowed only when documented as SUM(work_count) across years.
+
   - candidate_id: publisher-topic-year-counts
     name: Publisher × topic × year article counts
     input_grain: works × work_topics × publisher
     output_grain: one row per publisher_id + topic_id + publication_year
     refresh_dependency: works, work_topics, publisher dims
-    expected_reuse: publisher-topic analytics; license/year extensions
+    expected_reuse: publisher-topic analytics with year; can roll up to topic-only
     freshness_requirement: daily-to-weekly acceptable until measured
     notes: Aggregate topics and publishers independently to avoid author×topic fan-out.
+
+  - candidate_id: publisher-topic-license-year-counts
+    name: Publisher × topic × primary-location license × year counts
+    input_grain: >-
+      ACTIVE works × work_topics × primary work_locations.license
+      (is_primary = true only)
+    output_grain: >-
+      one row per publisher_id + topic_id + primary_location_license
+      + publication_year (NULL license bucket when no primary license)
+    refresh_dependency: works, work_topics, work_locations (primary only)
+    expected_reuse: license-aware publisher-topic dashboards
+    freshness_requirement: daily-to-weekly acceptable until measured
+    notes: >-
+      Metric is PRIMARY LOCATION LICENSE only. Never MIN/MAX(license) across
+      all locations. One Work contributes to at most one license bucket.
 
   - candidate_id: publication-trends
     name: Publication trends by year
@@ -82,6 +108,7 @@ patterns:
     expected_result_grain: zero or one Work row (never many for a single normalized DOI)
     relevant_entities: [works]
     relevant_relationships: []
+    required_fields: [works.work_id, works.doi, works.activity_state]
     parameters:
       - name: doi
         description: "Normalized DOI string (lowercase, without doi prefix)"
@@ -131,6 +158,7 @@ patterns:
     expected_result_grain: zero or one Work row keyed by work_id
     relevant_entities: [works]
     relevant_relationships: []
+    required_fields: [works.work_id, works.activity_state]
     parameters:
       - {name: work_id, description: Normalized OpenAlex Work ID (W…), value_type: string, required: true}
     filters:
@@ -161,36 +189,54 @@ patterns:
 
   - pattern_id: issn-source-lookup
     name: eISSN/ISSN → Source lookup
-    capability: Resolve ISSN or eISSN to Source (journal) metadata
+    capability: >-
+      Resolve normalized ISSN or eISSN to Source (journal) metadata via a
+      future canonical source-identifier mapping (not ISSN-L alone)
     category: ISSN_LOOKUP
-    expected_result_grain: zero, one, or rarely many Source rows if ISSN collisions exist
+    expected_result_grain: >-
+      zero, one, or many Source rows once identifier mapping exists;
+      multiplicity must be explicit in the API contract
     relevant_entities: [sources]
     relevant_relationships: []
+    required_fields: []
     parameters:
       - {name: issn, description: Normalized ISSN/eISSN (8 digits with hyphen), value_type: string, required: true}
     filters:
-      - "sources.issn = :issn OR sources.eissn = :issn"
+      - "UNRESOLVED — requires future source-identifier mapping for ISSN/eISSN"
     active_work_filter: NOT_APPLICABLE
     freshness_requirement: UNKNOWN
     expected_frequency: UNKNOWN
     expected_concurrency: null
-    expected_result_size: 0–N Source rows (document multiplicity)
+    expected_result_size: 0–N Source rows once implementable
     known_scale: UNKNOWN
-    assumed_scale: Small Sources dimension
+    assumed_scale: Small Sources dimension once identifiers exist
     aggregation_risk: NONE
     fanout_risk: NONE
     candidate_materialization: null
-    placement: BIGQUERY_PLUS_CACHE
+    placement: UNRESOLVED
     placement_rationale: >-
-      Dimension lookup; evaluate BigQuery + cache first. Multiplicity must be
-      surfaced to the API contract rather than silently collapsed.
-    evidence_status: ASSUMED
+      Canonical Source currently exposes only issn_l. ISSN-L is not a substitute
+      for every ISSN/eISSN value. Faithful eISSN/ISSN lookup needs an approved
+      canonical extension or source-identifier relationship. Step 15 must not
+      invent sources.issn / sources.eissn.
+    evidence_status: UNKNOWN
     logical_query_shape: |
-      SELECT s.*
-      FROM sources AS s
-      WHERE s.issn = :issn OR s.eissn = :issn
+      -- LOGICAL REQUIREMENT (not executable against current canonical Source):
+      -- Resolve :issn against a future canonical source-identifier mapping that
+      -- associates ISSN and/or eISSN values with source_id.
+      -- Do NOT invent Source columns for raw ISSN/eISSN values.
+      -- Do NOT silently substitute the ISSN-L field for this capability.
+      --
+      -- When the mapping exists, expected shape:
+      -- SELECT s.*
+      -- FROM sources AS s
+      -- JOIN <future_source_identifiers> AS si ON si.source_id = s.source_id
+      -- WHERE si.identifier_type IN ('issn', 'eissn')
+      --   AND si.normalized_value = :issn
     cache_key_hint: "source:issn:{normalized_issn}"
-    notes: Does not invent uniqueness; consumers must handle 0/1/N.
+    notes: >-
+      Canonical gap: Source.issn_l exists today; ISSN/eISSN identity mapping
+      does not. Keep category registered; placement stays UNRESOLVED.
 
   - pattern_id: publisher-lookup
     name: Publisher ID → Publisher lookup
@@ -199,6 +245,7 @@ patterns:
     expected_result_grain: zero or one Publisher row
     relevant_entities: [publishers]
     relevant_relationships: []
+    required_fields: [publishers.publisher_id]
     parameters:
       - {name: publisher_id, description: Normalized OpenAlex Publisher ID (P…), value_type: string, required: true}
     filters:
@@ -229,6 +276,13 @@ patterns:
     category: AUTHORS_PER_JOURNAL
     expected_result_grain: one row per source_id (journal) with unique_author_count
     relevant_entities: [works, authors, sources]
+    required_fields:
+      - works.work_id
+      - works.activity_state
+      - work_authors.work_id
+      - work_authors.author_id
+      - work_locations.work_id
+      - work_locations.source_id
     relevant_relationships:
       - relationship: work_authors
         cardinality: "1:N"
@@ -279,6 +333,12 @@ patterns:
     category: AUTHORS_PER_PUBLISHER
     expected_result_grain: one row per publisher_id with unique_author_count
     relevant_entities: [works, authors, publishers]
+    required_fields:
+      - works.work_id
+      - works.activity_state
+      - works.primary_publisher_id
+      - work_authors.work_id
+      - work_authors.author_id
     relevant_relationships:
       - relationship: work_authors
         cardinality: "1:N"
@@ -324,6 +384,12 @@ patterns:
     category: PUBLISHER_TOPIC_COUNTS
     expected_result_grain: one row per publisher_id + topic_id
     relevant_entities: [works, publishers, topics]
+    required_fields:
+      - works.work_id
+      - works.activity_state
+      - works.primary_publisher_id
+      - work_topics.work_id
+      - work_topics.topic_id
     relevant_relationships:
       - relationship: work_topics
         cardinality: "N:M"
@@ -343,7 +409,7 @@ patterns:
     assumed_scale: Topics per publisher can be wide
     aggregation_risk: HIGH
     fanout_risk: HIGH
-    candidate_materialization: publisher-topic-year-counts
+    candidate_materialization: publisher-topic-counts
     placement: BIGQUERY_ANALYTICAL
     placement_rationale: Analytical relationship aggregate belongs in BigQuery; materialize if reused.
     evidence_status: ARCHITECTURE
@@ -356,62 +422,87 @@ patterns:
       WHERE w.activity_state = 'ACTIVE'
         AND w.primary_publisher_id = :publisher_id
       GROUP BY w.primary_publisher_id, wt.topic_id
+    notes: >-
+      Year-grained candidate publisher-topic-year-counts can roll up to this
+      grain via SUM(work_count) GROUP BY publisher_id, topic_id when that
+      rollup is intentional.
 
   - pattern_id: publisher-topic-license-year
-    name: Publisher × topic × license × year counts
-    capability: Count ACTIVE works by publisher, topic, license, and publication year
+    name: Publisher × topic × primary-location license × year counts
+    capability: >-
+      Count ACTIVE works by publisher, topic, PRIMARY location license
+      (work_locations.is_primary = true), and publication year
     category: PUBLISHER_TOPIC_LICENSE_YEAR
-    expected_result_grain: one row per publisher_id + topic_id + license + publication_year
+    expected_result_grain: >-
+      one row per publisher_id + topic_id + primary_location_license
+      + publication_year (NULL/UNKNOWN license bucket when no primary license)
     relevant_entities: [works, publishers, topics]
+    required_fields:
+      - works.work_id
+      - works.activity_state
+      - works.primary_publisher_id
+      - works.publication_year
+      - work_topics.work_id
+      - work_topics.topic_id
+      - work_locations.work_id
+      - work_locations.license
+      - work_locations.is_primary
     relevant_relationships:
       - relationship: work_topics
         cardinality: "N:M"
         join_expansion_risk: HIGH
       - relationship: work_locations
         cardinality: "1:N"
-        join_expansion_risk: MEDIUM
-        notes: License may come from locations; aggregate locations independently.
+        join_expansion_risk: LOW
+        notes: >-
+          Use only is_primary = true for license. Do not MIN/MAX across
+          locations; one Work maps to at most one primary license bucket.
     parameters:
       - {name: publisher_id, description: OpenAlex Publisher ID (P…), value_type: string, required: false}
       - {name: year_from, description: Inclusive publication year lower bound, value_type: integer, required: false}
       - {name: year_to, description: Inclusive publication year upper bound, value_type: integer, required: false}
     filters:
       - "works.activity_state = ACTIVE"
+      - "work_locations.is_primary = true for license (LEFT JOIN; NULL if absent)"
       - "optional publisher_id / year bounds"
     active_work_filter: REQUIRED_ACTIVE
     freshness_requirement: daily-to-weekly assumed
     expected_frequency: OCCASIONAL
     expected_concurrency: null
-    expected_result_size: many rows at publisher×topic×license×year grain
+    expected_result_size: many rows at publisher×topic×primary_license×year grain
     known_scale: UNKNOWN
     assumed_scale: High cardinality combination grain
     aggregation_risk: HIGH
-    fanout_risk: HIGH
-    candidate_materialization: publisher-topic-year-counts
+    fanout_risk: MEDIUM
+    candidate_materialization: publisher-topic-license-year-counts
     placement: MATERIALIZED_AGGREGATE
     placement_rationale: >-
       Expensive multi-dimension aggregate; candidate for materialization after
       reuse evidence. Until then BigQuery analytical scans are expected.
     evidence_status: ARCHITECTURE
     logical_query_shape: |
-      WITH work_license AS (
-        SELECT work_id, MIN(license) AS license
+      WITH primary_license AS (
+        SELECT work_id, license AS primary_location_license
         FROM work_locations
-        GROUP BY work_id
+        WHERE is_primary = TRUE
       )
       SELECT w.primary_publisher_id AS publisher_id,
              wt.topic_id,
-             wl.license,
+             pl.primary_location_license,
              w.publication_year,
              COUNT(DISTINCT w.work_id) AS work_count
       FROM works AS w
       JOIN work_topics AS wt ON wt.work_id = w.work_id
-      LEFT JOIN work_license AS wl ON wl.work_id = w.work_id
+      LEFT JOIN primary_license AS pl ON pl.work_id = w.work_id
       WHERE w.activity_state = 'ACTIVE'
         AND (:publisher_id IS NULL OR w.primary_publisher_id = :publisher_id)
         AND (:year_from IS NULL OR w.publication_year >= :year_from)
         AND (:year_to IS NULL OR w.publication_year <= :year_to)
       GROUP BY 1, 2, 3, 4
+    notes: >-
+      Metric = PRIMARY LOCATION LICENSE. Missing primary license yields a NULL
+      license bucket (document as UNKNOWN to consumers). Not "all observed
+      licenses" (that would allow one Work in multiple license buckets).
 
   - pattern_id: institution-topic-relationships
     name: Institution × topic relationships
@@ -419,6 +510,13 @@ patterns:
     category: INSTITUTION_TOPIC
     expected_result_grain: one row per institution_id + topic_id
     relevant_entities: [works, institutions, topics]
+    required_fields:
+      - works.work_id
+      - works.activity_state
+      - work_author_institutions.work_id
+      - work_author_institutions.institution_id
+      - work_topics.work_id
+      - work_topics.topic_id
     relevant_relationships:
       - relationship: work_author_institutions
         cardinality: "N:M"
@@ -469,6 +567,13 @@ patterns:
     category: CITATION_RELATIONSHIPS
     expected_result_grain: one row per (source_work_id, reference_index) relationship
     relevant_entities: [works]
+    required_fields:
+      - works.work_id
+      - works.activity_state
+      - work_references.work_id
+      - work_references.reference_index
+      - work_references.referenced_work_id
+      - work_references.reference_status
     relevant_relationships:
       - relationship: work_references
         cardinality: "1:N"
@@ -518,6 +623,7 @@ patterns:
     expected_result_grain: one row per publication_year time bucket
     relevant_entities: [works]
     relevant_relationships: []
+    required_fields: [works.work_id, works.activity_state, works.publication_year]
     parameters:
       - {name: year_from, description: Inclusive year lower bound, value_type: integer, required: false}
       - {name: year_to, description: Inclusive year upper bound, value_type: integer, required: false}
@@ -554,6 +660,11 @@ patterns:
     expected_result_grain: one row per publication_year + oa_status
     relevant_entities: [works]
     relevant_relationships: []
+    required_fields:
+      - works.work_id
+      - works.activity_state
+      - works.publication_year
+      - works.oa_status
     parameters:
       - {name: year_from, description: Inclusive year lower bound, value_type: integer, required: false}
       - {name: year_to, description: Inclusive year upper bound, value_type: integer, required: false}

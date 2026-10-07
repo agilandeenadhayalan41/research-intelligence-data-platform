@@ -27,11 +27,16 @@ registry = load_query_pattern_registry()
 Each pattern includes at least:
 
 `pattern_id`, `name`, `capability`, `category`, `expected_result_grain`,
-`relevant_entities`, `relevant_relationships`, `parameters`, `filters`,
-`active_work_filter`, `freshness_requirement`, `expected_frequency`,
+`relevant_entities`, `relevant_relationships`, `required_fields`, `parameters`,
+`filters`, `active_work_filter`, `freshness_requirement`, `expected_frequency`,
 `expected_concurrency`, `expected_result_size`, `known_scale`, `assumed_scale`,
 `aggregation_risk`, `fanout_risk`, `candidate_materialization`, `placement`,
 `placement_rationale`, `evidence_status`, `logical_query_shape`.
+
+`required_fields` must reference the Step 11 canonical field contract (see
+`benchmarks/canonical_contract.py`). Loader validation rejects unknown entities,
+relationships, fields, dangling materialization candidates, invented
+`sources.issn` / `sources.eissn` query shapes, and `MIN`/`MAX(license)` collapse.
 
 Optional service-level fields stay **UNKNOWN** when no production SLA exists.
 No Wiley SLAs are invented.
@@ -157,6 +162,36 @@ Patterns may imply candidate partition/cluster keys (e.g. `publication_year`,
 `publisher_id`). Step 14 records relationship cardinality implications only.
 **Step 15** makes physical BigQuery decisions.
 
+## Canonical capability gaps
+
+### ISSN / eISSN lookup (`issn-source-lookup`)
+
+**Required consumer capability:** resolve normalized ISSN or eISSN to Source
+metadata.
+
+**Current canonical contract:** `Source` exposes only `issn_l`. There are no
+`sources.issn` or `sources.eissn` fields in the Step 11 model, PyArrow schema,
+or mapper.
+
+**Registry status:** `placement = UNRESOLVED`, `evidence_status = UNKNOWN`.
+
+ISSN-L is **not** a substitute for every ISSN/eISSN value. Step 15 must not
+invent those columns. Faithful lookup needs a future approved canonical
+extension or source-identifier relationship.
+
+### Primary-location license metric (`publisher-topic-license-year`)
+
+License dimension uses **PRIMARY LOCATION LICENSE** only:
+
+- take `work_locations.license` where `is_primary = true`
+- if no primary location/license exists, the Work contributes to a **NULL /
+  UNKNOWN** license bucket
+- do **not** use `MIN(license)` / `MAX(license)` across locations
+- this is not “all observed licenses” (that would allow one Work in multiple
+  license buckets)
+
+Grain: `publisher_id + topic_id + primary_location_license + publication_year`.
+
 ## Current unknowns
 
 - Production concurrency and p95 latency targets  
@@ -164,6 +199,7 @@ Patterns may imply candidate partition/cluster keys (e.g. `publication_year`,
 - Cache hit rates  
 - Whether any lookup fails BigQuery + API/cache (none measured → no operational store)  
 - True DOI uniqueness collisions at full OpenAlex scale  
+- Canonical modeling for ISSN/eISSN → Source identity mapping  
 
 ## Out of scope
 

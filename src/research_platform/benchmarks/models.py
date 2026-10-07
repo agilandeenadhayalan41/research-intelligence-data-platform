@@ -141,11 +141,12 @@ class QueryPattern(SettingsModel):
 
     pattern_id: str = Field(min_length=1, max_length=64, pattern=_PATTERN_ID)
     name: str = Field(min_length=1, max_length=128)
-    capability: str = Field(min_length=1, max_length=256)
+    capability: str = Field(min_length=1, max_length=512)
     category: QueryCategory
     expected_result_grain: str = Field(min_length=1, max_length=512)
     relevant_entities: tuple[str, ...] = Field(min_length=1)
     relevant_relationships: tuple[RelationshipUse, ...] = ()
+    required_fields: tuple[str, ...] = ()
     parameters: tuple[ParameterSpec, ...] = ()
     filters: tuple[str, ...] = ()
     active_work_filter: ActiveWorkFilter
