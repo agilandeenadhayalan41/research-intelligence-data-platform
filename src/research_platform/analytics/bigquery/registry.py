@@ -36,8 +36,11 @@ class BigQueryAnalyticalRegistry(SettingsModel):
     queries: tuple[BigQueryQueryContract, ...] = Field(min_length=1)
     active_works_view_path: str = "sql/bigquery/openalex/models/active_works.sql"
     merge_contracts: tuple[str, ...] = (
-        "sql/bigquery/openalex/models/classify_works_staging.sql",
+        "sql/bigquery/openalex/models/publish_works_unit.sql",
+        "sql/bigquery/openalex/models/work_publication_decisions.sql",
         "sql/bigquery/openalex/models/accepted_work_ids.sql",
+        "sql/bigquery/openalex/models/relationship_publish_work_ids.sql",
+        "sql/bigquery/openalex/models/classify_works_staging.sql",
         "sql/bigquery/openalex/models/merge_works.sql",
         "sql/bigquery/openalex/models/merge_works_preconditions.sql",
         "sql/bigquery/openalex/models/merge_work_topics.sql",

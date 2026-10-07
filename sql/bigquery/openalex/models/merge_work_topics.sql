@@ -1,28 +1,25 @@
--- Relationship refresh for `openalex.work_topics` (Step 15 consistency).
+-- Relationship refresh for `openalex.work_topics` (Step 15 publication boundary).
 -- DEFINED — NOT YET DEPLOYED / NOT EXECUTED here.
 --
 -- REPLACE_BY_WORK_ID template for all relationship tables.
 --
--- CRITICAL: scope DELETE+INSERT to accepted_work_ids only
--- (publication_decision IN INSERT, APPLY_UPDATE from classify_works_staging).
--- Never publish relationships for STALE / CONFLICT / RESTORE_REQUIRED /
--- IDENTICAL staging rows — even if those work_ids appear in a broader
--- changed_work_ids discovery set.
+-- Scope DELETE+INSERT to `relationship_publish_work_ids` only:
+--   accepted ACTIVE Work projections (INSERT/APPLY_UPDATE + source ACTIVE).
 --
--- Consistency model:
---   1) classify staged Works
---   2) MERGE works using the same decisions
---   3) REPLACE relationships only for accepted Work IDs
--- Therefore newer Work + stale relationships cannot arise from normal publish.
+-- Never use:
+--   accepted_work_ids (includes DELETED tombstones → would wipe Policy A rows)
+--   changed_work_ids (includes rejected STALE/CONFLICT/RESTORE)
 --
--- DELETE+INSERT is atomic per relationship table via multi-statement txn.
--- This is not a claim that all canonical tables share one global BQ transaction.
+-- Step 13 Policy A: deleted Works keep physical relationship observations;
+-- consumer queries exclude them via works.activity_state = 'ACTIVE'.
+--
+-- Requires frozen decision tables already materialized pre-MERGE.
 
 BEGIN TRANSACTION;
 
 DELETE FROM `openalex.work_topics` AS target
 WHERE target.`work_id` IN (
-  SELECT `work_id` FROM `openalex.accepted_work_ids`
+  SELECT `work_id` FROM `openalex.relationship_publish_work_ids`
 );
 
 INSERT INTO `openalex.work_topics` (
@@ -50,7 +47,7 @@ SELECT
   source.`deleted_at`
 FROM `openalex.work_topics_staging` AS source
 WHERE source.`work_id` IN (
-  SELECT `work_id` FROM `openalex.accepted_work_ids`
+  SELECT `work_id` FROM `openalex.relationship_publish_work_ids`
 );
 
 COMMIT TRANSACTION;

@@ -1,54 +1,36 @@
--- BigQuery MERGE contract for `openalex.works` (Step 15 consistency hardening).
+-- BigQuery MERGE for `openalex.works` using frozen decisions (Step 15).
 -- DEFINED — NOT YET DEPLOYED / NOT EXECUTED here.
 --
--- Precedence MUST match classify_works_staging.sql / decide_analytical_works_merge:
---   INSERT              — no target row
---   IDENTICAL           — same checksum (touch run_id/processed_at only)
---   RESTORE_REQUIRED    — target DELETED + source ACTIVE (skip; no silent restore)
---   STALE               — older lineage date (skip)
---   APPLY_UPDATE         — newer lineage date, dated-over-undated, OR
---                         equal-date target ACTIVE + source DELETED (Step 13)
---   CONFLICT            — equal date + different checksum otherwise (skip)
+-- Requires `openalex.work_publication_decisions` already materialized against
+-- the pre-MERGE target state. This MERGE does not re-evaluate precedence CASE;
+-- it applies frozen publication_decision values to avoid post-MERGE drift
+-- (APPLY_UPDATE must not be reclassified as IDENTICAL).
 --
--- Work.source_updated_date vs lineage_source_updated_date remain distinct.
--- Relationship publication uses accepted_work_ids (INSERT + APPLY_UPDATE only).
+-- Decisions:
+--   INSERT / APPLY_UPDATE → publish Work attributes (incl. tombstones)
+--   IDENTICAL → touch run_id/processed_at only
+--   STALE / CONFLICT / RESTORE_REQUIRED → no substantive WHEN MATCHED apply
 
 MERGE `openalex.works` AS target
-USING `openalex.works_staging` AS source
+USING (
+  SELECT
+    s.*,
+    d.`publication_decision`
+  FROM `openalex.works_staging` AS s
+  INNER JOIN `openalex.work_publication_decisions` AS d
+    ON d.`work_id` = s.`work_id`
+) AS source
 ON target.`work_id` = source.`work_id`
 
 WHEN MATCHED
-  AND source.`source_checksum_sha256` = target.`source_checksum_sha256`
+  AND source.`publication_decision` = 'IDENTICAL'
 THEN
   UPDATE SET
     `processed_at` = source.`processed_at`,
     `run_id` = source.`run_id`
 
 WHEN MATCHED
-  AND source.`source_checksum_sha256` != target.`source_checksum_sha256`
-  AND NOT (
-    target.`activity_state` = 'DELETED'
-    AND source.`activity_state` = 'ACTIVE'
-  )
-  AND (
-    (
-      source.`lineage_source_updated_date` IS NOT NULL
-      AND target.`lineage_source_updated_date` IS NOT NULL
-      AND source.`lineage_source_updated_date` > target.`lineage_source_updated_date`
-    )
-    OR (
-      source.`lineage_source_updated_date` IS NOT NULL
-      AND target.`lineage_source_updated_date` IS NULL
-    )
-    OR (
-      -- Step 13: ACTIVE T2 + deletion T2 → tombstone wins (not CONFLICT).
-      source.`lineage_source_updated_date` IS NOT NULL
-      AND target.`lineage_source_updated_date` IS NOT NULL
-      AND source.`lineage_source_updated_date` = target.`lineage_source_updated_date`
-      AND target.`activity_state` = 'ACTIVE'
-      AND source.`activity_state` = 'DELETED'
-    )
-  )
+  AND source.`publication_decision` = 'APPLY_UPDATE'
 THEN
   UPDATE SET
     `work_id_url` = source.`work_id_url`,
@@ -81,7 +63,9 @@ THEN
     `activity_state` = source.`activity_state`,
     `deleted_at` = source.`deleted_at`
 
-WHEN NOT MATCHED THEN
+WHEN NOT MATCHED
+  AND source.`publication_decision` = 'INSERT'
+THEN
   INSERT (
     `work_id`,
     `work_id_url`,

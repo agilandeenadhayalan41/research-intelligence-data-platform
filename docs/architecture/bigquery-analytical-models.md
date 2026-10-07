@@ -139,40 +139,46 @@ For `publisher-topic-license-year`:
 
 ## Incremental / MERGE design
 
-### Publication decision contract
+### Publication decision contract (frozen pre-MERGE)
 
-`sql/bigquery/openalex/models/classify_works_staging.sql` is the single
-deterministic classification for each staged Work:
+**Work acceptance ≠ relationship replacement eligibility.**
 
-| Decision | Meaning |
-| --- | --- |
-| `INSERT` | No target row — publish Work + relationships |
-| `IDENTICAL` | Same checksum — touch lineage clocks only; **no** ordinary relationship REPLACE |
-| `APPLY_UPDATE` | Accepted newer / tombstone projection — publish Work + relationships |
-| `STALE` | Older lineage — skip Work and relationships |
-| `CONFLICT` | Equal date, different checksum (non-deletion-win) — skip both |
-| `RESTORE_REQUIRED` | Target DELETED + staging ACTIVE — skip; no silent resurrection |
+`work_publication_decisions.sql` owns the **single** precedence `CASE`. It is
+materialized against the **pre-MERGE** `openalex.works` target. Derived sets
+select from that frozen relation — they must not copy the CASE.
 
-`accepted_work_ids` = Works with decision ∈ {`INSERT`, `APPLY_UPDATE`} only.
+| Decision | Work publication | Relationship REPLACE |
+| --- | --- | --- |
+| `INSERT` + ACTIVE | yes (`accepted_work_ids`) | yes (`relationship_publish_work_ids`) |
+| `APPLY_UPDATE` + ACTIVE | yes | yes |
+| `APPLY_UPDATE` + DELETED | yes (tombstone Work) | **no** — preserve owned relationships (Step 13 Policy A) |
+| `IDENTICAL` | touch clocks only | **no** ordinary REPLACE |
+| `STALE` / `CONFLICT` / `RESTORE_REQUIRED` | no | no |
 
-Offline helper: `decide_analytical_works_merge` / `PublicationDecision` (tests;
-not a BigQuery runtime).
+Publication unit order (`publish_works_unit.sql`):
+
+1. Freeze `work_publication_decisions` (pre-MERGE)
+2. Derive `accepted_work_ids` and `relationship_publish_work_ids`
+3. `merge_works` applies frozen `publication_decision` (no reclassification)
+4. Relationship REPLACE uses `relationship_publish_work_ids` only
+
+Recalculating decisions after `merge_works` would turn `APPLY_UPDATE` into
+`IDENTICAL` and is forbidden.
+
+Offline helpers: `decide_analytical_works_merge`,
+`is_accepted_publication_decision`, `is_relationship_refresh_eligible`.
 
 ### Works MERGE precedence
-
-`merge_works.sql` mirrors `classify_works_staging.sql` (Steps 11–13):
 
 | Case | Decision |
 | --- | --- |
 | Same `source_checksum_sha256` | `IDENTICAL` |
 | Target `DELETED` + staging `ACTIVE` | `RESTORE_REQUIRED` |
 | Staging lineage older | `STALE` |
-| ACTIVE T2 + DELETED T2 (equal date) | **`APPLY_UPDATE`** (Step 13 tombstone wins) |
+| ACTIVE T2 + DELETED T2 (equal date) | **`APPLY_UPDATE`** (tombstone wins) |
 | ACTIVE T2 + ACTIVE T2, different checksum | `CONFLICT` |
 | DELETED T2 + DELETED T2, different checksum | `CONFLICT` |
 | Staging newer lineage (or dated vs undated) | `APPLY_UPDATE` |
-
-Rejected outcomes are projected by `merge_works_preconditions.sql`.
 
 ### Relationship tables — transactional REPLACE_BY_WORK_ID
 
@@ -180,22 +186,18 @@ Template (`merge_work_topics.sql`):
 
 ```sql
 BEGIN TRANSACTION;
-DELETE ... WHERE work_id IN (SELECT work_id FROM accepted_work_ids);
-INSERT ... WHERE source.work_id IN (SELECT work_id FROM accepted_work_ids);
+DELETE ... WHERE work_id IN (SELECT work_id FROM relationship_publish_work_ids);
+INSERT ... WHERE source.work_id IN (SELECT work_id FROM relationship_publish_work_ids);
 COMMIT TRANSACTION;
 ```
 
-**Consistency rule:** Work version acceptance happens before relationship
-publication. Only accepted versions may publish relationships. Therefore
-normal publication cannot produce “newer Work + stale relationships.”
+Deletion tombstones publish the Work row but **must not** DELETE owned
+relationship observations. Consumers exclude them via
+`works.activity_state = 'ACTIVE'`.
 
-`IDENTICAL` does not refresh relationships (same canonical version already
-published). Missing-relationship recovery is an explicit publication-recovery
-path, not ordinary IDENTICAL replay.
-
-Atomic DELETE+INSERT prevents a failed mid-replace from emptying those Works’
-relationships. This is **not** a claim that all canonical tables commit in one
-global BigQuery transaction.
+Rejected / stale staging must not replace relationships. `IDENTICAL` does not
+ordinary-refresh relationships. This unit does **not** claim one global BigQuery
+ACID commit across every canonical table.
 
 ## Fan-out avoidance
 
