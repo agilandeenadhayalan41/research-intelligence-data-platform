@@ -11,7 +11,8 @@ access, proprietary data, or cloud credentials are needed for the default tests.
 
 ## Current status
 
-**Steps 01-11 are complete, and Step 12 adds one-file local Works ingestion.
+**Steps 01–12 are complete.
+Step 13 / #21 (OpenAlex deletions/change handling) is next.
 The full end-to-end / cloud pipeline is not implemented.**
 
 | Step | Delivered capability | Implementation boundary |
@@ -27,24 +28,22 @@ The full end-to-end / cloud pipeline is not implemented.**
 | 09 | Immutable local raw landing | `LocalObjectStore` with atomic content/provenance publish, OpenAlex raw key layout, replay/conflict, and offline contract tests |
 | 10 | Pipeline control contracts | `PipelineRun`, `SourceFileControl`, `RecordProvenance`, lifecycle/claim rules, `ControlStore` protocol, and versioned PostgreSQL DDL specs |
 | 11 | Canonical OpenAlex model | Normalized entities/relationships, ID rules, PyArrow schemas, source mapping, lineage/version semantics; no ingestion |
-| 12 | One-file local Works ingestion | Manifest → claim → immutable land → stream map → canonical upsert → provenance → SUCCESS; in-memory ControlStore/CanonicalStore + LocalObjectStore |
+| 12 | One-file local Works ingestion | Manifest → claim → immutable land → stream decode/map/upsert/provenance inside one Postgres txn → SUCCESS; `--backend memory|postgres`; offline + Postgres tests ([#20](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/20)) |
 
 Constructing adapters or loading configuration does not connect to services.
 `LocalObjectStore` writes only under the configured local landing path. Default
 ingestion tests stay offline (fake connector + in-memory control/canonical).
 The GCS adapter remains a skeleton.
 
-**Still planned:** GCS landing, change/deletion processing, analytical models,
+**Still planned:** change/deletion processing, GCS landing, analytical models,
 gold marts, data quality, consumer APIs, and orchestration. There is no
 implemented GCS/BigQuery deployment or production pipeline.
 
 ### Next scoped work
 
-**Step 12: one-file local Works ingestion** is delivered for
-[issue #20](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/20).
-See [local Works ingestion](docs/architecture/local-works-ingestion.md).
-Dependencies are **Steps 05–11** plus an explicit local `ControlStore` /
-canonical write path; **#7 Warehouse.query is not mandatory**.
+**Step 13 / [#21](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/21):**
+OpenAlex deletions and change handling. Step 12 local Works ingestion is
+complete; see [local Works ingestion](docs/architecture/local-works-ingestion.md).
 
 Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
