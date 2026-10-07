@@ -1,4 +1,8 @@
-"""Metadata required by future immutable landing implementations."""
+"""Immutable retrieval provenance attached to raw landed objects.
+
+Mutable pipeline-run / source-file control state is defined separately under
+``research_platform.control`` and must not redefine these fields' semantics.
+"""
 
 from uuid import UUID
 

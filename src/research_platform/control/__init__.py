@@ -1,0 +1,78 @@
+"""Pipeline control contracts: models, lifecycle, and ControlStore protocol."""
+
+from research_platform.control.errors import (
+    ChecksumConflictError,
+    ClaimConflictError,
+    ControlError,
+    ControlNotFoundError,
+    IdempotencyConflictError,
+    IllegalTransitionError,
+    StaleClaimError,
+)
+from research_platform.control.lifecycle import (
+    PIPELINE_RUN_TRANSITIONS,
+    SOURCE_FILE_TRANSITIONS,
+    apply_pipeline_run_finish,
+    apply_pipeline_run_start,
+    apply_source_file_claim,
+    apply_source_file_failure,
+    apply_source_file_success,
+    apply_stale_claim_recovery,
+    assert_claim_owned,
+    assert_pipeline_run_transition,
+    assert_source_file_transition,
+    is_lease_expired,
+    next_attempt_count,
+)
+from research_platform.control.models import (
+    ControlStatus,
+    FailureCategory,
+    PipelineRun,
+    PipelineRunStatus,
+    RecordProvenance,
+    SourceFileControl,
+    dumps_control_model,
+)
+from research_platform.control.reconciliation import (
+    RegistrationOutcome,
+    checksums_conflict,
+    identity_fields_match,
+    reconcile_registration,
+)
+from research_platform.control.store import ControlStore, UnimplementedControlStore
+
+__all__ = [
+    "ChecksumConflictError",
+    "ClaimConflictError",
+    "ControlError",
+    "ControlNotFoundError",
+    "ControlStatus",
+    "ControlStore",
+    "FailureCategory",
+    "IdempotencyConflictError",
+    "IllegalTransitionError",
+    "PIPELINE_RUN_TRANSITIONS",
+    "PipelineRun",
+    "PipelineRunStatus",
+    "RecordProvenance",
+    "RegistrationOutcome",
+    "SOURCE_FILE_TRANSITIONS",
+    "SourceFileControl",
+    "StaleClaimError",
+    "UnimplementedControlStore",
+    "apply_pipeline_run_finish",
+    "apply_pipeline_run_start",
+    "apply_source_file_claim",
+    "apply_source_file_failure",
+    "apply_source_file_success",
+    "apply_stale_claim_recovery",
+    "assert_claim_owned",
+    "assert_pipeline_run_transition",
+    "assert_source_file_transition",
+    "checksums_conflict",
+    "dumps_control_model",
+    "identity_fields_match",
+    "is_lease_expired",
+    "next_attempt_count",
+    "reconcile_registration",
+]
