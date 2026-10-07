@@ -7,9 +7,10 @@
   Pydantic validation, PyArrow interchange, structured logging, and pytest.
 - Use configuration-driven environments. Default to local resources. Never access
   production during development or create expensive cloud resources.
-- Use public OpenAlex or synthetic data only. Never use Wiley proprietary data or
-  require Wiley enterprise access. AACT/ClinicalTrials, FDA, grants, patents, and
-  other public sources are future extensions, not Phase 1 implementations.
+- Build a reusable public research data platform, with OpenAlex first. Use public
+  sources or synthetic fixtures only; never use Wiley proprietary data or require
+  Wiley enterprise access. AACT/ClinicalTrials (issue #2), OpenFDA, grants, patents,
+  news/releases, and other sources are future extensions until explicitly scoped.
 - Never commit credentials, `.env` files, service-account JSON, or downloaded large
   datasets. Never hardcode cloud project IDs. Obtain credentials from environment
   variables or future workload identity; keep credential files outside the repo.
@@ -22,9 +23,15 @@
 - Put storage behind ObjectStore adapters (local/GCS), sources behind
   SourceConnector, and warehouse operations behind Warehouse where practical.
   Bind query parameters rather than interpolating untrusted SQL values.
-- Do not assume all OpenAlex data or workloads belong in BigQuery. Measure query
-  patterns to choose PostgreSQL transactional/query serving versus OLAP analytics.
-  Use DuckDB for local analytical tests; BigQuery is a future cloud adapter.
+- On GCP, use BigQuery as the first analytical implementation and DuckDB for local
+  analytical tests. Measure query patterns before choosing serving technology.
+  PostgreSQL/AlloyDB is optional: test BigQuery with API/cache first and add an
+  operational store only when measured latency, concurrency, or indexed lookup
+  requirements justify it. Keep canonical schemas independent of serving engines.
+- Keep high-volume work-author, work-topic, work-institution, and citation/reference
+  relationships primarily analytical. Materialize repeated expensive aggregates
+  when measured use justifies them. Expose storage-independent domain capabilities
+  through a Data Service/API; unrestricted raw SQL is not the product API.
 - Keep tests offline, deterministic, and based on tiny public or synthetic fixtures.
   Run `make test`, `make check`, and `make build` for code changes.
 - Docker Compose is local PostgreSQL tooling only. Airflow DAGs and Terraform

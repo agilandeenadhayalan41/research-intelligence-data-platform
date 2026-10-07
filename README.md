@@ -19,34 +19,48 @@ loading configuration has no service side effects.
 
 ```mermaid
 flowchart TD
-    Sources["Public sources: OpenAlex first; AACT/ClinicalTrials, FDA, grants, patents later"]
-    Sources --> Manifest["Source discovery / manifest"]
-    Manifest --> Raw["Immutable raw landing: local / GCS"]
-    Raw --> Canonical["Normalized canonical data model"]
-    Canonical --> PG["PostgreSQL serving: transactional / query"]
-    Canonical --> OLAP["OLAP serving: BigQuery; DuckDB for local tests"]
-    PG --> RI["Research intelligence"]
-    OLAP --> RI
-    RI -. future only .-> DS["Data science / NLP"]
-    DS -. future only .-> KG["Knowledge graph"]
-    Provenance["Provenance and quality"] --- Manifest
+    Sources["Public sources"] --> Connectors["Source-specific connectors"]
+    Connectors --> Raw["Immutable raw landing: local first / GCS on GCP"]
+    Raw --> Canonical["Portable canonical data: normalized schemas / Parquet where applicable"]
+    Canonical --> BQ["BigQuery analytical layer on GCP"]
+    Canonical --> DuckDB["DuckDB for local analytical tests"]
+    BQ --> Models["Analytical models and justified materialized aggregates"]
+    Models --> API["Storage-independent Data Service/API"]
+    API --> RI["Research Intelligence / applications"]
+    API --> Enrichment["Future enrichment / knowledge graph consumers"]
+    API -. "only if measured requirements justify it" .-> Ops["Optional operational store / cache"]
+    Provenance["Provenance and data quality"] --- Connectors
     Provenance --- Raw
     Provenance --- Canonical
 ```
 
-The diagram describes the **target**, not delivered pipelines. Do not assume
-everything belongs in BigQuery. Query-pattern analysis must determine the
-PostgreSQL/OLAP split: point lookups, relationship traversal, filtering, and
-transactional requirements versus broad scans, aggregations, and analytical cost.
-DuckDB provides a local analytical test engine, not a substitute for validating
-PostgreSQL or BigQuery SQL dialects.
+This is the **target architecture**, not a delivered pipeline. BigQuery is the
+first analytical implementation on GCP; DuckDB is for local analytical tests and
+prototypes. Query-pattern measurements come before any operational database
+decision. PostgreSQL/AlloyDB is optional: first assess BigQuery with an API/cache,
+then add an operational store only if measured latency, concurrency, or indexed
+lookup requirements justify it. See [platform architecture](docs/architecture/platform-architecture.md),
+[query routing](docs/architecture/query-routing.md), and
+[GCP / BigQuery-first guidance](docs/architecture/gcp-bigquery-first.md).
 
-Canonical modeling will normalize entities (works, authors, institutions, etc.)
-and relationships rather than create one giant flattened table. Raw landing must
-preserve source bytes, use immutable keys, and support replay without overwrites.
-Every future ingestion needs a run ID, source URI, timezone-aware retrieval time,
-and SHA-256 checksum. Atomic create, checksum verification, and replay/conflict
-semantics are defined by the ObjectStore contract but are not implemented yet.
+Canonical schemas remain portable and independent of serving technology. Model
+entities and relationships separately rather than creating a flattened table;
+high-volume work-author, work-topic, work-institution, and citation/reference
+relationships belong primarily in the analytical layer. Raw landing preserves
+source bytes and provenance (run identity, source URI, retrieval time, checksum)
+with immutable keys and replay/conflict handling. The ObjectStore contract defines
+these semantics; runtime storage adapters are not implemented.
+
+This is a reusable public research data platform, with OpenAlex first and AACT /
+ClinicalTrials as the next planned source (tracked in
+[issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)).
+OpenFDA, grants, patents, news/releases, and other public research datasets are
+future source extensions, not current implementations. Existing Wiley content
+ingestion, content registry/delivery, search, enrichment, and knowledge-graph
+systems remain separate; this repository does not replace or implement them.
+
+Read the [public data source strategy](docs/architecture/public-data-sources.md)
+and the [21-step roadmap](docs/architecture/roadmap.md) for scope and sequencing.
 
 ### Interfaces
 
@@ -61,10 +75,11 @@ semantics are defined by the ObjectStore contract but are not implemented yet.
 | `Warehouse` | `query()` accepts bound parameters and returns a PyArrow table |
 
 Skeletons: local/GCS object stores; PostgreSQL, BigQuery, and DuckDB warehouses.
-Cloud SDKs and PostgreSQL drivers are deliberately deferred.
-DuckDB is available as a development dependency for offline analytical tests.
-Warehouse SQL and parameter conventions remain backend-specific; the interface
-does not promise portable SQL. Writes/migrations need later explicit contracts.
+Cloud SDKs and database drivers are deliberately deferred. PostgreSQL is optional,
+not the default serving requirement. Warehouse SQL and parameter conventions
+remain backend-specific; the interface does not promise portable SQL. Writes and
+migrations need later explicit contracts. The Data Service/API consumer contract
+is storage-independent and is a future capability, not an implemented service.
 The OpenAlex Works manifest parser, snapshot metadata model, identity and duplicate
 rules, and bounded sample-selection contract are specified in
 [the OpenAlex discovery and manifest contract](docs/architecture/openalex-manifest-contract.md).
@@ -136,7 +151,7 @@ relative to the current working directory. Python does not automatically load
 
 | File | Intent |
 | --- | --- |
-| `config/local.yaml` | Local landing, PostgreSQL serving selection, in-memory DuckDB |
+| `config/local.yaml` | Local landing, PostgreSQL warehouse selection (skeleton), in-memory DuckDB |
 | `config/gcp-sandbox.yaml` | GCS/BigQuery identifiers supplied via environment variables; no resources created |
 | `config/dev.yaml`, `config/qa.yaml`, `config/prod.yaml` | Local-only placeholders, not deployment configurations |
 
@@ -189,10 +204,9 @@ infrastructure/
   terraform/             Reserved: infrastructure later (no resources yet)
 ```
 
-Empty directories are tracked with `.gitkeep`. Architecture and development
-documentation live in this README for Phase 1. The `docs/` tree is reserved for
-later Docusaurus/Mermaid publication; no Node application or docs deployment is
-introduced yet.
+Empty directories are tracked with `.gitkeep`. Architecture documentation is
+maintained in `docs/architecture/`; Docusaurus publication remains deferred and
+no Node application or docs deployment is introduced.
 
 ## Tests and CI
 
@@ -209,10 +223,13 @@ the opt-in connectivity check is not part of CI.
   Credential files must live outside this repository, regardless of filename.
 - Never hardcode cloud project IDs, use Wiley proprietary data, or provision
   costly cloud resources. Use only public OpenAlex or synthetic test fixtures.
-- Airflow, Terraform resources, actual ingestion, canonical SQL migrations,
-  deployed serving, and Docusaurus site setup are deferred.
+- Runtime GCS/BigQuery/PostgreSQL adapters, actual ingestion, canonical SQL
+  migrations, deployed serving, Airflow, Terraform resources, and Docusaurus site
+  setup are deferred. BigQuery is the planned first GCP analytical implementation;
+  PostgreSQL/AlloyDB remains conditional on query-pattern evidence.
 - No LLM, ML, GenAI, NLP, or knowledge graph implementation is included.
-- Future public sources include AACT/ClinicalTrials, FDA, grants, and patents.
+- Future sources include AACT/ClinicalTrials (issue #2), OpenFDA, grants, patents,
+  news/releases, and other public datasets. AACT is documented but not implemented.
 
 The OpenAlex Works manifest parser and bounded selector remain offline boundaries.
 The connector acquires only the selected-format Works manifest and provides
