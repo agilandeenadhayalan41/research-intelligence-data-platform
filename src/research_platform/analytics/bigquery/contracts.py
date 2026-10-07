@@ -84,15 +84,30 @@ class ValidationLabel(StrEnum):
     NOT_YET_DEPLOYED = "NOT_YET_DEPLOYED"
 
 
-class AnalyticalMergeDecision(StrEnum):
-    """Offline mirror of analytical works MERGE WHEN MATCHED outcomes."""
+class PublicationDecision(StrEnum):
+    """Deterministic pre-publication classification for one staged Work.
 
-    IDENTICAL_NOOP = "IDENTICAL_NOOP"
-    APPLY_UPDATE = "APPLY_UPDATE"
-    SKIP_STALE = "SKIP_STALE"
-    SKIP_RESTORE_REQUIRED = "SKIP_RESTORE_REQUIRED"
-    SKIP_CONFLICT = "SKIP_CONFLICT"
+    Shared by works MERGE, ``accepted_work_ids``, and relationship REPLACE.
+    """
+
     INSERT = "INSERT"
+    IDENTICAL = "IDENTICAL"
+    APPLY_UPDATE = "APPLY_UPDATE"
+    STALE = "STALE"
+    CONFLICT = "CONFLICT"
+    RESTORE_REQUIRED = "RESTORE_REQUIRED"
+
+
+# Outcomes that may publish Work attributes and REPLACE_BY_WORK_ID relationships.
+ACCEPTED_PUBLICATION_DECISIONS: frozenset[PublicationDecision] = frozenset(
+    {
+        PublicationDecision.INSERT,
+        PublicationDecision.APPLY_UPDATE,
+    }
+)
+
+# Alias retained for older test imports during Step 15 hardening.
+AnalyticalMergeDecision = PublicationDecision
 
 
 class BigQueryColumn(SettingsModel):
@@ -537,27 +552,43 @@ def decide_analytical_works_merge(
     source_checksum: str,
     source_lineage_date: object | None,
     source_activity_state: str,
-) -> AnalyticalMergeDecision:
-    """Offline decision helper mirroring merge_works.sql WHEN MATCHED guards.
+) -> PublicationDecision:
+    """Classify one staged Work for analytical publication (Steps 11–13).
 
-    Does not execute BigQuery. Used to lock MERGE precedence contracts in tests.
+    Mirrors ``classify_works_staging.sql``. Does not execute BigQuery.
+
+    Equal-date rule (Step 13): target ACTIVE + source DELETED at the same
+    ``lineage_source_updated_date`` → ``APPLY_UPDATE`` (tombstone wins).
+    Equal-date ACTIVE vs ACTIVE with different checksum → ``CONFLICT``.
+    ``IDENTICAL`` does not refresh relationships in ordinary publication.
     """
     if not target_exists:
-        return AnalyticalMergeDecision.INSERT
+        return PublicationDecision.INSERT
     assert target_checksum is not None
     assert target_activity_state is not None
     if source_checksum == target_checksum:
-        return AnalyticalMergeDecision.IDENTICAL_NOOP
+        return PublicationDecision.IDENTICAL
     if target_activity_state == "DELETED" and source_activity_state == "ACTIVE":
-        return AnalyticalMergeDecision.SKIP_RESTORE_REQUIRED
+        return PublicationDecision.RESTORE_REQUIRED
     if target_lineage_date is not None and source_lineage_date is not None:
         if source_lineage_date < target_lineage_date:
-            return AnalyticalMergeDecision.SKIP_STALE
+            return PublicationDecision.STALE
         if source_lineage_date == target_lineage_date:
-            return AnalyticalMergeDecision.SKIP_CONFLICT
-        return AnalyticalMergeDecision.APPLY_UPDATE
+            # Step 13: ACTIVE T2 + deletion T2 → DELETED wins.
+            if (
+                target_activity_state == "ACTIVE"
+                and source_activity_state == "DELETED"
+            ):
+                return PublicationDecision.APPLY_UPDATE
+            return PublicationDecision.CONFLICT
+        return PublicationDecision.APPLY_UPDATE
     if source_lineage_date is not None and target_lineage_date is None:
-        return AnalyticalMergeDecision.APPLY_UPDATE
+        return PublicationDecision.APPLY_UPDATE
     if source_lineage_date is None and target_lineage_date is not None:
-        return AnalyticalMergeDecision.SKIP_STALE
-    return AnalyticalMergeDecision.SKIP_CONFLICT
+        return PublicationDecision.STALE
+    return PublicationDecision.CONFLICT
+
+
+def is_accepted_publication_decision(decision: PublicationDecision) -> bool:
+    """True when Work attributes and relationships may be published."""
+    return decision in ACCEPTED_PUBLICATION_DECISIONS

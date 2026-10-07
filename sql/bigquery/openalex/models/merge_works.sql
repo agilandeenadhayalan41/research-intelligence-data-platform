@@ -1,28 +1,22 @@
--- BigQuery MERGE contract for `openalex.works` (Step 15 / #22 hardening).
+-- BigQuery MERGE contract for `openalex.works` (Step 15 consistency hardening).
 -- DEFINED — NOT YET DEPLOYED / NOT EXECUTED here.
 --
--- Strategy: MERGE_BY_PRIMARY_KEY on work_id with Steps 11–13 precedence.
+-- Precedence MUST match classify_works_staging.sql / decide_analytical_works_merge:
+--   INSERT              — no target row
+--   IDENTICAL           — same checksum (touch run_id/processed_at only)
+--   RESTORE_REQUIRED    — target DELETED + source ACTIVE (skip; no silent restore)
+--   STALE               — older lineage date (skip)
+--   APPLY_UPDATE         — newer lineage date, dated-over-undated, OR
+--                         equal-date target ACTIVE + source DELETED (Step 13)
+--   CONFLICT            — equal date + different checksum otherwise (skip)
 --
--- Precedence (aligned with compare_work_versions + assert_active_upsert_allowed):
---   1) same source_checksum_sha256 → IDENTICAL (no substantive overwrite)
---   2) target DELETED + source ACTIVE → RESTORE_REQUIRED (skip; no silent restore)
---   3) incoming lineage_source_updated_date older → STALE (skip)
---   4) equal lineage dates + different checksum → CONFLICT (skip; detect via
---      merge_works_preconditions.sql before/after publish)
---   5) incoming newer lineage date (or dated vs undated target) → APPLY
---      including ACTIVE→DELETED when deletion date is same/newer
---
--- Work.source_updated_date (record field) and lineage_source_updated_date are
--- distinct columns. Deletion dates live in lineage_source_updated_date.
---
--- BigQuery multi-statement transactions differ operationally from local
--- Postgres ingestion ACID; this MERGE is a single DML statement.
+-- Work.source_updated_date vs lineage_source_updated_date remain distinct.
+-- Relationship publication uses accepted_work_ids (INSERT + APPLY_UPDATE only).
 
 MERGE `openalex.works` AS target
 USING `openalex.works_staging` AS source
 ON target.`work_id` = source.`work_id`
 
--- Idempotent replay: checksum match → no harmful attribute overwrite.
 WHEN MATCHED
   AND source.`source_checksum_sha256` = target.`source_checksum_sha256`
 THEN
@@ -30,8 +24,6 @@ THEN
     `processed_at` = source.`processed_at`,
     `run_id` = source.`run_id`
 
--- Apply newer / dated-over-undated projections, including tombstones.
--- Never apply DELETED → ACTIVE through ordinary MERGE.
 WHEN MATCHED
   AND source.`source_checksum_sha256` != target.`source_checksum_sha256`
   AND NOT (
@@ -47,6 +39,14 @@ WHEN MATCHED
     OR (
       source.`lineage_source_updated_date` IS NOT NULL
       AND target.`lineage_source_updated_date` IS NULL
+    )
+    OR (
+      -- Step 13: ACTIVE T2 + deletion T2 → tombstone wins (not CONFLICT).
+      source.`lineage_source_updated_date` IS NOT NULL
+      AND target.`lineage_source_updated_date` IS NOT NULL
+      AND source.`lineage_source_updated_date` = target.`lineage_source_updated_date`
+      AND target.`activity_state` = 'ACTIVE'
+      AND source.`activity_state` = 'DELETED'
     )
   )
 THEN

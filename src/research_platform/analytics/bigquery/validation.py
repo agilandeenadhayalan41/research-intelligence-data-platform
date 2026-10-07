@@ -179,6 +179,36 @@ def validate_static_contracts(
         ">" in merge_works_code,
         "merge_works must require newer lineage date to overwrite",
     )
+    ok(
+        "source.`activity_state` = 'DELETED'" in merge_works
+        or "source.`activity_state` = 'DELETED'" in merge_works_code,
+        "merge_works must allow equal-date ACTIVE→DELETED apply",
+    )
+
+    classify_sql = repo_path(
+        "sql/bigquery/openalex/models/classify_works_staging.sql"
+    ).read_text(encoding="utf-8")
+    ok(
+        "publication_decision" in classify_sql,
+        "classify_works_staging must emit publication_decision",
+    )
+    ok(
+        "APPLY_UPDATE" in classify_sql and "RESTORE_REQUIRED" in classify_sql,
+        "classify_works_staging must encode APPLY/RESTORE decisions",
+    )
+
+    accepted_sql = repo_path(
+        "sql/bigquery/openalex/models/accepted_work_ids.sql"
+    ).read_text(encoding="utf-8")
+    accepted_compact = accepted_sql.replace(" ", "").replace("\n", "")
+    ok(
+        "IN('INSERT','APPLY_UPDATE')" in accepted_compact,
+        "accepted_work_ids filter must be INSERT/APPLY_UPDATE only",
+    )
+    ok(
+        "STALE" in accepted_sql and "CONFLICT" in accepted_sql,
+        "accepted_work_ids classify CASE must still name rejected outcomes",
+    )
 
     merge_topics = repo_path(
         "sql/bigquery/openalex/models/merge_work_topics.sql"
@@ -201,6 +231,14 @@ def validate_static_contracts(
     ok(
         "lineage_source_updated_date" in merge_topics,
         "merge_work_topics must use lineage_source_updated_date",
+    )
+    ok(
+        "ACCEPTED_WORK_IDS" in topics_code,
+        "relationship SQL must scope to accepted_work_ids",
+    )
+    ok(
+        "CHANGED_WORK_IDS" not in topics_code,
+        "relationship SQL must not publish all changed_work_ids",
     )
 
     for query in registry.queries:
@@ -583,6 +621,61 @@ def validate_semantics_with_duckdb() -> SemanticValidationReport:
 
     finally:
         conn.close()
+
+    return SemanticValidationReport(
+        label=ValidationLabel.SEMANTIC_ONLY,
+        results=results,
+        errors=tuple(errors),
+    )
+
+
+def validate_stale_relationship_publication_guard() -> SemanticValidationReport:
+    """SEMANTIC_ONLY: stale staging must not replace newer Work relationships.
+
+    Target W1 at T3 with topics [T1, T2]; incoming stale W1 at T2 with [T9].
+    Expected: Work stays T3; relationships stay [T1, T2]; T9 never published.
+    """
+    from datetime import date
+
+    from research_platform.analytics.bigquery.contracts import (
+        PublicationDecision,
+        decide_analytical_works_merge,
+        is_accepted_publication_decision,
+    )
+
+    errors: list[str] = []
+    results: dict[str, Any] = {"validation_label": ValidationLabel.SEMANTIC_ONLY.value}
+
+    decision = decide_analytical_works_merge(
+        target_exists=True,
+        target_checksum="cc" * 32,
+        target_lineage_date=date(2024, 3, 1),
+        target_activity_state="ACTIVE",
+        source_checksum="bb" * 32,
+        source_lineage_date=date(2024, 2, 1),
+        source_activity_state="ACTIVE",
+    )
+    results["stale_work_decision"] = decision.value
+    if decision is not PublicationDecision.STALE:
+        errors.append(f"expected STALE for older staging, got {decision}")
+    if is_accepted_publication_decision(decision):
+        errors.append("STALE must not be an accepted publication decision")
+
+    # Simulate relationship REPLACE scoped to accepted_work_ids only.
+    current_topics = {"W1": ("T1", "T2")}
+    staging_topics = {"W1": ("T9",)}
+    accepted: set[str] = set()
+    if is_accepted_publication_decision(decision):
+        accepted.add("W1")
+    if "W1" in accepted:
+        current_topics["W1"] = staging_topics["W1"]
+    results["topics_after"] = current_topics["W1"]
+    if current_topics["W1"] != ("T1", "T2"):
+        errors.append(
+            f"stale topics must not publish; got {current_topics['W1']}"
+        )
+    if "T9" in current_topics["W1"]:
+        errors.append("T9 must never be published for rejected stale Work")
 
     return SemanticValidationReport(
         label=ValidationLabel.SEMANTIC_ONLY,
