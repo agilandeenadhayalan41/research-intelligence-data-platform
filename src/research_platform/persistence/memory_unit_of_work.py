@@ -6,12 +6,12 @@ import copy
 from dataclasses import dataclass
 
 from research_platform.canonical.memory import InMemoryCanonicalStore
-from research_platform.canonical.store import CanonicalUpsertOutcome
 from research_platform.control.lifecycle import assert_claim_owned
 from research_platform.control.memory import InMemoryControlStore
 from research_platform.persistence.unit_of_work import (
     AssetPublishRequest,
     AssetPublishResult,
+    PublishCounters,
 )
 
 
@@ -39,10 +39,10 @@ def publish_claimed_asset_memory(
     canonical: InMemoryCanonicalStore,
     request: AssetPublishRequest,
 ) -> AssetPublishResult:
-    """Apply canonical + provenance + SUCCESS with rollback on failure.
+    """Stream canonical + provenance + SUCCESS with rollback on failure.
 
     Emulates the PostgreSQL unit-of-work for offline tests. Not durable across
-    process exit.
+    process exit. Does not materialize all mapped records for the file.
     """
     existing = control.get_source_file(request.asset_id)
     if existing is None:
@@ -52,11 +52,12 @@ def publish_claimed_asset_memory(
     snap = _snapshot_canonical(canonical)
     provenance_before = list(control._provenance)  # noqa: SLF001
     try:
-        outcomes: list[CanonicalUpsertOutcome] = []
-        for bundle in request.bundles:
-            outcomes.append(canonical.upsert_work_bundle(bundle))
-        for row in request.provenance_rows:
-            control.record_provenance(row)
+        counters = PublishCounters()
+        for item in request.open_records():
+            outcome = canonical.upsert_work_bundle(item.bundle)
+            control.record_provenance(item.provenance)
+            counters = counters.after_outcome(outcome)
+            del item
         succeeded = control.mark_source_file_success(
             request.asset_id,
             claim_token=request.claim_token,
@@ -65,7 +66,7 @@ def publish_claimed_asset_memory(
             source_checksum_sha256=request.source_checksum_sha256,
             retrieval_provenance=request.retrieval_provenance,
         )
-        return AssetPublishResult(source_file=succeeded, outcomes=tuple(outcomes))
+        return AssetPublishResult(source_file=succeeded, counters=counters)
     except Exception:
         _restore_canonical(canonical, snap)
         control._provenance = provenance_before  # noqa: SLF001

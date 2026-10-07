@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,12 +16,10 @@ from research_platform.canonical.openalex import map_openalex_work
 from research_platform.canonical.openalex.models import (
     CanonicalActivityState,
     CanonicalLineage,
-    CanonicalWorkBundle,
 )
 from research_platform.canonical.store import (
     CanonicalConflictError,
     CanonicalStore,
-    CanonicalUpsertOutcome,
 )
 from research_platform.config.loader import load_config
 from research_platform.config.models import PlatformConfig
@@ -52,6 +50,11 @@ from research_platform.ingestion.errors import (
 )
 from research_platform.ingestion.jsonl import iter_jsonl_gz_records
 from research_platform.persistence.memory_unit_of_work import publish_claimed_asset_memory
+from research_platform.persistence.unit_of_work import (
+    AssetPublishRequest,
+    PublishCounters,
+    StreamedWorkRecord,
+)
 from research_platform.provenance.models import IngestionProvenance
 from research_platform.sources.openalex.connector import OpenAlexConnector
 from research_platform.sources.openalex.metadata import OpenAlexAssetMetadata
@@ -331,15 +334,6 @@ def _ingest_one_asset(
             clock=clock,
         )
         processed_at = clock()
-        bundles, provenance_rows = _map_landed_records(
-            asset=asset,
-            run_id=run.run_id,
-            checksum=checksum,
-            objects=objects,
-            raw_key=raw_key,
-            processed_at=processed_at,
-            decode_limits=decode_limits,
-        )
         retrieval_provenance = IngestionProvenance.model_validate(
             {
                 "run_id": run.run_id,
@@ -349,8 +343,6 @@ def _ingest_one_asset(
                 "sha256": checksum,
             }
         )
-        from research_platform.persistence.unit_of_work import AssetPublishRequest
-
         publish_request = AssetPublishRequest(
             asset_id=asset.asset_id,
             claim_token=claim_token,
@@ -359,8 +351,15 @@ def _ingest_one_asset(
             raw_object_key=raw_key,
             source_checksum_sha256=checksum,
             retrieval_provenance=retrieval_provenance,
-            bundles=bundles,
-            provenance_rows=provenance_rows,
+            open_records=_record_stream_factory(
+                asset=asset,
+                run_id=run.run_id,
+                checksum=checksum,
+                objects=objects,
+                raw_key=raw_key,
+                processed_at=processed_at,
+                decode_limits=decode_limits,
+            ),
         )
         if backend == "postgres":
             from research_platform.persistence.postgres import publish_claimed_asset
@@ -372,10 +371,9 @@ def _ingest_one_asset(
             assert isinstance(canonical, InMemoryCanonicalStore)
             published = publish_claimed_asset_memory(control, canonical, publish_request)
 
-        stats = _stats_from_outcomes(
+        stats = _stats_from_counters(
             asset_id=asset.asset_id,
-            outcomes=published.outcomes,
-            provenance_count=len(provenance_rows),
+            counters=published.counters,
             canonical=canonical,
         )
         return published.source_file, stats, None
@@ -466,7 +464,7 @@ def _raw_checksum_matches(objects: ObjectStore, raw_key: str, checksum: str) -> 
     return digest.hexdigest() == checksum
 
 
-def _map_landed_records(
+def _record_stream_factory(
     *,
     asset: OpenAlexAssetMetadata,
     run_id: UUID,
@@ -475,26 +473,28 @@ def _map_landed_records(
     raw_key: str,
     processed_at: datetime,
     decode_limits: JsonlDecodeLimits,
-) -> tuple[tuple[CanonicalWorkBundle, ...], tuple[RecordProvenance, ...]]:
-    """Decode/map the full asset before any canonical DB writes."""
-    bundles: list[CanonicalWorkBundle] = []
-    provenance_rows: list[RecordProvenance] = []
-    with objects.open(raw_key) as handle:
-        for record in iter_jsonl_gz_records(handle, limits=decode_limits):
-            lineage = CanonicalLineage.model_validate(
-                {
-                    "source_asset_id": asset.asset_id,
-                    "source_checksum_sha256": checksum,
-                    "source_updated_date": asset.updated_date,
-                    "run_id": run_id,
-                    "processed_at": processed_at,
-                    "activity_state": CanonicalActivityState.ACTIVE,
-                }
-            )
-            bundle = map_openalex_work(record, lineage=lineage)
-            bundles.append(bundle)
-            provenance_rows.append(
-                RecordProvenance.model_validate(
+) -> Callable[[], Iterator[StreamedWorkRecord]]:
+    """Return a factory that opens raw once and yields mapped records incrementally.
+
+    Invoked inside the one-asset publication transaction. Does not collect every
+    ``CanonicalWorkBundle`` / ``RecordProvenance`` for the file.
+    """
+
+    def open_records() -> Iterator[StreamedWorkRecord]:
+        with objects.open(raw_key) as handle:
+            for record in iter_jsonl_gz_records(handle, limits=decode_limits):
+                lineage = CanonicalLineage.model_validate(
+                    {
+                        "source_asset_id": asset.asset_id,
+                        "source_checksum_sha256": checksum,
+                        "source_updated_date": asset.updated_date,
+                        "run_id": run_id,
+                        "processed_at": processed_at,
+                        "activity_state": CanonicalActivityState.ACTIVE,
+                    }
+                )
+                bundle = map_openalex_work(record, lineage=lineage)
+                provenance = RecordProvenance.model_validate(
                     {
                         "record_id": bundle.work.work_id,
                         "entity_type": "work",
@@ -506,28 +506,24 @@ def _map_landed_records(
                         "source_updated_date": asset.updated_date,
                     }
                 )
-            )
-    return tuple(bundles), tuple(provenance_rows)
+                yield StreamedWorkRecord(bundle=bundle, provenance=provenance)
+
+    return open_records
 
 
-def _stats_from_outcomes(
+def _stats_from_counters(
     *,
     asset_id: str,
-    outcomes: tuple[CanonicalUpsertOutcome, ...],
-    provenance_count: int,
+    counters: PublishCounters,
     canonical: CanonicalStore,
 ) -> FileIngestStats:
-    inserted = sum(1 for item in outcomes if item is CanonicalUpsertOutcome.INSERTED)
-    identical = sum(1 for item in outcomes if item is CanonicalUpsertOutcome.IDENTICAL)
-    replaced = sum(1 for item in outcomes if item is CanonicalUpsertOutcome.REPLACED)
-    stale = sum(1 for item in outcomes if item is CanonicalUpsertOutcome.STALE)
     return FileIngestStats(
         asset_id=asset_id,
-        works_inserted=inserted,
-        works_identical=identical,
-        works_replaced=replaced,
-        works_stale=stale,
-        record_provenance_count=provenance_count,
+        works_inserted=counters.works_inserted,
+        works_identical=counters.works_identical,
+        works_replaced=counters.works_replaced,
+        works_stale=counters.works_stale,
+        record_provenance_count=counters.record_provenance_count,
         relationship_counts=canonical.relationship_counts(),
     )
 

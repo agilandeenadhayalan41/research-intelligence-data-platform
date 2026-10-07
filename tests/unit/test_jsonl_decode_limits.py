@@ -51,6 +51,68 @@ def test_rejects_max_decompressed_bytes_gzip_bomb_style() -> None:
         list(iter_jsonl_gz_records(io.BytesIO(compressed), limits=limits))
 
 
+def test_exact_decompressed_boundary_accepted() -> None:
+    body = b'{"id":"W1"}\n'
+    limits = JsonlDecodeLimits(
+        max_decompressed_bytes=len(body),
+        max_records=10,
+        max_record_bytes=1000,
+    )
+    records = list(iter_jsonl_gz_records(_gz(body), limits=limits))
+    assert [dict(item) for item in records] == [{"id": "W1"}]
+
+
+def test_decompressed_boundary_plus_one_rejected() -> None:
+    body = b'{"id":"W1"}\n'
+    limits = JsonlDecodeLimits(
+        max_decompressed_bytes=len(body) - 1,
+        max_records=10,
+        max_record_bytes=1000,
+    )
+    with pytest.raises(IngestionDecodeError, match="max_decompressed_bytes"):
+        list(iter_jsonl_gz_records(_gz(body), limits=limits))
+
+
+def test_trailing_newline_at_exact_total_boundary_accepted() -> None:
+    # Two lines whose total decompressed length equals the budget exactly.
+    body = b'{"a":1}\n{"b":2}\n'
+    assert body.endswith(b"\n")
+    limits = JsonlDecodeLimits(
+        max_decompressed_bytes=len(body),
+        max_records=10,
+        max_record_bytes=1000,
+    )
+    records = list(iter_jsonl_gz_records(_gz(body), limits=limits))
+    assert len(records) == 2
+
+
+def test_exact_max_record_bytes_accepted() -> None:
+    line = b'{"id":"W1"}'  # 11 bytes, no trailing newline (final line)
+    limits = JsonlDecodeLimits(
+        max_record_bytes=len(line),
+        max_decompressed_bytes=1000,
+        max_records=10,
+    )
+    records = list(iter_jsonl_gz_records(_gz(line), limits=limits))
+    assert [dict(item) for item in records] == [{"id": "W1"}]
+
+
+def test_max_record_bytes_plus_one_rejected() -> None:
+    line = b'{"id":"W1"}\n'  # 12 bytes including newline
+    limits = JsonlDecodeLimits(
+        max_record_bytes=len(line) - 1,
+        max_decompressed_bytes=1000,
+        max_records=10,
+    )
+    with pytest.raises(IngestionDecodeError, match="max_record_bytes"):
+        list(iter_jsonl_gz_records(_gz(line), limits=limits))
+
+
+def test_empty_gzip_yields_no_records() -> None:
+    records = list(iter_jsonl_gz_records(_gz(b"")))
+    assert records == []
+
+
 def test_rejects_malformed_utf8() -> None:
     body = b'{"id":"\xff"}\n'
     with pytest.raises(IngestionDecodeError, match="UTF-8"):
