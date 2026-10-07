@@ -167,13 +167,18 @@ as calendar dates in this contract. No silent `text[:10]` truncation.
 
 ## Version / deletion semantics (Works)
 
-`CanonicalLineage` attaches `source_asset_id`, `source_checksum_sha256`,
+`CanonicalLineage` attaches nested `source_asset_id`, `source_checksum_sha256`,
 `source_updated_date`, `run_id`, `processed_at`, `activity_state`, `deleted_at`.
+
+Flattened portable PyArrow / SQL physical columns rename the lineage date to
+`lineage_source_updated_date` so it never collides with entity fields such as
+`Work.source_updated_date` (PostgreSQL and BigQuery both use this distinction).
+Nested Pydantic access remains `work.lineage.source_updated_date`.
 
 `compare_work_versions(existing, incoming)`:
 
 1. same checksum → `IDENTICAL`
-2. compare `source_updated_date` → `NEWER` / `STALE`
+2. compare lineage `source_updated_date` (fallback Work record date) → `NEWER` / `STALE`
 3. equal dates, different checksum → `CONFLICT`
 4. undated mismatch → `CONFLICT`
 

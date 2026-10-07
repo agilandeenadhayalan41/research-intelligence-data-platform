@@ -37,6 +37,7 @@ class BigQueryAnalyticalRegistry(SettingsModel):
     active_works_view_path: str = "sql/bigquery/openalex/models/active_works.sql"
     merge_contracts: tuple[str, ...] = (
         "sql/bigquery/openalex/models/merge_works.sql",
+        "sql/bigquery/openalex/models/merge_works_preconditions.sql",
         "sql/bigquery/openalex/models/merge_work_topics.sql",
     )
     maximum_bytes_billed: int = Field(default=DEFAULT_MAXIMUM_BYTES_BILLED, gt=0)

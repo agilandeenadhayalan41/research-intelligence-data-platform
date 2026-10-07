@@ -29,11 +29,12 @@ CREATE TABLE IF NOT EXISTS `openalex.works` (
   `grants_presence` STRING NOT NULL,
   `source_asset_id` STRING NOT NULL,
   `source_checksum_sha256` STRING NOT NULL,
+  `lineage_source_updated_date` DATE,
   `run_id` STRING NOT NULL,
   `processed_at` TIMESTAMP NOT NULL,
   `activity_state` STRING NOT NULL,
   `deleted_at` TIMESTAMP
 )
-PARTITION BY `publication_date`
+PARTITION BY RANGE_BUCKET(`publication_year`, GENERATE_ARRAY(1000, 3001, 1))
 CLUSTER BY `work_id`, `doi`, `primary_publisher_id`, `primary_source_id`
 ;

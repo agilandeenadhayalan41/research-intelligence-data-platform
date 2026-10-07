@@ -11,12 +11,12 @@ CREATE TABLE IF NOT EXISTS `openalex.work_grants` (
   `funder_display_name` STRING,
   `source_asset_id` STRING NOT NULL,
   `source_checksum_sha256` STRING NOT NULL,
-  `source_updated_date` DATE,
+  `lineage_source_updated_date` DATE,
   `run_id` STRING NOT NULL,
   `processed_at` TIMESTAMP NOT NULL,
   `activity_state` STRING NOT NULL,
   `deleted_at` TIMESTAMP
 )
-PARTITION BY `source_updated_date`
+PARTITION BY `lineage_source_updated_date`
 CLUSTER BY `work_id`, `funder_id`
 ;

@@ -1,6 +1,7 @@
 -- pattern_id: open-access-trends
 -- BigQuery Standard SQL — Step 15 / #22 (NOT YET DEPLOYED)
--- Prefer @year_from / @year_to for bounded scans. Explicit columns only.
+-- Partition key is publication_year (INTEGER_RANGE). @year_from/@year_to
+-- filter that column for pruning. Explicit columns only.
 
 SELECT
   w.`publication_year`,

@@ -7,7 +7,7 @@ Maps Step 11 PyArrow logical schemas to BigQuery Standard SQL types. No
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, Self
 
 import pyarrow as pa
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -17,11 +17,13 @@ from research_platform.canonical.openalex.schemas import CANONICAL_SCHEMAS
 # BigQuery allows at most four clustering columns.
 BIGQUERY_MAX_CLUSTER_COLUMNS = 4
 
+# Flattened physical lineage column names (nested Pydantic keeps
+# CanonicalLineage.source_updated_date).
 LINEAGE_FIELD_NAMES: frozenset[str] = frozenset(
     {
         "source_asset_id",
         "source_checksum_sha256",
-        "source_updated_date",
+        "lineage_source_updated_date",
         "run_id",
         "processed_at",
         "activity_state",
@@ -29,7 +31,21 @@ LINEAGE_FIELD_NAMES: frozenset[str] = frozenset(
     }
 )
 
+# Canonical publication_year domain (matches Work model ge/le).
+PUBLICATION_YEAR_RANGE_START = 1000
+PUBLICATION_YEAR_RANGE_END_EXCLUSIVE = 3001
+PUBLICATION_YEAR_RANGE_INTERVAL = 1
+
 FORBIDDEN_INVENTED_SOURCE_FIELDS: frozenset[str] = frozenset({"issn", "eissn"})
+
+# Step 14 year-bounded patterns that must filter the works partition key.
+YEAR_BOUNDED_PATTERN_IDS: frozenset[str] = frozenset(
+    {
+        "publication-trends",
+        "open-access-trends",
+        "publisher-topic-license-year",
+    }
+)
 
 
 class SettingsModel(BaseModel):
@@ -68,6 +84,17 @@ class ValidationLabel(StrEnum):
     NOT_YET_DEPLOYED = "NOT_YET_DEPLOYED"
 
 
+class AnalyticalMergeDecision(StrEnum):
+    """Offline mirror of analytical works MERGE WHEN MATCHED outcomes."""
+
+    IDENTICAL_NOOP = "IDENTICAL_NOOP"
+    APPLY_UPDATE = "APPLY_UPDATE"
+    SKIP_STALE = "SKIP_STALE"
+    SKIP_RESTORE_REQUIRED = "SKIP_RESTORE_REQUIRED"
+    SKIP_CONFLICT = "SKIP_CONFLICT"
+    INSERT = "INSERT"
+
+
 class BigQueryColumn(SettingsModel):
     name: str = Field(min_length=1, max_length=128)
     bq_type: BigQueryType
@@ -77,8 +104,33 @@ class BigQueryColumn(SettingsModel):
 
 class PartitioningSpec(SettingsModel):
     field: str | None = None
-    partition_type: Literal["DATE", "NONE"] = "NONE"
+    partition_type: Literal["DATE", "INTEGER_RANGE", "NONE"] = "NONE"
+    range_start: int | None = None
+    range_end: int | None = None
+    range_interval: int | None = None
     rationale: str = Field(min_length=1, max_length=1024)
+
+    @model_validator(mode="after")
+    def validate_range_fields(self) -> Self:
+        if self.partition_type == "INTEGER_RANGE":
+            if self.field is None:
+                raise ValueError("INTEGER_RANGE partitioning requires field")
+            if (
+                self.range_start is None
+                or self.range_end is None
+                or self.range_interval is None
+            ):
+                raise ValueError(
+                    "INTEGER_RANGE requires range_start, range_end, range_interval"
+                )
+            if self.range_interval <= 0:
+                raise ValueError("range_interval must be positive")
+            if self.range_end <= self.range_start:
+                raise ValueError("range_end must be > range_start")
+        elif self.partition_type == "DATE":
+            if self.field is None:
+                raise ValueError("DATE partitioning requires field")
+        return self
 
 
 class ClusteringSpec(SettingsModel):
@@ -113,24 +165,27 @@ class BigQueryTableContract(SettingsModel):
 
     @model_validator(mode="after")
     def columns_cover_keys_and_lineage(self) -> BigQueryTableContract:
-        names = {column.name for column in self.columns}
+        names = [column.name for column in self.columns]
+        if len(names) != len(set(names)):
+            raise ValueError(f"{self.table_name}: duplicate column names")
+        name_set = set(names)
         for key in self.primary_logical_key:
-            if key not in names:
+            if key not in name_set:
                 raise ValueError(f"{self.table_name}: primary key {key!r} missing")
-        if self.partitioning.field is not None and self.partitioning.field not in names:
+        if self.partitioning.field is not None and self.partitioning.field not in name_set:
             raise ValueError(
                 f"{self.table_name}: partition field "
                 f"{self.partitioning.field!r} missing from schema"
             )
         for field in self.clustering.fields:
-            if field not in names:
+            if field not in name_set:
                 raise ValueError(
                     f"{self.table_name}: cluster field {field!r} missing from schema"
                 )
-        if self.lineage_preserved and not LINEAGE_FIELD_NAMES.issubset(names):
-            missing = sorted(LINEAGE_FIELD_NAMES - names)
+        if self.lineage_preserved and not LINEAGE_FIELD_NAMES.issubset(name_set):
+            missing = sorted(LINEAGE_FIELD_NAMES - name_set)
             raise ValueError(f"{self.table_name}: missing lineage fields {missing}")
-        forbidden = names & FORBIDDEN_INVENTED_SOURCE_FIELDS
+        forbidden = name_set & FORBIDDEN_INVENTED_SOURCE_FIELDS
         if forbidden:
             raise ValueError(
                 f"{self.table_name}: invented forbidden fields {sorted(forbidden)}"
@@ -182,30 +237,23 @@ def arrow_type_to_bigquery(dtype: pa.DataType) -> BigQueryType:
 
 
 def columns_from_arrow_schema(schema: pa.Schema) -> tuple[BigQueryColumn, ...]:
-    """Convert a PyArrow schema to BigQuery columns, deduplicating names.
+    """Convert a PyArrow schema to BigQuery columns.
 
-    ``works`` currently lists ``source_updated_date`` in both entity and lineage
-    field lists in the PyArrow schema. BigQuery DDL keeps a single column.
+    Schemas must already have unique field names (Work record
+    ``source_updated_date`` vs flattened ``lineage_source_updated_date``).
     """
-    seen: dict[str, BigQueryColumn] = {}
-    order: list[str] = []
-    for field in schema:
-        column = BigQueryColumn(
+    names = list(schema.names)
+    if len(names) != len(set(names)):
+        dupes = sorted({name for name in names if names.count(name) > 1})
+        raise ValueError(f"PyArrow schema has duplicate field names: {dupes}")
+    return tuple(
+        BigQueryColumn(
             name=field.name,
             bq_type=arrow_type_to_bigquery(field.type),
             nullable=field.nullable,
         )
-        if field.name in seen:
-            existing = seen[field.name]
-            if existing.bq_type != column.bq_type:
-                raise ValueError(f"conflicting types for column {field.name}")
-            # Prefer non-nullability if either side requires NOT NULL.
-            if existing.nullable and not column.nullable:
-                seen[field.name] = column
-            continue
-        seen[field.name] = column
-        order.append(field.name)
-    return tuple(seen[name] for name in order)
+        for field in schema
+    )
 
 
 # Exact grains for every analytical table (ordinal keys retained).
@@ -268,25 +316,30 @@ RELATIONSHIP_TABLES: frozenset[str] = frozenset(
 def _partitioning_for(table_name: str) -> PartitioningSpec:
     if table_name == "works":
         return PartitioningSpec(
-            field="publication_date",
-            partition_type="DATE",
+            field="publication_year",
+            partition_type="INTEGER_RANGE",
+            range_start=PUBLICATION_YEAR_RANGE_START,
+            range_end=PUBLICATION_YEAR_RANGE_END_EXCLUSIVE,
+            range_interval=PUBLICATION_YEAR_RANGE_INTERVAL,
             rationale=(
-                "Work-centric analytical scans (publication trends, OA trends, "
-                "year-bounded publisher metrics) prune on publication_date. "
-                "NULL publication_date rows land in the NULL partition. "
-                "Incremental MERGE identity uses work_id + source_updated_date "
-                "from the control plane, not partition replacement alone."
+                "Step 14 trend/year patterns filter publication_year "
+                "(@year_from/@year_to). Integer-range partitioning on that "
+                "column enables partition pruning for those predicates. "
+                "Canonical publication_year domain is 1000..3000; NULL years "
+                "use the BigQuery NULL partition. MERGE identity uses work_id "
+                "+ lineage_source_updated_date / checksum precedence, not "
+                "partition replacement."
             ),
         )
     if table_name in RELATIONSHIP_TABLES:
         return PartitioningSpec(
-            field="source_updated_date",
+            field="lineage_source_updated_date",
             partition_type="DATE",
             rationale=(
-                "Relationship tables have no publication_date. Partitioning uses "
-                "lineage source_updated_date (OpenAlex asset/updated freshness), "
-                "supporting prune of recently refreshed relationship batches. "
-                "This is NOT Work publication time. Primary incremental path is "
+                "Relationship tables have no publication_year. Partitioning uses "
+                "flattened lineage_source_updated_date (OpenAlex asset/updated "
+                "freshness / deletion date for tombstones). This is NOT Work "
+                "publication time. Primary incremental path is "
                 "REPLACE_BY_WORK_ID for the changed work_id set."
             ),
         )
@@ -394,9 +447,10 @@ def _active_behavior(table_name: str) -> ActiveFilterBehavior:
 def _cost_notes(table_name: str) -> str:
     if table_name == "works":
         return (
-            "Prefer partition predicates on publication_date / publication_year "
-            "bounds; filter activity_state = 'ACTIVE' early; avoid SELECT * in "
-            "aggregates. Deployment should set maximum_bytes_billed."
+            "Prefer partition predicates on publication_year "
+            "(@year_from/@year_to); filter activity_state = 'ACTIVE' early; "
+            "avoid SELECT * in aggregates. Deployment should set "
+            "maximum_bytes_billed."
         )
     if table_name in RELATIONSHIP_TABLES:
         return (
@@ -429,6 +483,21 @@ def build_table_contracts() -> tuple[BigQueryTableContract, ...]:
     return tuple(contracts)
 
 
+def render_partition_clause(spec: PartitioningSpec) -> str | None:
+    """Render BigQuery PARTITION BY clause body (without leading keyword)."""
+    if spec.partition_type == "NONE" or spec.field is None:
+        return None
+    if spec.partition_type == "DATE":
+        return f"`{spec.field}`"
+    assert spec.range_start is not None
+    assert spec.range_end is not None
+    assert spec.range_interval is not None
+    return (
+        f"RANGE_BUCKET(`{spec.field}`, GENERATE_ARRAY("
+        f"{spec.range_start}, {spec.range_end}, {spec.range_interval}))"
+    )
+
+
 def render_create_table_ddl(contract: BigQueryTableContract, *, dataset: str = "openalex") -> str:
     """Render BigQuery Standard SQL CREATE TABLE DDL for a contract."""
     lines = [
@@ -446,11 +515,9 @@ def render_create_table_ddl(contract: BigQueryTableContract, *, dataset: str = "
     lines.append(",\n".join(col_sql))
     lines.append(")")
     options: list[str] = []
-    if (
-        contract.partitioning.partition_type == "DATE"
-        and contract.partitioning.field is not None
-    ):
-        options.append(f"PARTITION BY `{contract.partitioning.field}`")
+    partition_expr = render_partition_clause(contract.partitioning)
+    if partition_expr is not None:
+        options.append(f"PARTITION BY {partition_expr}")
     if contract.clustering.fields:
         cluster_cols = ", ".join(f"`{name}`" for name in contract.clustering.fields)
         options.append(f"CLUSTER BY {cluster_cols}")
@@ -459,3 +526,38 @@ def render_create_table_ddl(contract: BigQueryTableContract, *, dataset: str = "
     lines.append(";")
     lines.append("")
     return "\n".join(lines)
+
+
+def decide_analytical_works_merge(
+    *,
+    target_exists: bool,
+    target_checksum: str | None,
+    target_lineage_date: object | None,
+    target_activity_state: str | None,
+    source_checksum: str,
+    source_lineage_date: object | None,
+    source_activity_state: str,
+) -> AnalyticalMergeDecision:
+    """Offline decision helper mirroring merge_works.sql WHEN MATCHED guards.
+
+    Does not execute BigQuery. Used to lock MERGE precedence contracts in tests.
+    """
+    if not target_exists:
+        return AnalyticalMergeDecision.INSERT
+    assert target_checksum is not None
+    assert target_activity_state is not None
+    if source_checksum == target_checksum:
+        return AnalyticalMergeDecision.IDENTICAL_NOOP
+    if target_activity_state == "DELETED" and source_activity_state == "ACTIVE":
+        return AnalyticalMergeDecision.SKIP_RESTORE_REQUIRED
+    if target_lineage_date is not None and source_lineage_date is not None:
+        if source_lineage_date < target_lineage_date:
+            return AnalyticalMergeDecision.SKIP_STALE
+        if source_lineage_date == target_lineage_date:
+            return AnalyticalMergeDecision.SKIP_CONFLICT
+        return AnalyticalMergeDecision.APPLY_UPDATE
+    if source_lineage_date is not None and target_lineage_date is None:
+        return AnalyticalMergeDecision.APPLY_UPDATE
+    if source_lineage_date is None and target_lineage_date is not None:
+        return AnalyticalMergeDecision.SKIP_STALE
+    return AnalyticalMergeDecision.SKIP_CONFLICT

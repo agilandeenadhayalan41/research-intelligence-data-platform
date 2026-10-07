@@ -8,7 +8,7 @@ SELECT
   p.`activity_state`,
   p.`source_asset_id`,
   p.`source_checksum_sha256`,
-  p.`source_updated_date`,
+  p.`lineage_source_updated_date`,
   p.`run_id`,
   p.`processed_at`
 FROM `openalex.publishers` AS p

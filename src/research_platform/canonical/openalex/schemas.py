@@ -2,6 +2,10 @@
 
 These schemas are the interchange contract. They are independent of BigQuery,
 PostgreSQL, and GCS physical layout decisions.
+
+Flattened lineage uses ``lineage_source_updated_date`` so it never collides with
+entity fields such as ``Work.source_updated_date``. Nested Pydantic models keep
+``CanonicalLineage.source_updated_date`` unchanged.
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ import pyarrow as pa
 _LINEAGE_FIELDS: list[tuple[str, pa.DataType, bool]] = [
     ("source_asset_id", pa.string(), False),
     ("source_checksum_sha256", pa.string(), False),
-    ("source_updated_date", pa.date32(), True),
+    ("lineage_source_updated_date", pa.date32(), True),
     ("run_id", pa.string(), False),
     ("processed_at", pa.timestamp("us", tz="UTC"), False),
     ("activity_state", pa.string(), False),
