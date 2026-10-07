@@ -1,1 +1,1 @@
-"""Analytical model contracts (BigQuery-first; no cloud deployment in Step 15)."""
+"""Analytical model contracts (BigQuery + Gold; no cloud deployment)."""
