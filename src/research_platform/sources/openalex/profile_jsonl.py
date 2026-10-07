@@ -4,6 +4,7 @@ import gzip
 import json
 import zlib
 from collections import defaultdict
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, BinaryIO, Literal
 
@@ -14,10 +15,12 @@ from research_platform.sources.openalex.profile_models import (
     OpenAlexEmptySourceError,
     OpenAlexMalformedJSONLError,
     OpenAlexProfileLimitError,
+    ProfileBudget,
+    ProfilingLimits,
     child_path,
+    sampled_count_evidence,
 )
 
-_MAX_FIELD_PATHS = 10_000
 # Objects whose keys are data rather than schema (OpenAlex abstract word index).
 DYNAMIC_KEY_OBJECTS = frozenset({"abstract_inverted_index"})
 
@@ -39,40 +42,58 @@ def sample_jsonl(
     compression: Literal["gzip"] | None,
     max_records: int,
     max_decoded_bytes: int,
+    limits: ProfilingLimits = ProfilingLimits(),
+    _budget: ProfileBudget | None = None,
 ) -> JsonlSample:
     """Stream leading JSONL records without reading to EOF or materializing the payload.
 
     The caller owns ``stream``. Decompression wrappers created here are closed on
-    success and failure. At most ``max_decoded_bytes`` decoded bytes are consumed;
-    a longer line fails explicitly instead of being truncated.
+    success and failure. Decoded accounting includes the EOF probe; at most one
+    additional byte is consumed to detect overflow. Structural preflight bounds
+    record allocation before JSON decoding. Time checks are cooperative.
     """
     if compression not in {"gzip", None}:
         raise ValueError("JSONL compression must be gzip or None")
-    if type(max_records) is not int or max_records <= 0:
-        raise ValueError("max_records must be a positive integer")
-    if type(max_decoded_bytes) is not int or max_decoded_bytes <= 0:
-        raise ValueError("max_decoded_bytes must be a positive integer")
+    limits = ProfilingLimits.model_validate({
+        **limits.model_dump(),
+        "max_profile_records": max_records,
+        "max_decoded_sample_bytes": max_decoded_bytes,
+    })
+    budget = _budget if _budget is not None else ProfileBudget(limits)
 
     reader: BinaryIO = (
         gzip.GzipFile(fileobj=stream, mode="rb")  # type: ignore[assignment]
         if compression == "gzip"
         else stream
     )
-    observer = _Observer()
+    observer = _Observer(budget)
     decoded = 0
     records = 0
     reached_eof = False
     try:
         while records < max_records:
-            line = _read_line(reader, max_decoded_bytes - decoded)
+            budget.check()
+            line = _read_line(
+                reader, min(max_decoded_bytes - decoded, limits.max_record_bytes)
+            )
+            budget.check()
             if not line:
                 reached_eof = True
                 break
             decoded += len(line)
-            observer.observe_record(_decode_record(line))
+            _preflight_record(line, budget)
+            record = _decode_record(line)
+            budget.check()
+            observer.observe_record(record)
             records += 1
-        if not reached_eof and _read_line(reader, 1, probe=True) == b"":
-            reached_eof = True
+        if not reached_eof:
+            budget.check()
+            probe = _read_line(reader, 1, probe=True)
+            budget.check()
+            decoded += len(probe)
+            if decoded > max_decoded_bytes:
+                raise OpenAlexProfileLimitError("JSONL sample exceeds the decoded byte limit")
+            reached_eof = not probe
     finally:
         if reader is not stream:
             reader.close()
@@ -87,6 +108,44 @@ def sample_jsonl(
     )
 
 
+def _preflight_record(line: bytes, budget: ProfileBudget) -> None:
+    """Bound JSON structure without allocating its object tree; decoding validates syntax."""
+    depth = 0
+    in_string = False
+    escaped = False
+    in_scalar = False
+    for index, char in enumerate(line):
+        if index % 4096 == 0:
+            budget.check()
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == 92:
+                escaped = True
+            elif char == 34:
+                in_string = False
+            continue
+        if char == 34:
+            budget.visit()
+            in_string = True
+            in_scalar = False
+        elif char in (91, 123):
+            budget.visit()
+            depth += 1
+            if depth > budget.limits.max_nesting_depth:
+                raise OpenAlexProfileLimitError("JSONL record exceeds the nesting limit")
+            in_scalar = False
+        elif char in (93, 125):
+            depth -= 1
+            in_scalar = False
+        elif char in (9, 10, 13, 32, 44, 58):
+            in_scalar = False
+        elif not in_scalar:
+            budget.visit()
+            in_scalar = True
+    budget.check()
+
+
 def _read_line(reader: BinaryIO, remaining: int, *, probe: bool = False) -> bytes:
     try:
         line = reader.read(1) if probe else reader.readline(remaining + 1)
@@ -95,7 +154,7 @@ def _read_line(reader: BinaryIO, remaining: int, *, probe: bool = False) -> byte
     except (gzip.BadGzipFile, zlib.error):
         raise OpenAlexDecompressionError("gzip stream cannot be decompressed") from None
     if not probe and len(line) > remaining:
-        raise OpenAlexProfileLimitError("JSONL sample exceeds the decoded byte limit")
+        raise OpenAlexProfileLimitError("JSONL record or sample exceeds its decoded byte limit")
     return line
 
 
@@ -146,7 +205,8 @@ def _json_type(value: object) -> str:
 
 
 class _Observer:
-    def __init__(self) -> None:
+    def __init__(self, budget: ProfileBudget) -> None:
+        self._budget = budget
         self._types: dict[str, set[str]] = defaultdict(set)
         self._present: dict[str, int] = defaultdict(int)
         self._nulls: dict[str, int] = defaultdict(int)
@@ -156,32 +216,39 @@ class _Observer:
         self._maps: set[str] = set()
 
     def observe_record(self, record: dict[str, Any]) -> None:
-        stack: list[tuple[str, object]] = [("", record)]
+        stack = [self._children("", record)]
         while stack:
-            path, value = stack.pop()
-            if isinstance(value, dict) and path in DYNAMIC_KEY_OBJECTS:
-                self._maps.add(path)
-                value_path = f"{path}{{value}}"
-                self._repeated.add(value_path)
-                for child in value.values():
-                    self._record(value_path, child)
-                    stack.append((value_path, child))
-            elif isinstance(value, dict):
-                self._object_counts[path] += 1
-                for key, child in value.items():
-                    member_path = child_path(path, key)
-                    self._record(member_path, child)
-                    self._parents.setdefault(member_path, path)
-                    stack.append((member_path, child))
-            elif isinstance(value, list):
-                element_path = f"{path}[]"
-                self._repeated.add(element_path)
-                for element in value:
-                    self._record(element_path, element)
-                    stack.append((element_path, element))
+            self._budget.check()
+            try:
+                path, value = next(stack[-1])
+            except StopIteration:
+                stack.pop()
+                continue
+            self._record(path, value)
+            if isinstance(value, (dict, list)):
+                stack.append(self._children(path, value))
+
+    def _children(self, path: str, value: object) -> Iterator[tuple[str, object]]:
+        if isinstance(value, dict) and path in DYNAMIC_KEY_OBJECTS:
+            self._maps.add(path)
+            value_path = f"{path}{{value}}"
+            self._repeated.add(value_path)
+            for child in value.values():
+                yield value_path, child
+        elif isinstance(value, dict):
+            self._object_counts[path] += 1
+            for key, child in value.items():
+                member_path = child_path(path, key)
+                self._parents.setdefault(member_path, path)
+                yield member_path, child
+        elif isinstance(value, list):
+            element_path = f"{path}[]"
+            self._repeated.add(element_path)
+            for child in value:
+                yield element_path, child
 
     def _record(self, path: str, value: object) -> None:
-        if path not in self._types and len(self._types) >= _MAX_FIELD_PATHS:
+        if path not in self._types and len(self._types) >= self._budget.limits.max_schema_fields:
             raise OpenAlexProfileLimitError("JSONL sample exceeds the field path limit")
         self._types[path].add(_json_type(value))
         self._present[path] += 1
@@ -191,6 +258,7 @@ class _Observer:
     def fields(self) -> tuple[FieldProfile, ...]:
         profiles = []
         for path in sorted(self._types):
+            self._budget.check()
             types = self._types[path]
             missing = None
             if path not in self._repeated:
@@ -206,6 +274,7 @@ class _Observer:
                     sampled_present_count=self._present[path],
                     sampled_missing_count=missing,
                     sampled_null_count=nulls,
+                    sampled_evidence=sampled_count_evidence(self._present[path], missing, nulls),
                 )
             )
         return tuple(profiles)

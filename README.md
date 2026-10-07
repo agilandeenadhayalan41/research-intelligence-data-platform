@@ -41,13 +41,14 @@ implemented GCS/BigQuery deployment or production pipeline.
 
 ### Next scoped work
 
-The next coding step is **Step 08: source-format and bounded sample profiling**,
+**Step 08: source-format and bounded sample profiling** has an implementation,
 tracked by [issue #16](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/16).
-It must identify the actual source representation, use PyArrow for genuine
-Parquet, and keep payload retrieval and processing bounded. JSONL must never be
-relabeled as Parquet.
+Its [resource limits and evidence](docs/architecture/openalex-source-profiling.md)
+distinguish offline synthetic coverage from the still-pending real payload
+inspection. JSONL is never relabeled as Parquet.
 
-Before assigning that implementation, synchronize the GitHub backlog with the
+**Step 09: immutable landing remains planned and requires a separate assignment.**
+Before assigning another implementation, synchronize the GitHub backlog with the
 merged [roadmap](docs/architecture/roadmap.md). Historical issue scopes and native
 dependencies still need alignment; this README does not perform that refresh.
 Keep [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)

@@ -11,10 +11,16 @@ from research_platform.sources.openalex.profile_models import (
     EvidenceType,
     FieldProfile,
     OpenAlexMalformedParquetError,
+    OpenAlexProfileError,
+    OpenAlexProfileLimitError,
+    ProfileBudget,
+    ProfilingLimits,
     child_path,
+    sampled_count_evidence,
 )
 
 PARQUET_MAGIC = b"PAR1"
+_THRIFT_SIZE_LIMIT_MARKERS = ("Exceeded size limit", "TProtocolException")
 
 
 @dataclass(frozen=True)
@@ -32,34 +38,73 @@ class ParquetInspection:
     fields: tuple[FieldProfile, ...]
 
 
-def inspect_parquet(path: Path, *, max_records: int) -> ParquetInspection:
+def inspect_parquet(
+    path: Path,
+    *,
+    max_records: int,
+    limits: ProfilingLimits = ProfilingLimits(),
+    _budget: ProfileBudget | None = None,
+) -> ParquetInspection:
     """Read footer metadata first, then at most one batch of ``max_records`` rows.
 
-    The file is never converted to pandas or read as a whole table.
+    Footer/schema and conservative expansion guards precede value access. Native
+    Arrow calls are not a hard memory sandbox and are timed only at checkpoints.
     """
-    if type(max_records) is not int or max_records <= 0:
-        raise ValueError("max_records must be a positive integer")
-    _check_magic(path)
+    limits = ProfilingLimits.model_validate({
+        **limits.model_dump(), "max_profile_records": max_records,
+    })
+    budget = _budget if _budget is not None else ProfileBudget(limits)
     try:
-        with pq.ParquetFile(path) as parquet_file:
+        budget.check()
+        _check_magic(path, limits)
+        with pq.ParquetFile(
+            path,
+            thrift_string_size_limit=limits.max_parquet_footer_bytes,
+            thrift_container_size_limit=limits.max_profile_nodes,
+            pre_buffer=False,
+        ) as parquet_file:
+            budget.check()
             metadata = parquet_file.metadata
+            if (
+                metadata.num_columns > limits.max_schema_fields
+                or metadata.num_row_groups > limits.max_profile_nodes
+                or metadata.num_columns * metadata.num_row_groups > limits.max_profile_nodes
+            ):
+                raise OpenAlexProfileLimitError("Parquet metadata exceeds its work budget")
+            compression, statistics = _column_chunk_facts(metadata, budget)
             schema = parquet_file.schema_arrow
-            compression, statistics = _column_chunk_facts(metadata)
+            fields: list[FieldProfile] = []
+            for field in schema:
+                _walk(child_path("", field.name), field, fields, budget)
             sampled_counts: dict[str, tuple[int, int]] = {}
             sampled_records = 0
             if metadata.num_rows:
-                batch = next(parquet_file.iter_batches(batch_size=max_records), None)
+                budget.check()
+                batch = next(
+                    parquet_file.iter_batches(batch_size=max_records, use_threads=False), None
+                )
+                budget.check()
                 if batch is not None:
+                    if batch.nbytes > limits.max_decoded_sample_bytes:
+                        raise OpenAlexProfileLimitError("Parquet batch exceeds its decoded byte limit")
                     batch = batch.slice(0, max_records)
                     sampled_records = batch.num_rows
                     for index, field in enumerate(schema):
+                        budget.check()
                         sampled_counts[child_path("", field.name)] = (
                             batch.num_rows,
                             batch.column(index).null_count,
                         )
-            fields: list[FieldProfile] = []
-            for field in schema:
-                _walk(child_path("", field.name), field, fields, sampled_counts)
+            for index, field in enumerate(fields):
+                budget.check()
+                if field.path in sampled_counts:
+                    present, nulls = sampled_counts[field.path]
+                    fields[index] = FieldProfile.model_validate({
+                        **field.model_dump(),
+                        "sampled_present_count": present,
+                        "sampled_null_count": nulls,
+                        "sampled_evidence": sampled_count_evidence(present, None, nulls),
+                    })
             return ParquetInspection(
                 row_count=metadata.num_rows,
                 row_group_count=metadata.num_row_groups,
@@ -71,34 +116,64 @@ def inspect_parquet(path: Path, *, max_records: int) -> ParquetInspection:
                 sampled_record_count=sampled_records,
                 fields=tuple(sorted(fields, key=lambda item: item.path)),
             )
-    except (pa.ArrowException, OSError, ValueError):
+    except OpenAlexProfileError:
+        raise
+    except (pa.ArrowException, OSError, ValueError) as exc:
+        if _is_thrift_allocation_limit_error(exc):
+            raise OpenAlexProfileLimitError(
+                "Parquet thrift metadata exceeds its configured allocation limit"
+            ) from None
         raise OpenAlexMalformedParquetError("Parquet footer or data cannot be read") from None
 
 
-def _check_magic(path: Path) -> None:
+def _is_thrift_allocation_limit_error(exc: BaseException) -> bool:
+    """True when Arrow rejected thrift string/container allocations at our caps."""
+    text = str(exc)
+    return "thrift" in text.lower() and any(
+        marker in text for marker in _THRIFT_SIZE_LIMIT_MARKERS
+    )
+
+
+def _check_magic(path: Path, limits: ProfilingLimits) -> None:
     size = path.stat().st_size
+    if size > limits.max_file_size_bytes:
+        raise OpenAlexProfileLimitError("Parquet source exceeds the byte limit")
     if size < 2 * len(PARQUET_MAGIC) + 4:
         raise OpenAlexMalformedParquetError("Parquet file is truncated")
     with path.open("rb") as handle:
         head = handle.read(len(PARQUET_MAGIC))
-        handle.seek(-len(PARQUET_MAGIC), 2)
-        tail = handle.read(len(PARQUET_MAGIC))
+        handle.seek(-8, 2)
+        footer = handle.read(8)
     if head != PARQUET_MAGIC:
         raise OpenAlexMalformedParquetError("Parquet file has no leading magic bytes")
-    if tail != PARQUET_MAGIC:
+    if footer[4:] != PARQUET_MAGIC:
         raise OpenAlexMalformedParquetError("Parquet file is truncated or has no footer")
+    footer_bytes = int.from_bytes(footer[:4], "little")
+    if not 0 < footer_bytes <= size - 12:
+        raise OpenAlexMalformedParquetError("Parquet footer length is invalid")
+    if footer_bytes > limits.max_parquet_footer_bytes:
+        raise OpenAlexProfileLimitError("Parquet footer exceeds the metadata byte limit")
 
 
 def _column_chunk_facts(
-    metadata: pq.FileMetaData,
+    metadata: pq.FileMetaData, budget: ProfileBudget,
 ) -> tuple[str | None, Literal["all", "partial", "none"] | None]:
     codecs: set[str] = set()
     with_stats = 0
     chunks = 0
+    decoded_bound = 0
     for group_index in range(metadata.num_row_groups):
+        budget.check()
         group = metadata.row_group(group_index)
         for column_index in range(group.num_columns):
+            budget.visit()
             column = group.column(column_index)
+            if column.total_uncompressed_size < 0 or column.num_values < 0:
+                raise OpenAlexMalformedParquetError("Parquet column size/count is invalid")
+            # A dictionary value can be repeated many times, including inside one list row.
+            decoded_bound += column.total_uncompressed_size * max(1, column.num_values)
+            if decoded_bound > budget.limits.max_decoded_sample_bytes:
+                raise OpenAlexProfileLimitError("Parquet values exceed the conservative expansion budget")
             codecs.add(str(column.compression))
             chunks += 1
             with_stats += 1 if column.is_stats_set else 0
@@ -114,11 +189,17 @@ def _walk(
     path: str,
     field: pa.Field,
     out: list[FieldProfile],
-    sampled_counts: dict[str, tuple[int, int]],
+    budget: ProfileBudget,
+    depth: int = 1,
 ) -> None:
+    budget.visit()
+    if depth > budget.limits.max_nesting_depth or len(out) >= budget.limits.max_schema_fields:
+        raise OpenAlexProfileLimitError("Parquet schema exceeds its depth or field limit")
     data_type = field.type
     children: list[tuple[str, pa.Field]] = []
     if pa.types.is_struct(data_type):
+        if len(out) + 1 + data_type.num_fields > budget.limits.max_schema_fields:
+            raise OpenAlexProfileLimitError("Parquet schema exceeds its field limit")
         kind = "struct"
         type_name = "struct"
         children = [
@@ -145,7 +226,6 @@ def _walk(
     else:
         kind = "scalar"
         type_name = str(data_type)
-    present, nulls = sampled_counts.get(path, (None, None))
     out.append(
         FieldProfile(
             path=path,
@@ -153,9 +233,8 @@ def _walk(
             kind=kind,
             nullable=field.nullable,
             evidence=EvidenceType.EXACT_FILE_METADATA,
-            sampled_present_count=present,
-            sampled_null_count=nulls,
+            sampled_evidence=sampled_count_evidence(None, None, None),
         )
     )
     for nested_path, child in children:
-        _walk(nested_path, child, out, {})
+        _walk(nested_path, child, out, budget, depth + 1)

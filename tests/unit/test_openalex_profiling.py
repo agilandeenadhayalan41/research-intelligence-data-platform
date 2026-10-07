@@ -32,6 +32,8 @@ from research_platform.sources.openalex import (
     ProfilingLimits,
 )
 from research_platform.sources.openalex import profiling
+from research_platform.sources.openalex import profile_jsonl as jsonl_module
+from research_platform.sources.openalex import profile_models
 from research_platform.sources.openalex.profile_jsonl import sample_jsonl
 from research_platform.sources.openalex.profile_parquet import inspect_parquet
 
@@ -402,22 +404,14 @@ def test_unknown_size_is_rejected_before_retrieval() -> None:
     assert client.uris == []
 
 
-def test_exact_25_000_000_byte_metadata_boundary_is_accepted(monkeypatch) -> None:
+def test_maximum_metadata_size_does_not_excuse_a_short_payload() -> None:
     body = gz(jsonl([{"id": "W1"}]))
     response = FakeResponse(body, headers={})
-    seen: dict[str, int] = {}
-    original = profiling._CountingReader.__init__
-
-    def spy(self, stream, *, max_bytes, declared_bytes):  # type: ignore[no-untyped-def]
-        seen["max_bytes"] = max_bytes
-        original(self, stream, max_bytes=max_bytes, declared_bytes=declared_bytes)
-
-    monkeypatch.setattr(profiling._CountingReader, "__init__", spy)
     with pytest.raises(OpenAlexSizeMismatchError):
         profiling.profile_openalex_asset(
             connector(FakeClient(response)), asset(size=25_000_000)
         )
-    assert seen["max_bytes"] == 25_000_000
+    assert response.closed
 
 
 def test_content_length_mismatch_is_rejected_before_payload_read() -> None:
@@ -642,6 +636,383 @@ def test_parquet_temporary_file_is_deleted(tmp_path: Path, monkeypatch) -> None:
     with pytest.raises(OpenAlexMalformedParquetError):
         profile_parquet_bytes(b"PAR1" + b"\x00" * 32 + b"PAR1")
     assert list(spool.iterdir()) == []
+
+
+# Resource-budget regressions
+
+
+class GeneratedStream(io.RawIOBase):
+    """Generate boundary-sized input without storing a large fixture."""
+
+    def __init__(self, size: int) -> None:
+        super().__init__()
+        self.size = size
+        self.served = 0
+        self.requests: list[int] = []
+
+    def read(self, size: int = -1) -> bytes:
+        assert 0 <= size <= 64 * 1024
+        self.requests.append(size)
+        count = min(size, self.size - self.served)
+        self.served += count
+        return b"x" * count
+
+
+@pytest.mark.parametrize("actual_size", [25_000_000, 25_000_001])
+def test_actual_source_byte_boundary(actual_size: int) -> None:
+    stream = GeneratedStream(actual_size)
+    reader = profiling._CountingReader(
+        stream, max_bytes=25_000_000, declared_bytes=25_000_000
+    )
+    if actual_size == 25_000_000:
+        assert reader.verify_complete() == 25_000_000
+    else:
+        with pytest.raises(OpenAlexProfileLimitError):
+            reader.verify_complete()
+    assert stream.served == actual_size
+    assert stream.requests[-1] <= 25_000_000 % (64 * 1024) + 1
+
+
+@pytest.mark.parametrize(
+    ("max_bytes", "declared_bytes", "error"),
+    [(4, None, OpenAlexProfileLimitError),
+     (4, 10, OpenAlexProfileLimitError),
+     (10, 4, OpenAlexSizeMismatchError)],
+)
+def test_read_requests_allow_only_one_overflow_probe(max_bytes, declared_bytes, error) -> None:
+    stream = GeneratedStream(30)
+    reader = profiling._CountingReader(
+        stream, max_bytes=max_bytes, declared_bytes=declared_bytes
+    )
+    with pytest.raises(error):
+        reader.read(1000)
+    assert stream.requests == [5]
+    assert stream.served == reader.bytes_read == 5
+
+
+def test_stricter_profile_limit_closes_supplied_stream(monkeypatch) -> None:
+    stream = io.BytesIO(gz(jsonl([{"id": "W1"}])))
+    source = connector(FakeClient(), max_bytes=1000)
+    monkeypatch.setattr(source, "fetch", lambda unused: stream)
+    with pytest.raises(OpenAlexProfileLimitError):
+        profiling.profile_openalex_asset(
+            source, asset(size=4), ProfilingLimits(max_file_size_bytes=4)
+        )
+    assert stream.closed
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["max_record_bytes", "max_nesting_depth", "max_profile_nodes",
+     "max_schema_fields", "max_profile_seconds", "max_parquet_footer_bytes"],
+)
+@pytest.mark.parametrize("value", [0, -1, True, None, "1", 1.5])
+def test_resource_limits_reject_invalid_values(name: str, value: object) -> None:
+    with pytest.raises(ValidationError):
+        ProfilingLimits(**{name: value})
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b'{"value":"' + b"x" * 1_000_000 + b'"}\n',
+        b'{"value":' + b"[" * 65 + b"0" + b"]" * 65 + b"}\n",
+        b'{"value":[' + b"0," * 100_001 + b"0]}\n",
+    ],
+)
+def test_default_jsonl_structure_limits_precede_decoding(content: bytes, monkeypatch) -> None:
+    def forbidden_decode(line):
+        raise AssertionError("record allocation must follow structural preflight")
+
+    monkeypatch.setattr(jsonl_module, "_decode_record", forbidden_decode)
+    with pytest.raises(OpenAlexProfileLimitError):
+        sample_jsonl(
+            io.BytesIO(content), compression=None, max_records=100,
+            max_decoded_bytes=25_000_000,
+        )
+
+
+def test_jsonl_node_budget_is_cumulative_across_records() -> None:
+    with pytest.raises(OpenAlexProfileLimitError):
+        sample_jsonl(
+            io.BytesIO(b'{"a":[1,2]}\n' * 2), compression=None,
+            max_records=100, max_decoded_bytes=100,
+            limits=ProfilingLimits(max_profile_nodes=7),
+        )
+
+
+def test_jsonl_configured_record_budget() -> None:
+    with pytest.raises(OpenAlexProfileLimitError):
+        sample_jsonl(
+            io.BytesIO(b'{"a":"abcdefgh"}\n'), compression=None,
+            max_records=100, max_decoded_bytes=100,
+            limits=ProfilingLimits(max_record_bytes=8),
+        )
+
+
+def test_jsonl_preflight_does_not_count_structure_inside_escaped_strings() -> None:
+    content = jsonl([{"value": '"\\\\[[{not structure}]]"'}])
+    sample = sample_jsonl(
+        io.BytesIO(content), compression=None, max_records=100, max_decoded_bytes=100,
+        limits=ProfilingLimits(max_nesting_depth=1, max_profile_nodes=3),
+    )
+    assert sample.sampled_record_count == 1
+    assert sample.fields[0].sampled_evidence["sampled_null_count"] is (
+        EvidenceType.SAMPLED_OBSERVATION
+    )
+    assert sample.fields[0].nullable is None
+
+
+def test_jsonl_preflight_checks_cooperative_cpu_deadline(monkeypatch) -> None:
+    ticks = iter(range(100))
+    monkeypatch.setattr(profile_models.time, "monotonic", lambda: float(next(ticks)))
+    with pytest.raises(OpenAlexProfileLimitError, match="time budget"):
+        sample_jsonl(
+            io.BytesIO(b'{"a":[1,2,3,4]}\n'), compression=None,
+            max_records=100, max_decoded_bytes=100,
+            limits=ProfilingLimits(max_profile_seconds=5),
+        )
+
+
+def test_jsonl_eof_probe_is_counted_in_decoded_budget() -> None:
+    line = b'{"a":1}\n'
+    sample = sample_jsonl(
+        io.BytesIO(line * 2), compression=None, max_records=1, max_decoded_bytes=100
+    )
+    assert sample.decoded_bytes == len(line) + 1
+    assert not sample.reached_eof
+    with pytest.raises(OpenAlexProfileLimitError):
+        sample_jsonl(
+            io.BytesIO(line * 2), compression=None, max_records=1,
+            max_decoded_bytes=len(line),
+        )
+    assert sample_jsonl(
+        io.BytesIO(line), compression=None, max_records=1,
+        max_decoded_bytes=len(line),
+    ).reached_eof
+
+
+def test_jsonl_deadline_checked_after_read_and_caller_keeps_stream(monkeypatch) -> None:
+    now = [0.0]
+    monkeypatch.setattr(profile_models.time, "monotonic", lambda: now[0])
+
+    class SlowStream(io.BytesIO):
+        def readline(self, size: int = -1) -> bytes:
+            content = super().readline(size)
+            now[0] = 11.0
+            return content
+
+    stream = SlowStream(b'{"a":1}\n')
+    with pytest.raises(OpenAlexProfileLimitError):
+        sample_jsonl(stream, compression=None, max_records=100, max_decoded_bytes=100)
+    assert not stream.closed
+
+
+def test_profile_deadline_includes_fetch_and_closes_stream(monkeypatch) -> None:
+    now = [0.0]
+    monkeypatch.setattr(profile_models.time, "monotonic", lambda: now[0])
+    body = gz(jsonl([{"id": 1}]))
+    stream = io.BytesIO(body)
+    source = connector(FakeClient())
+
+    def slow_fetch(unused):
+        now[0] = 11.0
+        return stream
+
+    monkeypatch.setattr(source, "fetch", slow_fetch)
+    with pytest.raises(OpenAlexProfileLimitError):
+        profiling.profile_openalex_asset(source, asset(body))
+    assert stream.closed
+
+
+def test_parquet_expansion_guard_prevents_value_read(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "compressed.parquet"
+    pq.write_table(
+        pa.table({"value": ["x" * 50_000]}), path,
+        compression="gzip", use_dictionary=False, write_statistics=False,
+    )
+    assert path.stat().st_size < 1000
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("expansion must be checked before iter_batches")
+
+    monkeypatch.setattr(pq.ParquetFile, "iter_batches", forbidden)
+    with pytest.raises(OpenAlexProfileLimitError):
+        inspect_parquet(
+            path, max_records=100, limits=ProfilingLimits(max_decoded_sample_bytes=1000)
+        )
+
+
+def test_parquet_dictionary_repetition_is_guarded_before_values(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "dictionary.parquet"
+    pq.write_table(
+        pa.table({"values": [["x" * 1000] * 50]}), path,
+        use_dictionary=True, write_statistics=False,
+    )
+    with pq.ParquetFile(path) as source:
+        assert source.metadata.row_group(0).column(0).total_uncompressed_size < 2000
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("one row can expand a dictionary value many times")
+
+    monkeypatch.setattr(pq.ParquetFile, "iter_batches", forbidden)
+    with pytest.raises(OpenAlexProfileLimitError):
+        inspect_parquet(
+            path, max_records=100, limits=ProfilingLimits(max_decoded_sample_bytes=2000)
+        )
+
+
+def test_parquet_metadata_guard_rejects_before_values_and_closes(tmp_path: Path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    path = tmp_path / "metadata.parquet"
+    pq.write_table(pa.table({"a": [1]}), path)
+    column = SimpleNamespace(
+        compression="SNAPPY", is_stats_set=False, total_uncompressed_size=1001,
+        num_values=1,
+    )
+    group = SimpleNamespace(num_columns=1, column=lambda index: column)
+    metadata = SimpleNamespace(
+        num_rows=1, num_columns=1, num_row_groups=1,
+        row_group=lambda index: group, created_by=None,
+    )
+    closed = []
+
+    class MetadataOnly:
+        schema_arrow = pa.schema([pa.field("a", pa.int64())])
+
+        def __init__(self, *args, **kwargs):
+            self.metadata = metadata
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            closed.append(True)
+
+        def iter_batches(self, *args, **kwargs):
+            raise AssertionError("metadata guard must precede value reading")
+
+    monkeypatch.setattr(pq, "ParquetFile", MetadataOnly)
+    with pytest.raises(OpenAlexProfileLimitError):
+        inspect_parquet(
+            path, max_records=100, limits=ProfilingLimits(max_decoded_sample_bytes=1000)
+        )
+    assert closed == [True]
+
+
+def test_parquet_footer_limit_precedes_native_reader(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "footer.parquet"
+    pq.write_table(pa.table({"a": [1]}), path)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("footer byte cap must precede native footer decoding")
+
+    monkeypatch.setattr(pq, "ParquetFile", forbidden)
+    with pytest.raises(OpenAlexProfileLimitError):
+        inspect_parquet(
+            path, max_records=100, limits=ProfilingLimits(max_parquet_footer_bytes=8)
+        )
+
+
+def test_parquet_native_footer_has_finite_allocation_limits(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "thrift.parquet"
+    pq.write_table(pa.table({"a": [1]}), path)
+    original = pq.ParquetFile
+    seen = {}
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(pq, "ParquetFile", spy)
+    inspect_parquet(path, max_records=100)
+    assert seen["thrift_string_size_limit"] == 1_000_000
+    assert seen["thrift_container_size_limit"] == 100_000
+    assert seen["pre_buffer"] is False
+
+
+def test_parquet_thrift_allocation_limit_is_profile_limit_error(tmp_path: Path) -> None:
+    path = tmp_path / "thrift-budget.parquet"
+    pq.write_table(pa.table({"a": [[[1]]], "b": [2], "c": [3]}), path)
+    with pytest.raises(OpenAlexProfileLimitError, match="thrift metadata"):
+        inspect_parquet(path, max_records=100, limits=ProfilingLimits(max_profile_nodes=2))
+
+
+@pytest.mark.parametrize(
+    "overrides", [{"max_nesting_depth": 2}, {"max_schema_fields": 2},
+                  {"max_profile_nodes": 2}],
+)
+def test_parquet_schema_work_guard_precedes_values(tmp_path: Path, monkeypatch, overrides) -> None:
+    path = tmp_path / "nested-budget.parquet"
+    table = pa.table({"a": [[[1]]], "b": [2], "c": [3]})
+    pq.write_table(table, path)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("schema/work guard must precede value reading")
+
+    monkeypatch.setattr(pq.ParquetFile, "iter_batches", forbidden)
+    with pytest.raises(OpenAlexProfileLimitError):
+        inspect_parquet(path, max_records=100, limits=ProfilingLimits(**overrides))
+
+
+def test_parquet_native_batch_checks_deadline_on_return(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "time.parquet"
+    pq.write_table(pa.table({"a": [1]}), path)
+    now = [0.0]
+    monkeypatch.setattr(profile_models.time, "monotonic", lambda: now[0])
+    original = pq.ParquetFile.iter_batches
+
+    def slow_batch(self, *args, **kwargs):
+        batch = next(original(self, *args, **kwargs))
+        now[0] = 11.0
+        yield batch
+
+    monkeypatch.setattr(pq.ParquetFile, "iter_batches", slow_batch)
+    with pytest.raises(OpenAlexProfileLimitError):
+        inspect_parquet(path, max_records=100)
+
+
+def test_parquet_resource_failure_closes_response_and_deletes_spool(tmp_path: Path, monkeypatch) -> None:
+    body = write_parquet(tmp_path / "source.parquet", pa.table({"a": ["x" * 1000]}))
+    response = FakeResponse(body, chunk_size=4096)
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    monkeypatch.setattr(profiling.tempfile, "tempdir", str(spool))
+    with pytest.raises(OpenAlexProfileLimitError):
+        profiling.profile_openalex_asset(
+            connector(FakeClient(response), "parquet"),
+            asset(body, uri=PARQUET_URI),
+            ProfilingLimits(max_decoded_sample_bytes=10),
+        )
+    assert response.closed
+    assert list(spool.iterdir()) == []
+
+
+def test_parquet_field_schema_and_sample_evidence_are_separate(tmp_path: Path) -> None:
+    body = write_parquet(tmp_path / "evidence.parquet", pa.table({"a": [{"b": None}]}))
+    result, _ = profile_parquet_bytes(body)
+    root = field(result, "a")
+    child = field(result, "a.b")
+    assert root.evidence is EvidenceType.EXACT_FILE_METADATA
+    assert root.sampled_evidence["sampled_present_count"] is EvidenceType.SAMPLED_OBSERVATION
+    assert root.sampled_evidence["sampled_missing_count"] is EvidenceType.UNKNOWN
+    assert all(value is EvidenceType.UNKNOWN for value in child.sampled_evidence.values())
+    data = result.model_dump()
+    data["schema_fields"][0]["sampled_evidence"]["sampled_present_count"] = (
+        EvidenceType.EXACT_FILE_METADATA
+    )
+    with pytest.raises(ValidationError):
+        OpenAlexSourceProfile.model_validate(data)
+
+
+def test_empty_parquet_has_unknown_field_observations(tmp_path: Path) -> None:
+    body = write_parquet(tmp_path / "empty-evidence.parquet", pa.table({"a": pa.array([], pa.int64())}))
+    result, _ = profile_parquet_bytes(body)
+    assert all(
+        evidence is EvidenceType.UNKNOWN
+        for evidence in result.schema_fields[0].sampled_evidence.values()
+    )
 
 
 # Common report behavior
