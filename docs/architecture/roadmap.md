@@ -2,9 +2,9 @@
 
 This roadmap preserves completed work and sequences implementation from bounded
 source profiling through consumer delivery. It does not authorize work beyond an
-explicitly scoped task. Steps 01–11 are complete through the portable OpenAlex
-canonical model; control persistence, ingestion, GCS landing, and later steps
-remain planned.
+explicitly scoped task. Steps 01–12 are complete through durable local one-file
+Works ingestion. Step 13 / #21 (deletions/change handling) is next; GCS landing
+and later steps remain planned.
 
 ## Completed foundation
 
@@ -19,15 +19,15 @@ remain planned.
 | 07 | Bounded deterministic development sample selector | Complete |
 | 08 | Bounded OpenAlex source profiling ([details](openalex-source-profiling.md)) | Implemented; real payload profile pending public network access |
 | 09 | Immutable local raw landing ([details](immutable-local-landing.md)) | `LocalObjectStore` delivered; GCS deferred to #9 |
-| 10 | Pipeline control and provenance contracts ([details](pipeline-control.md)) | Models, lifecycle, `ControlStore` protocol, DDL specs; no DB adapter |
-| 11 | Canonical OpenAlex logical model ([details](openalex-canonical-model.md)) | Normalized entities/relationships, PyArrow schemas, mapping; no ingestion |
-| 12 | One-file local Works ingestion ([details](local-works-ingestion.md)) | Claim → land → stream map → upsert → provenance; in-memory ControlStore/CanonicalStore |
+| 10 | Pipeline control and provenance contracts ([details](pipeline-control.md)) | Models, lifecycle, `ControlStore` protocol, DDL specs; local Postgres adapter in Step 12 |
+| 11 | Canonical OpenAlex logical model ([details](openalex-canonical-model.md)) | Normalized entities/relationships, PyArrow schemas, mapping |
+| 12 | One-file local Works ingestion ([details](local-works-ingestion.md)) | Claim → land → stream decode/map/upsert/provenance in one txn → SUCCESS; memory + Postgres backends |
 
 ## Planned steps
 
 | Step | Work |
 | --- | --- |
-| 13 | Support deletion, changed/new records, schema changes, replay, and reprocessing. |
+| 13 | Support deletion, changed/new records, schema changes, replay, and reprocessing ([#21](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/21)). |
 | 14 | Build a query-pattern and benchmark registry before choosing operational serving technology. Cover DOI/OpenAlex ID/eISSN/ISSN/publisher lookups; journal/publisher authors; publisher-topic-license-year counts; institution/topic and citation/reference relationships; publication and open-access trends. Measure latency, concurrency, bytes scanned, cost, result size, freshness, frequency, and materialization suitability. |
 | 15 | Implement BigQuery-first analytics on GCP; keep DuckDB for local tests, define SQL dialect contracts, and derive partitioning/clustering from evidence. Keep queries bounded and cost-safe. |
 | 16 | Build gold models, analytical marts, and justified materialized aggregates for research discovery, journal/publisher-topic/institution-topic metrics, trends, open access, and citations. Avoid relationship fan-out. |
@@ -59,4 +59,5 @@ source-specific normalization.
 - Spark/Dataproc, Iceberg/BigLake, orchestration, infrastructure, and deployed
   services are not mandatory first-iteration technologies.
 - Preserve completed steps, tests, contracts, sample limits, security rules, and
-  CI. This roadmap does not close or reopen issues or automatically start Step 10.
+  CI. This roadmap does not close or reopen issues or automatically start later
+  steps.
