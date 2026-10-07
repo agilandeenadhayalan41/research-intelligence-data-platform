@@ -24,6 +24,7 @@ from research_platform.control import (
     StaleClaimError,
     UnimplementedControlStore,
     apply_pipeline_run_finish,
+    apply_pipeline_run_retry,
     apply_pipeline_run_start,
     apply_source_file_claim,
     apply_source_file_failure,
@@ -84,6 +85,7 @@ def _processing(**overrides: object) -> SourceFileControl:
         "claim_token": token,
         "claimed_at": _ts(1),
         "lease_expires_at": _ts(3),
+        "updated_at": _ts(1),
     }
     payload.update(overrides)
     return _file(**payload)
@@ -476,8 +478,219 @@ def test_failure_message_rejects_sensitive_markers() -> None:
 
 def test_lease_expires_must_follow_claimed_at() -> None:
     with pytest.raises(ValidationError, match="lease_expires_at"):
-        _processing(claimed_at=_ts(2), lease_expires_at=_ts(2))
+        _processing(claimed_at=_ts(2), lease_expires_at=_ts(2), updated_at=_ts(2))
 
 
 def test_created_registration_outcome() -> None:
     assert reconcile_registration(None, _file()) is RegistrationOutcome.CREATED
+
+
+def test_pipeline_run_retry_increments_attempt() -> None:
+    pending = _run(attempt=1)
+    processing = apply_pipeline_run_start(pending, started_at=_ts(1), updated_at=_ts(1))
+    assert processing.attempt == 1
+    failed = apply_pipeline_run_finish(
+        processing,
+        status=PipelineRunStatus.FAILED,
+        completed_at=_ts(2),
+        updated_at=_ts(2),
+        failure_category=FailureCategory.RETRIEVAL,
+        failure_message="timeout",
+    )
+    assert failed.attempt == 1
+    retry1 = apply_pipeline_run_retry(failed, started_at=_ts(3), updated_at=_ts(3))
+    assert retry1.status is PipelineRunStatus.PROCESSING
+    assert retry1.attempt == 2
+    failed2 = apply_pipeline_run_finish(
+        retry1,
+        status=PipelineRunStatus.FAILED,
+        completed_at=_ts(4),
+        updated_at=_ts(4),
+        failure_category=FailureCategory.LANDING,
+        failure_message="disk full",
+    )
+    retry2 = apply_pipeline_run_retry(failed2, started_at=_ts(5), updated_at=_ts(5))
+    assert retry2.attempt == 3
+
+
+def test_pipeline_run_start_rejects_failed_and_retry_rejects_pending_success() -> None:
+    pending = _run()
+    with pytest.raises(IllegalTransitionError, match="retry requires FAILED"):
+        apply_pipeline_run_retry(pending, started_at=_ts(1), updated_at=_ts(1))
+    processing = apply_pipeline_run_start(pending, started_at=_ts(1), updated_at=_ts(1))
+    failed = apply_pipeline_run_finish(
+        processing,
+        status=PipelineRunStatus.FAILED,
+        completed_at=_ts(2),
+        updated_at=_ts(2),
+        failure_category=FailureCategory.UNKNOWN,
+        failure_message="boom",
+    )
+    with pytest.raises(IllegalTransitionError, match="start requires PENDING"):
+        apply_pipeline_run_start(failed, started_at=_ts(3), updated_at=_ts(3))
+    success_run = apply_pipeline_run_finish(
+        apply_pipeline_run_start(_run(), started_at=_ts(1), updated_at=_ts(1)),
+        status=PipelineRunStatus.SUCCESS,
+        completed_at=_ts(2),
+        updated_at=_ts(2),
+    )
+    with pytest.raises(IllegalTransitionError, match="retry requires FAILED"):
+        apply_pipeline_run_retry(success_run, started_at=_ts(3), updated_at=_ts(3))
+
+
+def test_lifecycle_helpers_reject_invalid_claim_timestamps() -> None:
+    discovered = _file()
+    with pytest.raises(ValidationError):
+        apply_source_file_claim(
+            discovered,
+            run_id=discovered.run_id,
+            claimed_by="worker",
+            claim_token=uuid4(),
+            claimed_at=datetime(2024, 6, 1, 1, 0, 0),  # naive
+            lease_expires_at=_ts(2),
+            updated_at=_ts(1),
+        )
+    with pytest.raises(ValidationError):
+        apply_source_file_claim(
+            discovered,
+            run_id=discovered.run_id,
+            claimed_by="worker",
+            claim_token=uuid4(),
+            claimed_at=_ts(1),
+            lease_expires_at=datetime(2024, 6, 1, 2, 0, 0),  # naive
+            updated_at=_ts(1),
+        )
+    with pytest.raises(ValidationError, match="lease_expires_at"):
+        apply_source_file_claim(
+            discovered,
+            run_id=discovered.run_id,
+            claimed_by="worker",
+            claim_token=uuid4(),
+            claimed_at=_ts(2),
+            lease_expires_at=_ts(2),
+            updated_at=_ts(2),
+        )
+    with pytest.raises(ValidationError, match="updated_at"):
+        apply_source_file_claim(
+            discovered,
+            run_id=discovered.run_id,
+            claimed_by="worker",
+            claim_token=uuid4(),
+            claimed_at=_ts(1),
+            lease_expires_at=_ts(2),
+            updated_at=_ts(0),  # before created_at
+        )
+
+
+def test_lifecycle_helpers_reject_invalid_success_payload() -> None:
+    processing = _processing()
+    token = processing.claim_token
+    assert token is not None
+    with pytest.raises(ValidationError):
+        apply_source_file_success(
+            processing,
+            claim_token=token,
+            processed_at=_ts(2),
+            raw_object_key="openalex/works/x/source.gz",
+            source_checksum_sha256="not-a-checksum",
+            updated_at=_ts(2),
+            now=_ts(2),
+        )
+    with pytest.raises(ValidationError, match="raw_object_key"):
+        apply_source_file_success(
+            processing,
+            claim_token=token,
+            processed_at=_ts(2),
+            raw_object_key="/abs/source.gz",
+            source_checksum_sha256="ab" * 32,
+            updated_at=_ts(2),
+            now=_ts(2),
+        )
+    with pytest.raises(ValidationError):
+        apply_source_file_success(
+            processing,
+            claim_token=token,
+            processed_at=datetime(2024, 6, 1, 2, 0, 0),  # naive
+            raw_object_key="openalex/works/x/source.gz",
+            source_checksum_sha256="ab" * 32,
+            updated_at=_ts(2),
+            now=_ts(2),
+        )
+
+
+def test_lifecycle_helpers_reject_invalid_failure_diagnostics() -> None:
+    processing = _processing()
+    token = processing.claim_token
+    assert token is not None
+    with pytest.raises(ValidationError):
+        apply_source_file_failure(
+            processing,
+            claim_token=token,
+            processed_at=_ts(2),
+            failure_category=FailureCategory.UNKNOWN,
+            failure_message="   ",
+            updated_at=_ts(2),
+            now=_ts(2),
+        )
+    with pytest.raises(ValidationError, match="sensitive"):
+        apply_source_file_failure(
+            processing,
+            claim_token=token,
+            processed_at=_ts(2),
+            failure_category=FailureCategory.UNKNOWN,
+            failure_message="secret=leaked",
+            updated_at=_ts(2),
+            now=_ts(2),
+        )
+
+
+def test_lifecycle_helpers_reject_invalid_run_completion() -> None:
+    processing = apply_pipeline_run_start(_run(), started_at=_ts(1), updated_at=_ts(1))
+    with pytest.raises(ValidationError, match="completed_at"):
+        apply_pipeline_run_finish(
+            processing,
+            status=PipelineRunStatus.SUCCESS,
+            completed_at=_ts(0),
+            updated_at=_ts(2),
+        )
+    with pytest.raises(ValidationError):
+        apply_pipeline_run_finish(
+            processing,
+            status=PipelineRunStatus.FAILED,
+            completed_at=_ts(2),
+            updated_at=_ts(2),
+            failure_category=FailureCategory.UNKNOWN,
+            failure_message="password=x",
+        )
+
+
+def test_lifecycle_output_always_revalidates() -> None:
+    processing = _processing()
+    token = processing.claim_token
+    assert token is not None
+    success = apply_source_file_success(
+        processing,
+        claim_token=token,
+        processed_at=_ts(2),
+        raw_object_key="openalex/works/x/source.gz",
+        source_checksum_sha256="ab" * 32,
+        updated_at=_ts(2),
+        now=_ts(2),
+    )
+    assert SourceFileControl.model_validate(success.model_dump(mode="python")) == success
+    run = apply_pipeline_run_start(_run(), started_at=_ts(1), updated_at=_ts(1))
+    assert PipelineRun.model_validate(run.model_dump(mode="python")) == run
+
+
+def test_ddl_includes_temporal_and_retry_notes(repo_root: Path) -> None:
+    ddl = (repo_root / "sql/control/001_pipeline_control.sql").read_text(encoding="utf-8")
+    assert "pipeline_runs_temporal_order_check" in ddl
+    assert "source_files_claim_temporal_check" in ddl
+    assert "source_files_processed_temporal_check" in ddl
+    assert "source_files_raw_object_key_shape_check" in ddl
+
+
+def test_control_store_retry_skeleton() -> None:
+    store = UnimplementedControlStore()
+    with pytest.raises(NotImplementedError, match="later phase"):
+        store.retry_pipeline_run(uuid4(), started_at=_ts(1))

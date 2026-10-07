@@ -32,6 +32,18 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
         CHECK (attempt >= 1),
     CONSTRAINT pipeline_runs_updated_after_created_check
         CHECK (updated_at >= created_at),
+    CONSTRAINT pipeline_runs_temporal_order_check
+        CHECK (
+            (started_at IS NULL OR (started_at >= created_at AND updated_at >= started_at))
+            AND (
+                completed_at IS NULL
+                OR (
+                    started_at IS NOT NULL
+                    AND completed_at >= started_at
+                    AND updated_at >= completed_at
+                )
+            )
+        ),
     CONSTRAINT pipeline_runs_completed_after_started_check
         CHECK (
             completed_at IS NULL
@@ -122,6 +134,28 @@ CREATE TABLE IF NOT EXISTS source_files (
         ),
     CONSTRAINT source_files_updated_after_created_check
         CHECK (updated_at >= created_at),
+    CONSTRAINT source_files_claim_temporal_check
+        CHECK (
+            claimed_at IS NULL
+            OR (claimed_at >= created_at AND updated_at >= claimed_at)
+        ),
+    CONSTRAINT source_files_processed_temporal_check
+        CHECK (
+            processed_at IS NULL
+            OR (processed_at >= created_at AND updated_at >= processed_at)
+        ),
+    CONSTRAINT source_files_raw_object_key_shape_check
+        CHECK (
+            raw_object_key IS NULL
+            OR (
+                raw_object_key <> ''
+                AND raw_object_key NOT LIKE '/%'
+                AND position('..' IN raw_object_key) = 0
+                AND position(CHR(92) IN raw_object_key) = 0
+                AND position(' ' IN raw_object_key) = 0
+                AND position('/' IN raw_object_key) > 0
+            )
+        ),
     CONSTRAINT source_files_claim_all_or_none_check
         CHECK (
             (
@@ -136,6 +170,7 @@ CREATE TABLE IF NOT EXISTS source_files (
                 AND claimed_at IS NOT NULL
                 AND lease_expires_at IS NOT NULL
                 AND lease_expires_at > claimed_at
+                AND claimed_at >= created_at
             )
         ),
     CONSTRAINT source_files_discovered_shape_check
