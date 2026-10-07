@@ -30,6 +30,7 @@ from research_platform.analytics.bigquery.contracts import (
     columns_from_arrow_schema,
     decide_analytical_works_merge,
     is_accepted_publication_decision,
+    is_relationship_refresh_eligible,
     render_create_table_ddl,
     render_partition_clause,
 )
@@ -40,6 +41,7 @@ from research_platform.analytics.bigquery.registry import (
 )
 from research_platform.analytics.bigquery.validation import (
     assert_contracts_valid,
+    validate_deletion_preserves_relationships,
     validate_semantics_with_duckdb,
     validate_stale_relationship_publication_guard,
     validate_static_contracts,
@@ -194,9 +196,14 @@ def test_incremental_merge_key_contracts_valid() -> None:
     assert "COMMIT TRANSACTION" in merge_topics.upper()
     assert "DELETE FROM" in merge_topics.upper()
     assert "INSERT INTO" in merge_topics.upper()
-    assert "accepted_work_ids" in merge_topics
-    assert "changed_work_ids" not in _strip_comments(merge_topics)
+    topics_code = _strip_comments(merge_topics)
+    assert "relationship_publish_work_ids" in topics_code
+    assert "accepted_work_ids" not in topics_code
+    assert "changed_work_ids" not in topics_code
     assert "lineage_source_updated_date" in merge_topics
+    assert "work_publication_decisions" in repo_path(
+        "sql/bigquery/openalex/models/merge_works.sql"
+    ).read_text(encoding="utf-8")
 
 
 def _strip_comments(text: str) -> str:
@@ -407,6 +414,9 @@ def test_active_t1_plus_deletion_t2_applies() -> None:
     )
     assert decision is PublicationDecision.APPLY_UPDATE
     assert is_accepted_publication_decision(decision)
+    assert not is_relationship_refresh_eligible(
+        decision, source_activity_state="DELETED"
+    )
 
 
 def test_equal_date_active_to_deleted_applies() -> None:
@@ -421,6 +431,9 @@ def test_equal_date_active_to_deleted_applies() -> None:
         source_activity_state="DELETED",
     )
     assert decision is PublicationDecision.APPLY_UPDATE
+    assert not is_relationship_refresh_eligible(
+        decision, source_activity_state="DELETED"
+    )
 
 
 def test_stale_deletion_skipped() -> None:
@@ -477,9 +490,12 @@ def test_identical_checksum_does_not_accept_relationship_publish() -> None:
     assert decision is PublicationDecision.IDENTICAL
     assert decision not in ACCEPTED_PUBLICATION_DECISIONS
     assert not is_accepted_publication_decision(decision)
+    assert not is_relationship_refresh_eligible(
+        decision, source_activity_state="ACTIVE"
+    )
 
 
-def test_insert_is_accepted() -> None:
+def test_insert_active_is_work_and_relationship_eligible() -> None:
     decision = decide_analytical_works_merge(
         target_exists=False,
         target_checksum=None,
@@ -491,28 +507,67 @@ def test_insert_is_accepted() -> None:
     )
     assert decision is PublicationDecision.INSERT
     assert is_accepted_publication_decision(decision)
+    assert is_relationship_refresh_eligible(
+        decision, source_activity_state="ACTIVE"
+    )
 
 
-def test_merge_sql_encodes_precedence_guards() -> None:
+def test_active_apply_update_is_relationship_eligible() -> None:
+    decision = decide_analytical_works_merge(
+        target_exists=True,
+        target_checksum="aa" * 32,
+        target_lineage_date=date(2024, 1, 1),
+        target_activity_state="ACTIVE",
+        source_checksum="bb" * 32,
+        source_lineage_date=date(2024, 2, 1),
+        source_activity_state="ACTIVE",
+    )
+    assert decision is PublicationDecision.APPLY_UPDATE
+    assert is_relationship_refresh_eligible(
+        decision, source_activity_state="ACTIVE"
+    )
+
+
+def test_deletion_apply_is_work_accepted_not_relationship_eligible() -> None:
+    decision = decide_analytical_works_merge(
+        target_exists=True,
+        target_checksum="aa" * 32,
+        target_lineage_date=date(2024, 1, 1),
+        target_activity_state="ACTIVE",
+        source_checksum="bb" * 32,
+        source_lineage_date=date(2024, 2, 1),
+        source_activity_state="DELETED",
+    )
+    assert decision is PublicationDecision.APPLY_UPDATE
+    assert is_accepted_publication_decision(decision)
+    assert not is_relationship_refresh_eligible(
+        decision, source_activity_state="DELETED"
+    )
+
+
+def test_merge_sql_uses_frozen_decisions() -> None:
     text = repo_path("sql/bigquery/openalex/models/merge_works.sql").read_text(
         encoding="utf-8"
     )
-    assert "source_checksum_sha256" in text
-    assert "lineage_source_updated_date" in text
-    assert "DELETED" in text and "ACTIVE" in text
-    # Equal-date deletion apply path present.
-    assert "source.`activity_state` = 'DELETED'" in text
-    assert "target.`activity_state` = 'ACTIVE'" in text
+    assert "work_publication_decisions" in text
+    assert "publication_decision" in text
+    assert "APPLY_UPDATE" in text
+    assert "IDENTICAL" in text
+    decisions = repo_path(
+        "sql/bigquery/openalex/models/work_publication_decisions.sql"
+    ).read_text(encoding="utf-8")
+    assert "CASE" in decisions
+    assert "source_activity_state" in decisions
     pre = repo_path(
         "sql/bigquery/openalex/models/merge_works_preconditions.sql"
     ).read_text(encoding="utf-8")
-    assert "RESTORE_REQUIRED" in pre
-    assert "CONFLICT" in pre
-    assert "STALE" in pre
+    assert "work_publication_decisions" in pre
+    assert "WHEN target.`activity_state` = 'DELETED'" not in pre
     classify = repo_path(
         "sql/bigquery/openalex/models/classify_works_staging.sql"
     ).read_text(encoding="utf-8")
-    assert "publication_decision" in classify
+    assert "work_publication_decisions" in classify
+    assert "WHEN target.`activity_state` = 'DELETED'" not in classify
 
 
 def test_relationship_delete_insert_inside_transaction() -> None:
@@ -527,7 +582,8 @@ def test_relationship_delete_insert_inside_transaction() -> None:
     insert = code.index("INSERT INTO")
     commit = code.index("COMMIT TRANSACTION")
     assert begin < delete < insert < commit
-    assert "ACCEPTED_WORK_IDS" in code
+    assert "RELATIONSHIP_PUBLISH_WORK_IDS" in code
+    assert "ACCEPTED_WORK_IDS" not in code
     assert "CHANGED_WORK_IDS" not in code
 
 
@@ -539,6 +595,9 @@ def test_accepted_work_ids_excludes_rejected_outcomes() -> None:
         PublicationDecision.IDENTICAL,
     ):
         assert not is_accepted_publication_decision(decision)
+        assert not is_relationship_refresh_eligible(
+            decision, source_activity_state="ACTIVE"
+        )
     for decision in (
         PublicationDecision.INSERT,
         PublicationDecision.APPLY_UPDATE,
@@ -551,6 +610,31 @@ def test_stale_relationship_publication_guard_fixture() -> None:
     assert report.ok, report.errors
     assert report.results["stale_work_decision"] == "STALE"
     assert report.results["topics_after"] == ("T1", "T2")
+
+
+def test_deletion_preserves_owned_relationships_fixture() -> None:
+    report = validate_deletion_preserves_relationships()
+    assert report.ok, report.errors
+    assert report.results["deletion_decision"] == "APPLY_UPDATE"
+    assert report.results["work_state_after"] == "DELETED"
+    assert report.results["topics_after"] == ("T1", "T2")
+    assert report.results["consumer_topic_contribution"] == 0
+
+
+def test_precedence_case_only_in_work_publication_decisions() -> None:
+    marker = "WHEN target.`activity_state` = 'DELETED'"
+    decisions = repo_path(
+        "sql/bigquery/openalex/models/work_publication_decisions.sql"
+    ).read_text(encoding="utf-8")
+    assert marker in decisions
+    for rel in (
+        "sql/bigquery/openalex/models/accepted_work_ids.sql",
+        "sql/bigquery/openalex/models/relationship_publish_work_ids.sql",
+        "sql/bigquery/openalex/models/merge_works_preconditions.sql",
+        "sql/bigquery/openalex/models/classify_works_staging.sql",
+        "sql/bigquery/openalex/models/merge_work_topics.sql",
+    ):
+        assert marker not in repo_path(rel).read_text(encoding="utf-8")
 
 
 def test_columns_from_arrow_rejects_duplicate_names() -> None:

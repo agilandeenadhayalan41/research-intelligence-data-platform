@@ -87,7 +87,8 @@ class ValidationLabel(StrEnum):
 class PublicationDecision(StrEnum):
     """Deterministic pre-publication classification for one staged Work.
 
-    Shared by works MERGE, ``accepted_work_ids``, and relationship REPLACE.
+    Frozen once against the pre-MERGE target in ``work_publication_decisions``.
+    Work acceptance and relationship REPLACE eligibility are separate.
     """
 
     INSERT = "INSERT"
@@ -98,7 +99,7 @@ class PublicationDecision(StrEnum):
     RESTORE_REQUIRED = "RESTORE_REQUIRED"
 
 
-# Outcomes that may publish Work attributes and REPLACE_BY_WORK_ID relationships.
+# Outcomes that may publish Work attributes (including DELETED tombstones).
 ACCEPTED_PUBLICATION_DECISIONS: frozenset[PublicationDecision] = frozenset(
     {
         PublicationDecision.INSERT,
@@ -590,5 +591,22 @@ def decide_analytical_works_merge(
 
 
 def is_accepted_publication_decision(decision: PublicationDecision) -> bool:
-    """True when Work attributes and relationships may be published."""
+    """True when the Work row may be published (INSERT / APPLY_UPDATE)."""
     return decision in ACCEPTED_PUBLICATION_DECISIONS
+
+
+def is_relationship_refresh_eligible(
+    decision: PublicationDecision,
+    *,
+    source_activity_state: str,
+) -> bool:
+    """True when REPLACE_BY_WORK_ID may run for this staged Work.
+
+    Requires accepted Work publication **and** an ACTIVE staging projection.
+    DELETED tombstones accept the Work row but must not DELETE owned
+    relationships (Step 13 Policy A).
+    """
+    return (
+        is_accepted_publication_decision(decision)
+        and source_activity_state == "ACTIVE"
+    )

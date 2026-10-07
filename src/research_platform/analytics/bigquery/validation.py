@@ -159,42 +159,82 @@ def validate_static_contracts(
         f"missing active works view: {registry.active_works_view_path}",
     )
 
+    decisions_sql = repo_path(
+        "sql/bigquery/openalex/models/work_publication_decisions.sql"
+    ).read_text(encoding="utf-8")
+    ok(
+        "CREATE OR REPLACE TABLE `openalex.work_publication_decisions`"
+        in decisions_sql,
+        "work_publication_decisions must materialize frozen decisions",
+    )
+    ok(
+        "CASE" in decisions_sql and "RESTORE_REQUIRED" in decisions_sql,
+        "work_publication_decisions must own the precedence CASE",
+    )
+    ok(
+        "source_activity_state" in decisions_sql,
+        "frozen decisions must capture source_activity_state",
+    )
+
+    # Precedence CASE must not be independently copied into derived-set files.
+    derived_without_case = (
+        "sql/bigquery/openalex/models/accepted_work_ids.sql",
+        "sql/bigquery/openalex/models/relationship_publish_work_ids.sql",
+        "sql/bigquery/openalex/models/merge_works_preconditions.sql",
+        "sql/bigquery/openalex/models/classify_works_staging.sql",
+    )
+    for rel in derived_without_case:
+        text = repo_path(rel).read_text(encoding="utf-8")
+        ok(
+            "WHEN target.`activity_state` = 'DELETED'" not in text,
+            f"{rel} must not copy precedence CASE",
+        )
+        ok(
+            "work_publication_decisions" in text,
+            f"{rel} must derive from work_publication_decisions",
+        )
+
+    publish_unit = repo_path(
+        "sql/bigquery/openalex/models/publish_works_unit.sql"
+    ).read_text(encoding="utf-8")
+    ok(
+        "pre-MERGE" in publish_unit,
+        "publish_works_unit must document pre-MERGE freeze",
+    )
+    ok(
+        "work_publication_decisions" in publish_unit
+        and "merge_works" in publish_unit
+        and "relationship_publish_work_ids" in publish_unit,
+        "publish_works_unit must order decisions before merge/relationships",
+    )
+    ok(
+        publish_unit.find("RUN: work_publication_decisions.sql")
+        < publish_unit.find("RUN: merge_works.sql"),
+        "classification must be frozen before works MERGE in publish unit",
+    )
+    ok(
+        publish_unit.find("RUN: relationship_publish_work_ids.sql")
+        < publish_unit.find("RUN: merge_work_topics.sql"),
+        "relationship_publish_work_ids must be frozen before relationship REPLACE",
+    )
+
     merge_works = repo_path(
         "sql/bigquery/openalex/models/merge_works.sql"
     ).read_text(encoding="utf-8")
     merge_works_code = _strip_sql_comments(merge_works)
     ok(
-        "lineage_source_updated_date" in merge_works_code,
-        "merge_works must use lineage_source_updated_date",
+        "work_publication_decisions" in merge_works_code,
+        "merge_works must consume frozen work_publication_decisions",
     )
     ok(
-        "DELETED" in merge_works_code and "ACTIVE" in merge_works_code,
-        "merge_works must guard DELETED→ACTIVE resurrection",
+        "publication_decision" in merge_works_code,
+        "merge_works must apply frozen publication_decision",
     )
     ok(
-        "source_checksum_sha256" in merge_works_code,
-        "merge_works must compare checksums",
-    )
-    ok(
-        ">" in merge_works_code,
-        "merge_works must require newer lineage date to overwrite",
-    )
-    ok(
-        "source.`activity_state` = 'DELETED'" in merge_works
-        or "source.`activity_state` = 'DELETED'" in merge_works_code,
-        "merge_works must allow equal-date ACTIVE→DELETED apply",
-    )
-
-    classify_sql = repo_path(
-        "sql/bigquery/openalex/models/classify_works_staging.sql"
-    ).read_text(encoding="utf-8")
-    ok(
-        "publication_decision" in classify_sql,
-        "classify_works_staging must emit publication_decision",
-    )
-    ok(
-        "APPLY_UPDATE" in classify_sql and "RESTORE_REQUIRED" in classify_sql,
-        "classify_works_staging must encode APPLY/RESTORE decisions",
+        "WHEN MATCHED" in merge_works_code
+        and "APPLY_UPDATE" in merge_works_code
+        and "IDENTICAL" in merge_works_code,
+        "merge_works must handle IDENTICAL and APPLY_UPDATE via decisions",
     )
 
     accepted_sql = repo_path(
@@ -205,9 +245,18 @@ def validate_static_contracts(
         "IN('INSERT','APPLY_UPDATE')" in accepted_compact,
         "accepted_work_ids filter must be INSERT/APPLY_UPDATE only",
     )
+
+    rel_ids_sql = repo_path(
+        "sql/bigquery/openalex/models/relationship_publish_work_ids.sql"
+    ).read_text(encoding="utf-8")
+    rel_compact = rel_ids_sql.replace(" ", "").replace("\n", "")
     ok(
-        "STALE" in accepted_sql and "CONFLICT" in accepted_sql,
-        "accepted_work_ids classify CASE must still name rejected outcomes",
+        "IN('INSERT','APPLY_UPDATE')" in rel_compact,
+        "relationship_publish_work_ids must require accepted decisions",
+    )
+    ok(
+        "source_activity_state" in rel_ids_sql and "'ACTIVE'" in rel_ids_sql,
+        "relationship_publish_work_ids must require ACTIVE source projection",
     )
 
     merge_topics = repo_path(
@@ -233,8 +282,12 @@ def validate_static_contracts(
         "merge_work_topics must use lineage_source_updated_date",
     )
     ok(
-        "ACCEPTED_WORK_IDS" in topics_code,
-        "relationship SQL must scope to accepted_work_ids",
+        "RELATIONSHIP_PUBLISH_WORK_IDS" in topics_code,
+        "relationship SQL must scope to relationship_publish_work_ids",
+    )
+    ok(
+        "ACCEPTED_WORK_IDS" not in topics_code,
+        "relationship SQL must not use accepted_work_ids directly",
     )
     ok(
         "CHANGED_WORK_IDS" not in topics_code,
@@ -641,6 +694,7 @@ def validate_stale_relationship_publication_guard() -> SemanticValidationReport:
         PublicationDecision,
         decide_analytical_works_merge,
         is_accepted_publication_decision,
+        is_relationship_refresh_eligible,
     )
 
     errors: list[str] = []
@@ -660,14 +714,15 @@ def validate_stale_relationship_publication_guard() -> SemanticValidationReport:
         errors.append(f"expected STALE for older staging, got {decision}")
     if is_accepted_publication_decision(decision):
         errors.append("STALE must not be an accepted publication decision")
+    if is_relationship_refresh_eligible(decision, source_activity_state="ACTIVE"):
+        errors.append("STALE must not be relationship-refresh eligible")
 
-    # Simulate relationship REPLACE scoped to accepted_work_ids only.
     current_topics = {"W1": ("T1", "T2")}
     staging_topics = {"W1": ("T9",)}
-    accepted: set[str] = set()
-    if is_accepted_publication_decision(decision):
-        accepted.add("W1")
-    if "W1" in accepted:
+    publishable: set[str] = set()
+    if is_relationship_refresh_eligible(decision, source_activity_state="ACTIVE"):
+        publishable.add("W1")
+    if "W1" in publishable:
         current_topics["W1"] = staging_topics["W1"]
     results["topics_after"] = current_topics["W1"]
     if current_topics["W1"] != ("T1", "T2"):
@@ -676,6 +731,69 @@ def validate_stale_relationship_publication_guard() -> SemanticValidationReport:
         )
     if "T9" in current_topics["W1"]:
         errors.append("T9 must never be published for rejected stale Work")
+
+    return SemanticValidationReport(
+        label=ValidationLabel.SEMANTIC_ONLY,
+        results=results,
+        errors=tuple(errors),
+    )
+
+
+def validate_deletion_preserves_relationships() -> SemanticValidationReport:
+    """SEMANTIC_ONLY: ACTIVE→DELETED tombstones Work but keeps topics.
+
+    Existing W1 ACTIVE with topics [T1, T2]; incoming DELETED. Expected:
+    Work DELETED, topics still [T1, T2], consumer aggregates exclude W1.
+    """
+    from datetime import date
+
+    from research_platform.analytics.bigquery.contracts import (
+        PublicationDecision,
+        decide_analytical_works_merge,
+        is_accepted_publication_decision,
+        is_relationship_refresh_eligible,
+    )
+
+    errors: list[str] = []
+    results: dict[str, Any] = {"validation_label": ValidationLabel.SEMANTIC_ONLY.value}
+
+    decision = decide_analytical_works_merge(
+        target_exists=True,
+        target_checksum="aa" * 32,
+        target_lineage_date=date(2024, 1, 1),
+        target_activity_state="ACTIVE",
+        source_checksum="bb" * 32,
+        source_lineage_date=date(2024, 2, 1),
+        source_activity_state="DELETED",
+    )
+    results["deletion_decision"] = decision.value
+    if decision is not PublicationDecision.APPLY_UPDATE:
+        errors.append(f"deletion must APPLY_UPDATE Work, got {decision}")
+    if not is_accepted_publication_decision(decision):
+        errors.append("deletion APPLY_UPDATE must be accepted for Work publication")
+    if is_relationship_refresh_eligible(decision, source_activity_state="DELETED"):
+        errors.append("deletion must NOT be relationship-refresh eligible")
+
+    work_state = "ACTIVE"
+    topics = ("T1", "T2")
+    # Work MERGE applies tombstone.
+    if is_accepted_publication_decision(decision):
+        work_state = "DELETED"
+    # Relationship REPLACE skipped for DELETED source projection.
+    if is_relationship_refresh_eligible(decision, source_activity_state="DELETED"):
+        topics = ()  # would wipe — must not happen
+    results["work_state_after"] = work_state
+    results["topics_after"] = topics
+    if work_state != "DELETED":
+        errors.append("Work must be tombstoned")
+    if topics != ("T1", "T2"):
+        errors.append(f"owned topics must be preserved; got {topics}")
+
+    # Consumer aggregate excludes deleted parent Work.
+    consumer_count = 0 if work_state != "ACTIVE" else len(topics)
+    results["consumer_topic_contribution"] = consumer_count
+    if consumer_count != 0:
+        errors.append("consumer aggregate must exclude deleted Work")
 
     return SemanticValidationReport(
         label=ValidationLabel.SEMANTIC_ONLY,
