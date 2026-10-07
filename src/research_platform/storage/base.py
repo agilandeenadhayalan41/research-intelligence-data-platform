@@ -14,12 +14,17 @@ class ObjectStore(ABC):
         """Atomically create content and provenance; never overwrite either.
 
         An identical content/provenance replay is a no-op. A conflicting existing
-        key raises FileExistsError. Verify the content checksum before publishing.
-        Keys must stay within the configured landing namespace.
+        key raises ``ObjectConflictError`` (a ``FileExistsError``). Verify the
+        content checksum before publishing. Keys must stay within the configured
+        landing namespace.
         """
         raise NotImplementedError
 
     @abstractmethod
     def open(self, key: str) -> BinaryIO:
-        """Return a caller-owned read-only stream."""
+        """Return a caller-owned read-only binary stream.
+
+        The caller must close the stream. Missing or incomplete committed objects
+        raise typed storage errors rather than returning a writable handle.
+        """
         raise NotImplementedError

@@ -2,8 +2,8 @@
 
 This roadmap preserves completed work and sequences implementation from bounded
 source profiling through consumer delivery. It does not authorize work beyond an
-explicitly scoped task. Steps 01–07 are complete, Step 08 profiling is
-implemented, and later steps are planned.
+explicitly scoped task. Steps 01–09 are complete for the local raw-landing path;
+GCS landing and later steps remain planned.
 
 ## Completed foundation
 
@@ -11,18 +11,18 @@ implemented, and later steps are planned.
 | --- | --- | --- |
 | 01 | Repository foundation | Complete |
 | 02 | Configuration framework | Complete |
-| 03 | Storage abstraction/contracts | Complete contract; local/GCS runtime separate |
+| 03 | Storage abstraction/contracts | Complete contract; GCS runtime separate (#9) |
 | 04 | Warehouse abstraction/contracts | Complete contract; DuckDB/BigQuery/PostgreSQL runtime adapters separate |
 | 05 | Bounded public OpenAlex connector | Complete |
 | 06 | OpenAlex Works manifest parser | Complete |
 | 07 | Bounded deterministic development sample selector | Complete |
 | 08 | Bounded OpenAlex source profiling ([details](openalex-source-profiling.md)) | Implemented; real payload profile pending public network access |
+| 09 | Immutable local raw landing ([details](immutable-local-landing.md)) | `LocalObjectStore` delivered; GCS deferred to #9 |
 
 ## Planned steps
 
 | Step | Work |
 | --- | --- |
-| 09 | Implement immutable raw/canonical landing, local first and GCS later; preserve source bytes, immutable versioned paths, checksums, replay, and conflict semantics. |
 | 10 | Add pipeline control and provenance: runs, source files, record provenance, statuses, retries, lineage, and claim semantics. |
 | 11 | Define the canonical OpenAlex logical model: works, authors, institutions, sources, publishers, topics, funders, authorships, work-topics, work-institutions, work-references, and work-MeSH where available. Keep normalized relationships; do not flatten. |
 | 12 | Implement incremental ingestion/upsert: manifest → discover → select/claim → download → immutable raw landing → staging → canonical update → provenance → success. |
@@ -58,4 +58,4 @@ source-specific normalization.
 - Spark/Dataproc, Iceberg/BigLake, orchestration, infrastructure, and deployed
   services are not mandatory first-iteration technologies.
 - Preserve completed steps, tests, contracts, sample limits, security rules, and
-  CI. This roadmap does not close or reopen issues or automatically start Step 09.
+  CI. This roadmap does not close or reopen issues or automatically start Step 10.

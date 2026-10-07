@@ -24,19 +24,20 @@ flowchart LR
     Lineage --- Canonical
 ```
 
-The diagram describes the target, not implemented runtime components. The current
-foundation includes configuration, contracts, bounded OpenAlex discovery and
-retrieval, and tests. It does not implement raw landing, canonicalization,
-BigQuery, a Data Service/API, or downstream consumers.
+The diagram describes the target architecture. The current foundation includes
+configuration, contracts, bounded OpenAlex discovery/retrieval/profiling,
+immutable **local** raw landing (`LocalObjectStore`), and tests. It does not
+implement GCS landing, canonicalization, BigQuery runtime, a Data Service/API, or
+downstream consumers. See [immutable local landing](immutable-local-landing.md).
 
 ## Layer responsibilities
 
 - **Discovery and connectors:** discover source data and retrieve bounded source
   content. Connector and normalization logic are source-specific.
 - **Immutable raw landing:** preserve original bytes and provenance for replay.
-  Future provenance includes run identity, source URI, retrieval time, and checksum.
-  Raw data and provenance are not overwritten; adapters own atomic creation and
-  replay/conflict handling.
+  Local landing streams source bytes, verifies SHA-256, and atomically publishes
+  content with `IngestionProvenance`. Raw data and provenance are not overwritten;
+  identical replay is a no-op and conflicts fail explicitly. GCS landing is later.
 - **Canonical layer:** normalized, portable schemas independent of PostgreSQL or
   BigQuery. Use Parquet where applicable. Keep entities and relationships
   normalized rather than creating one giant flattened table.
