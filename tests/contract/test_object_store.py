@@ -117,6 +117,57 @@ def test_incomplete_committed_state(tmp_path: Path, store_factory: StoreFactory)
         store.put_if_absent("raw/item/source.bin", BytesIO(b"x"), _provenance(b"x"))
 
 
+def test_open_rejects_corrupted_committed_content(
+    tmp_path: Path, store_factory: StoreFactory
+) -> None:
+    store = store_factory(tmp_path)
+    body = b"published-ok"
+    key = "raw/item/source.bin"
+    store.put_if_absent(key, BytesIO(body), _provenance(body))
+    (tmp_path / "raw" / "item" / "source.bin").write_bytes(b"tampered-after-publish")
+    with pytest.raises(IncompleteObjectError):
+        store.open(key)
+    assert (tmp_path / "raw" / "item" / "source.bin").read_bytes() == b"tampered-after-publish"
+    assert (tmp_path / "raw" / "item" / "provenance.json").is_file()
+
+
+def test_open_rejects_malformed_provenance(
+    tmp_path: Path, store_factory: StoreFactory
+) -> None:
+    store = store_factory(tmp_path)
+    body = b"ok"
+    key = "raw/item/source.bin"
+    store.put_if_absent(key, BytesIO(body), _provenance(body))
+    (tmp_path / "raw" / "item" / "provenance.json").write_text("{not-json", encoding="utf-8")
+    with pytest.raises(IncompleteObjectError):
+        store.open(key)
+
+
+def test_open_rejects_provenance_with_wrong_checksum(
+    tmp_path: Path, store_factory: StoreFactory
+) -> None:
+    store = store_factory(tmp_path)
+    body = b"content-bytes"
+    key = "raw/item/source.bin"
+    store.put_if_absent(key, BytesIO(body), _provenance(body))
+    wrong = _provenance(body, sha256="ab" * 32)
+    (tmp_path / "raw" / "item" / "provenance.json").write_bytes(dumps_provenance(wrong))
+    with pytest.raises(IncompleteObjectError):
+        store.open(key)
+
+
+def test_open_valid_committed_object_after_integrity_checks(
+    tmp_path: Path, store_factory: StoreFactory
+) -> None:
+    store = store_factory(tmp_path)
+    body = b"still-valid"
+    key = "raw/item/source.bin"
+    store.put_if_absent(key, BytesIO(body), _provenance(body))
+    with store.open(key) as handle:
+        assert handle.read() == body
+        assert handle.writable() is False
+
+
 def test_caller_owned_read_stream(tmp_path: Path, store_factory: StoreFactory) -> None:
     store = store_factory(tmp_path)
     body = b"owned"

@@ -52,11 +52,18 @@ key (`.../source.gz`). Provenance is always the sibling `provenance.json`.
 3. Write deterministic `provenance.json` beside the staged content.
 4. `fsync` staged files and the staging directory.
 5. `os.rename` the staging directory onto the final object directory.
+6. `fsync` the final object's parent directory.
 
 On Linux, directory rename to a non-existent destination is atomic: readers never
 observe content without provenance or provenance without content. If the
 destination already exists, rename fails and the store evaluates replay/conflict
 against the committed object.
+
+**Visibility vs durability:** `rename` provides atomic visibility of the paired
+content/provenance directory. Parent-directory `fsync` persists that directory
+entry on supported POSIX filesystems so a crash is less likely to lose the
+publication. These guarantees are local-filesystem / POSIX specific; they are
+not claimed for network mounts or non-POSIX platforms.
 
 Staging directories live only under the configured landing root's `.staging/`
 namespace. Failure cleanup deletes only that operation's staging directory.
@@ -103,8 +110,19 @@ Committed objects are never overwritten, deleted, or replaced by `put_if_absent`
 ## Read contract
 
 `open(key)` returns a caller-owned read-only binary file object. The caller must
-close it. Missing objects raise `ObjectNotFoundError`. Incomplete or corrupt
-committed state raises `IncompleteObjectError`. The handle is never writable.
+close it. Before returning the stream, the adapter loads and validates
+`provenance.json`, hashes the committed content file, and compares the digest to
+`provenance.sha256`.
+
+| Condition | Error |
+| --- | --- |
+| No object directory / content / provenance | `ObjectNotFoundError` |
+| Partial presence (only content or only provenance) | `IncompleteObjectError` |
+| Malformed / unreadable provenance | `IncompleteObjectError` |
+| Content bytes ≠ provenance `sha256` | `IncompleteObjectError` |
+
+Corrupt committed objects are never silently returned, repaired, overwritten, or
+deleted. The handle is never writable.
 
 ## Typed errors
 

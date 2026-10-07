@@ -12,7 +12,11 @@ import pytest
 
 from research_platform.config.models import StorageConfig
 from research_platform.provenance.models import IngestionProvenance
-from research_platform.storage.errors import InvalidObjectKeyError, ObjectNotFoundError
+from research_platform.storage.errors import (
+    IncompleteObjectError,
+    InvalidObjectKeyError,
+    ObjectNotFoundError,
+)
 from research_platform.storage.local import LocalObjectStore
 
 
@@ -160,3 +164,36 @@ def test_reserved_provenance_basename_rejected(tmp_path: Path) -> None:
         store.put_if_absent(
             "raw/item/provenance.json", BytesIO(b"{}"), _provenance(b"{}")
         )
+
+
+def test_parent_directory_fsync_after_successful_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _store(tmp_path)
+    synced: list[Path] = []
+    real = LocalObjectStore._fsync_directory
+
+    def spy(self: LocalObjectStore, directory: Path) -> None:
+        synced.append(directory.resolve(strict=False))
+        real(self, directory)
+
+    monkeypatch.setattr(LocalObjectStore, "_fsync_directory", spy)
+    body = b"durable-entry"
+    key = "raw/item/source.bin"
+    store.put_if_absent(key, BytesIO(body), _provenance(body))
+    object_parent = (tmp_path / "raw" / "item").parent.resolve(strict=False)
+    assert object_parent in synced
+    with store.open(key) as handle:
+        assert handle.read() == body
+
+
+def test_open_detects_post_publish_corruption(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    body = b"good"
+    key = "raw/item/source.bin"
+    store.put_if_absent(key, BytesIO(body), _provenance(body))
+    (tmp_path / "raw" / "item" / "source.bin").write_bytes(b"bad")
+    with pytest.raises(IncompleteObjectError):
+        store.open(key)
+    # Corrupt object is left in place; no automatic repair or delete.
+    assert (tmp_path / "raw" / "item" / "source.bin").read_bytes() == b"bad"
