@@ -51,15 +51,23 @@ class LocalObjectStore(ObjectStore):
     2. Verify SHA-256 against ``IngestionProvenance.sha256``.
     3. Write sibling ``provenance.json`` in the same staging directory.
     4. ``fsync`` files and the staging directory.
-    5. ``os.rename`` the staging directory onto the final object directory.
+    5. ``os.rename`` the staging directory onto the final object directory
+       (atomic visibility of content + provenance together).
+    6. ``fsync`` the final object's parent directory so the directory entry is
+       durable on supported POSIX filesystems.
 
     On Linux, renaming a directory onto a non-existent destination is atomic and
     fails with ``FileExistsError`` if another writer already published. Content and
     provenance therefore become visible together, or not at all. Identical replay
     after a lost race is a no-op; conflicting state raises ``ObjectConflictError``.
 
-    Limitations: atomic directory rename requires the staging and destination
-    trees to share one filesystem. Cross-device landing roots are unsupported.
+    ``open`` re-validates committed provenance and re-hashes content before
+    returning a stream; corrupt committed state raises ``IncompleteObjectError``
+    and is never silently returned, repaired, overwritten, or deleted.
+
+    Limitations: atomic directory rename and parent-directory durability assume a
+    POSIX-compatible local filesystem with staging and destination on the same
+    device. Cross-device landing roots are unsupported.
     """
 
     def __init__(self, config: StorageConfig) -> None:
@@ -107,6 +115,8 @@ class LocalObjectStore(ObjectStore):
                     self._replay_or_conflict(object_dir, content_path, provenance)
                     return
                 raise
+            # Rename made the object visible; fsync the parent for durable entry.
+            self._fsync_directory(object_dir.parent)
         except Exception:
             self._cleanup_path(staging_dir)
             raise
@@ -119,6 +129,7 @@ class LocalObjectStore(ObjectStore):
             if object_dir.exists() or content_path.exists():
                 raise IncompleteObjectError("committed object is incomplete")
             raise ObjectNotFoundError("object not found")
+        self._verify_committed_integrity(object_dir, content_path)
         # Caller owns the returned read-only binary stream and must close it.
         return content_path.open("rb")
 
@@ -152,6 +163,19 @@ class LocalObjectStore(ObjectStore):
             raise IncompleteObjectError("committed object is incomplete")
         return False
 
+    def _verify_committed_integrity(
+        self, object_dir: Path, content_path: Path
+    ) -> IngestionProvenance:
+        """Load provenance and confirm committed bytes match ``sha256``.
+
+        Does not repair, overwrite, or delete corrupt objects.
+        """
+        committed = load_provenance(object_dir / _PROVENANCE_NAME)
+        digest = self._hash_file(content_path)
+        if digest != committed.sha256:
+            raise IncompleteObjectError("committed content checksum is inconsistent")
+        return committed
+
     def _replay_or_conflict(
         self,
         object_dir: Path,
@@ -160,11 +184,8 @@ class LocalObjectStore(ObjectStore):
     ) -> None:
         if not self._is_committed(object_dir, content_path):
             raise IncompleteObjectError("committed object is incomplete")
-        committed = load_provenance(object_dir / _PROVENANCE_NAME)
-        digest = self._hash_file(content_path)
-        if digest != committed.sha256:
-            raise IncompleteObjectError("committed content checksum is inconsistent")
-        if committed == provenance and digest == provenance.sha256:
+        committed = self._verify_committed_integrity(object_dir, content_path)
+        if committed == provenance and committed.sha256 == provenance.sha256:
             return
         raise ObjectConflictError("immutable object already exists with different state")
 
@@ -200,15 +221,19 @@ class LocalObjectStore(ObjectStore):
                 digest.update(chunk)
         return digest.hexdigest()
 
-    def _fsync_tree(self, directory: Path, *files: Path) -> None:
-        for path in files:
-            with path.open("rb") as handle:
-                os.fsync(handle.fileno())
+    def _fsync_directory(self, directory: Path) -> None:
+        """Durably persist a directory entry on supported POSIX filesystems."""
         fd = os.open(directory, os.O_RDONLY)
         try:
             os.fsync(fd)
         finally:
             os.close(fd)
+
+    def _fsync_tree(self, directory: Path, *files: Path) -> None:
+        for path in files:
+            with path.open("rb") as handle:
+                os.fsync(handle.fileno())
+        self._fsync_directory(directory)
 
     def _cleanup_path(self, path: Path) -> None:
         if not path.exists() and not path.is_symlink():
