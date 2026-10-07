@@ -2,8 +2,9 @@
 
 This roadmap preserves completed work and sequences implementation from bounded
 source profiling through consumer delivery. It does not authorize work beyond an
-explicitly scoped task. Steps 01–10 are complete through pipeline-control
-contracts; control persistence, GCS landing, and later steps remain planned.
+explicitly scoped task. Steps 01–11 are complete through the portable OpenAlex
+canonical model; control persistence, ingestion, GCS landing, and later steps
+remain planned.
 
 ## Completed foundation
 
@@ -19,12 +20,12 @@ contracts; control persistence, GCS landing, and later steps remain planned.
 | 08 | Bounded OpenAlex source profiling ([details](openalex-source-profiling.md)) | Implemented; real payload profile pending public network access |
 | 09 | Immutable local raw landing ([details](immutable-local-landing.md)) | `LocalObjectStore` delivered; GCS deferred to #9 |
 | 10 | Pipeline control and provenance contracts ([details](pipeline-control.md)) | Models, lifecycle, `ControlStore` protocol, DDL specs; no DB adapter |
+| 11 | Canonical OpenAlex logical model ([details](openalex-canonical-model.md)) | Normalized entities/relationships, PyArrow schemas, mapping; no ingestion |
 
 ## Planned steps
 
 | Step | Work |
 | --- | --- |
-| 11 | Define the canonical OpenAlex logical model: works, authors, institutions, sources, publishers, topics, funders, authorships, work-topics, work-institutions, work-references, and work-MeSH where available. Keep normalized relationships; do not flatten. |
 | 12 | Implement incremental ingestion/upsert: manifest → discover → select/claim → download → immutable raw landing → staging → canonical update → provenance → success. |
 | 13 | Support deletion, changed/new records, schema changes, replay, and reprocessing. |
 | 14 | Build a query-pattern and benchmark registry before choosing operational serving technology. Cover DOI/OpenAlex ID/eISSN/ISSN/publisher lookups; journal/publisher authors; publisher-topic-license-year counts; institution/topic and citation/reference relationships; publication and open-access trends. Measure latency, concurrency, bytes scanned, cost, result size, freshness, frequency, and materialization suitability. |

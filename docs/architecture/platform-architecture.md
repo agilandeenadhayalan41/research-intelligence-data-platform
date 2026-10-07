@@ -27,10 +27,12 @@ flowchart LR
 The diagram describes the target architecture. The current foundation includes
 configuration, contracts, bounded OpenAlex discovery/retrieval/profiling,
 immutable **local** raw landing (`LocalObjectStore`), pipeline-control/provenance
-**contracts** (no DB persistence yet), and tests. It does not implement control
-persistence, GCS landing, canonicalization, BigQuery runtime, a Data Service/API,
-or downstream consumers. See [immutable local landing](immutable-local-landing.md)
-and [pipeline control](pipeline-control.md).
+**contracts**, the portable OpenAlex **canonical model** (no ingestion yet), and
+tests. It does not implement control persistence, GCS landing, ingestion,
+BigQuery runtime, a Data Service/API, or downstream consumers. See
+[immutable local landing](immutable-local-landing.md),
+[pipeline control](pipeline-control.md), and
+[OpenAlex canonical model](openalex-canonical-model.md).
 
 ## Layer responsibilities
 
@@ -44,9 +46,11 @@ and [pipeline control](pipeline-control.md).
   `RecordProvenance` models, explicit DISCOVERED→PROCESSING→SUCCESS|FAILED
   lifecycle, claim/lease rules, and a `ControlStore` write protocol separate from
   `Warehouse.query()`. Persistence adapters are a later step.
-- **Canonical layer:** normalized, portable schemas independent of PostgreSQL or
-  BigQuery. Use Parquet where applicable. Keep entities and relationships
-  normalized rather than creating one giant flattened table.
+- **Canonical layer:** normalized, portable OpenAlex entities/relationships with
+  PyArrow schemas and explicit ID rules
+  (`research_platform.canonical.openalex`). Independent of PostgreSQL/BigQuery
+  physical design. Keep relationships separate; do not flatten. Ingestion that
+  writes these tables is a later step.
 - **Analytical layer:** BigQuery is the first GCP analytical implementation;
   DuckDB supports local analytical tests. Work-author, work-topic,
   work-institution, and work-citation/reference relationships primarily remain
