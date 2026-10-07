@@ -18,7 +18,10 @@ from research_platform.config import SampleSelectionConfig
 from research_platform.sources.base import SourceAsset, SourceConnector
 from research_platform.sources.openalex.manifest import parse_openalex_works_manifest
 from research_platform.sources.openalex.metadata import OpenAlexAssetMetadata
-from research_platform.sources.openalex.sample import select_openalex_works_sample
+from research_platform.sources.openalex.sample import (
+    OpenAlexSampleSelection,
+    select_openalex_works_sample,
+)
 
 _S3_BUCKET = "openalex"
 _PUBLIC_HOST = "openalex.s3.amazonaws.com"
@@ -257,6 +260,21 @@ class _BoundedStream(io.RawIOBase):
             self._response.close()
 
 
+class OpenAlexPayloadStream(io.BufferedReader):
+    """Bounded caller-owned payload stream exposing safe response metadata only."""
+
+    def __init__(
+        self,
+        raw: _BoundedStream,
+        *,
+        content_type: str | None,
+        content_length: int | None,
+    ) -> None:
+        super().__init__(raw, buffer_size=_CHUNK_SIZE)
+        self.content_type = content_type
+        self.content_length = content_length
+
+
 class OpenAlexConnector(SourceConnector):
     """Discover one bounded Works sample and stream selected public snapshot files."""
 
@@ -308,9 +326,13 @@ class OpenAlexConnector(SourceConnector):
         return f"https://{_PUBLIC_HOST}{_FORMATS[self._content_format][0]}"
 
     def discover(self) -> Iterable[SourceAsset]:
-        assets, _ = self._load_manifest()
-        selection = select_openalex_works_sample(assets, self._selection_config)
+        selection = self.discover_metadata()
         return tuple(asset.to_source_asset() for asset in selection.selected)
+
+    def discover_metadata(self) -> OpenAlexSampleSelection:
+        """Return the bounded metadata selection; reads only the Works manifest."""
+        assets, _ = self._load_manifest()
+        return select_openalex_works_sample(assets, self._selection_config)
 
     def fetch(self, asset: SourceAsset) -> BinaryIO:
         content_format = _validate_source_asset(asset)
@@ -327,8 +349,13 @@ class OpenAlexConnector(SourceConnector):
                 raise OpenAlexSizeLimitError(
                     "OpenAlex payload Content-Length exceeds the configured byte limit"
                 )
-            return io.BufferedReader(
-                _BoundedStream(response, limit, expected_bytes), buffer_size=_CHUNK_SIZE
+            content_type = _header(response, "Content-Type")
+            return OpenAlexPayloadStream(
+                _BoundedStream(response, limit, expected_bytes),
+                content_type=(
+                    content_type.split(";", 1)[0].strip().lower() if content_type else None
+                ),
+                content_length=expected_bytes,
             )
         except Exception:
             response.close()

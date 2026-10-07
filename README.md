@@ -15,7 +15,8 @@ This overview reflects the completed OpenAlex connector in
 [PR #32](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/32)
 and the documentation-only architecture refresh in
 [PR #34](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/34).
-**Steps 01-07 are complete; the full data pipeline is not implemented.**
+**Steps 01-07 are complete, and Step 08 adds bounded source profiling. The full
+data pipeline is not implemented.**
 
 | Step | Delivered capability | Implementation boundary |
 | --- | --- | --- |
@@ -26,13 +27,14 @@ and the documentation-only architecture refresh in
 | 05 | Bounded OpenAlex connector | Anonymous manifest discovery and separate caller-owned streaming retrieval |
 | 06 | Works manifest parser | Pure parsing, validated metadata, stable identities, and duplicate/conflict handling |
 | 07 | Development sample selector | Deterministic, metadata-only selection with file-count and byte-size bounds |
+| 08 | Bounded source profiling | One-file JSONL/JSONL.GZ streaming sample and footer-first Parquet profile with evidence-classified reports; live payload profile pending public network access |
 
 The OpenAlex connector is the only implemented runtime network adapter.
 Constructing adapters or loading configuration does not connect to services.
 The existing provenance model is not a pipeline control database or an ingestion
 implementation.
 
-**Still planned:** source-format/schema profiling, immutable landing, pipeline
+**Still planned:** immutable landing, pipeline
 control, canonical modeling, ingestion, change/deletion processing, analytical
 models, gold marts, data quality, consumer APIs, and orchestration. There is no
 implemented GCS/BigQuery deployment or production pipeline.
@@ -115,7 +117,9 @@ canonicalize records, load a warehouse, or run a pipeline.
 | `parse_openalex_works_manifest()` | Parses caller-provided JSON text, UTF-8 bytes, or a mapping without I/O |
 | `select_openalex_works_sample()` | Returns selected metadata, configured bounds, eligibility counts, and safe skip reasons |
 | `OpenAlexConnector.discover()` | Retrieves only the selected-format Works manifest and reuses the parser/selector |
+| `OpenAlexConnector.discover_metadata()` | Returns the bounded selection with validated metadata; `discover()` delegates to it |
 | `OpenAlexConnector.fetch()` | Returns a caller-owned binary stream with actual-byte enforcement and explicit failures |
+| `profiling.profile_openalex_asset()` | Checks metadata, retrieves one bounded file, and returns an evidence-classified JSONL or Parquet profile |
 
 The selector defaults are exactly `max_files=1` and
 `max_file_size_bytes=25_000_000` (decimal bytes). Invalid limits are rejected, never
@@ -152,6 +156,18 @@ python -m research_platform.sources.openalex.connectivity
 
 This command is **opt-in**, may fail under network restrictions, and is not part
 of default tests or CI. It does not fetch a snapshot data file or contact GCP.
+
+The separate, explicit Step 08 profile command reads both Works manifests, then
+retrieves and profiles at most one bounded file (default 25,000,000 bytes, 100
+sampled records):
+
+```powershell
+python -m research_platform.sources.openalex.profiling --format jsonl
+```
+
+It is also opt-in and excluded from tests/CI. See
+[OpenAlex source profiling](docs/architecture/openalex-source-profiling.md) for the
+evidence classes, bounds, verified representations, and format recommendation.
 
 ## Local development
 
@@ -270,6 +286,7 @@ tracked YAML or logs.
 | [Query routing](docs/architecture/query-routing.md) | Benchmark categories, consumer capabilities, and materialization decisions |
 | [Public data sources](docs/architecture/public-data-sources.md) | Source priorities and source-specific normalization |
 | [OpenAlex contract](docs/architecture/openalex-manifest-contract.md) | Implemented metadata, parser, selector, connector, and public-access evidence |
+| [OpenAlex source profiling](docs/architecture/openalex-source-profiling.md) | Bounded profiler, evidence classes, verified representations, and format decision |
 | [21-step roadmap](docs/architecture/roadmap.md) | Completed stages and separately scoped future work |
 | [Copilot instructions](.github/copilot-instructions.md) | Engineering rules, phase boundaries, and required validation |
 
@@ -278,7 +295,7 @@ config\                       Local and future environment templates
 src\research_platform\
   common\                     Structured JSON logging
   config\                     Validated models and explicit YAML loading
-  sources\openalex\            Metadata, parser, selector, connector, connectivity CLI
+  sources\openalex\            Metadata, parser, selector, connector, profiler, connectivity/profile CLIs
   storage\                    ObjectStore contract; local/GCS skeletons
   warehouse\                  Warehouse contract; DuckDB/BigQuery/PostgreSQL skeletons
   provenance\                 Retrieval-provenance model

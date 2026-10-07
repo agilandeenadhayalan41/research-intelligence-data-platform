@@ -8,6 +8,7 @@ from research_platform.sources.openalex.connector import (
     OpenAlexFormatError,
     OpenAlexManifestError,
     OpenAlexNetworkError,
+    OpenAlexPayloadStream,
     OpenAlexSizeLimitError,
     OpenAlexTimeoutError,
     OpenAlexTruncatedError,
@@ -15,6 +16,22 @@ from research_platform.sources.openalex.connector import (
 )
 from research_platform.sources.openalex.manifest import parse_openalex_works_manifest
 from research_platform.sources.openalex.metadata import OpenAlexAssetMetadata, unique_assets
+from research_platform.sources.openalex.profile_models import (
+    EvidenceType,
+    FieldProfile,
+    OpenAlexDecompressionError,
+    OpenAlexEmptySourceError,
+    OpenAlexMalformedJSONLError,
+    OpenAlexMalformedParquetError,
+    OpenAlexProfileError,
+    OpenAlexProfileLimitError,
+    OpenAlexProfileRun,
+    OpenAlexSizeMismatchError,
+    OpenAlexSourceProfile,
+    OpenAlexUnsupportedFormatError,
+    ProfilingLimits,
+    RepresentationEvidence,
+)
 from research_platform.sources.openalex.sample import (
     OpenAlexSampleSelection,
     SkippedOpenAlexAsset,
@@ -22,7 +39,22 @@ from research_platform.sources.openalex.sample import (
 )
 
 __all__ = [
+    "EvidenceType",
+    "FieldProfile",
     "OpenAlexAssetMetadata",
+    "OpenAlexDecompressionError",
+    "OpenAlexEmptySourceError",
+    "OpenAlexMalformedJSONLError",
+    "OpenAlexMalformedParquetError",
+    "OpenAlexPayloadStream",
+    "OpenAlexProfileError",
+    "OpenAlexProfileLimitError",
+    "OpenAlexProfileRun",
+    "OpenAlexSizeMismatchError",
+    "OpenAlexSourceProfile",
+    "OpenAlexUnsupportedFormatError",
+    "ProfilingLimits",
+    "RepresentationEvidence",
     "OpenAlexAccessDeniedError",
     "OpenAlexConnectorError",
     "OpenAlexEndpointUnavailableError",
