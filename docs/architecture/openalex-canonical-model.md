@@ -11,7 +11,8 @@ Portable contracts live in `research_platform.canonical.openalex`:
 | `models.py` | Validated entity/relationship models |
 | `schemas.py` | PyArrow interchange schemas (source of truth) |
 | `mapping.py` | Source Work JSON → canonical bundle |
-| `versioning.py` | Update precedence rules for later ingestion |
+| `versioning.py` | Work update precedence for later ingestion |
+| `reconciliation.py` | Shared-entity reconciliation across Works |
 | `field_catalog.py` | SUPPORTED / DEFERRED / UNMAPPED / SOURCE-ONLY |
 
 Optional local SQL review DDL: [`sql/canonical/001_openalex_canonical.sql`](../../sql/canonical/001_openalex_canonical.sql)
@@ -43,25 +44,28 @@ Identifiers are never fabricated.
 | Entity | PK | Notes |
 | --- | --- | --- |
 | `works` | `work_id` | Core bibliographic attributes + array presence flags + lineage |
-| `authors` | `author_id` | |
-| `institutions` | `institution_id` | |
+| `authors` | `author_id` | Shared; see reconciliation |
+| `institutions` | `institution_id` | Shared; see reconciliation |
 | `sources` | `source_id` | ISSN-L; `host_publisher_id` when present |
 | `publishers` | `publisher_id` | Separate from free-text host name |
-| `topics` | `topic_id` | |
-| `funders` | `funder_id` | |
+| `topics` | `topic_id` | Shared; see reconciliation |
+| `funders` | `funder_id` | Shared; see reconciliation |
 
 ## Relationship grains
+
+Relationship identity uses **source-array ordinals** so nullable semantic fields
+remain null. There is no hidden `None` ↔ `""` conversion for portable keys.
 
 | Relationship | Grain / uniqueness | Preserves |
 | --- | --- | --- |
 | `work_authors` | `(work_id, authorship_index)` | author order, corresponding flag, author id |
 | `work_author_institutions` | `(work_id, authorship_index, institution_index)` | author↔institution association |
-| `work_topics` | `(work_id, topic_id)` | optional score |
-| `work_keywords` | `(work_id, keyword_id)` | optional score |
-| `work_references` | unique `(work_id, referenced_work_id)` when id resolved | unresolved/malformed refs retained |
-| `work_mesh` | `(work_id, descriptor_ui, qualifier_ui)` | qualifier may be empty |
-| `work_locations` | `(work_id, location_index)` | optional `source_id`, primary flag |
-| `work_grants` | `(work_id, funder_id, award_id)` | `award_id=""` when absent; no invented awards |
+| `work_topics` | `(work_id, topic_id)` | optional score; duplicate topic ids deduped |
+| `work_keywords` | `(work_id, keyword_id)` | optional score; duplicate keyword ids deduped |
+| `work_references` | `(work_id, reference_index)` | source position; `referenced_work_id` nullable |
+| `work_mesh` | `(work_id, mesh_index)` | `qualifier_ui` nullable; no empty-string sentinel |
+| `work_locations` | `(work_id, location_index)` | `location_origin`; optional `source_id` |
+| `work_grants` | `(work_id, grant_index)` | `funder_id` / `award_id` nullable; source duplicates kept |
 
 Authorship example:
 
@@ -74,6 +78,25 @@ Work W1
 Yields 2 `work_authors` rows and 3 `work_author_institutions` rows. It does **not**
 emit a denormalized authors×institutions×topics product.
 
+### WorkReference replay-safe grain
+
+Every `referenced_works` array slot maps to one row keyed by
+`(work_id, reference_index)`:
+
+- duplicate resolved ids keep distinct indexes (source multiplicity preserved)
+- `MALFORMED` and `MISSING` rows keep identity without fabricating OpenAlex ids
+- `referenced_work_id` stays null when unresolved
+
+### Null-preserving relationship keys
+
+PyArrow is authoritative. Review DDL matches nullability:
+
+- `WorkMesh.qualifier_ui` — nullable in model, Arrow, and PostgreSQL
+- `WorkGrant.funder_id` / `award_id` — nullable in model, Arrow, and PostgreSQL
+
+Primary keys use ordinals (`mesh_index`, `grant_index`, `reference_index`) so a
+PostgreSQL PK never forces empty-string stand-ins for null semantics.
+
 ## Missing vs null vs empty
 
 | Source observation | `*_presence` | Relationship rows |
@@ -81,11 +104,68 @@ emit a denormalized authors×institutions×topics product.
 | key absent | `MISSING` | 0 |
 | key: null | `NULL` | 0 |
 | key: [] | `EMPTY` | 0 |
-| key: […​] | `PRESENT` | one row per element (after dedupe) |
+| key: […​] | `PRESENT` | one row per element (after documented dedupe) |
 
 Empty arrays never become a single NULL relationship row.
 
-## Version / deletion semantics
+### `locations_presence` vs `primary_location`
+
+`locations_presence` describes **only** the source `locations` field:
+
+| Source `locations` | `locations_presence` |
+| --- | --- |
+| missing | `MISSING` |
+| null | `NULL` |
+| [] | `EMPTY` |
+| non-empty array | `PRESENT` |
+
+`primary_location` must **not** rewrite `locations_presence`.
+
+When `locations` is absent, null, or empty, and `primary_location` is an object,
+the mapper may still emit one `WorkLocation` with
+`location_origin=PRIMARY_LOCATION_FALLBACK` and `is_primary=true`. That fallback
+is explicitly distinguished from rows observed in `locations`
+(`location_origin=LOCATIONS_ARRAY`). Fallback never invents a presence of
+`PRESENT` for a missing/null/empty `locations` array.
+
+## Shared-entity reconciliation
+
+Authors, institutions, sources, publishers, topics, and funders can appear in
+multiple Works. `reconcile_shared_entity` / `merge_shared_entity` define
+deterministic outcomes **separate from** Work version precedence
+(`compare_work_versions`).
+
+| Situation | Outcome |
+| --- | --- |
+| same id + identical payload fields | `IDENTICAL` |
+| same id + complementary null/non-null, no non-null conflicts | `ENRICH` |
+| same id + conflicting non-null values, incoming `source_updated_date` newer | `NEWER` |
+| same id + conflicting non-null values, incoming older | `STALE` |
+| same id + conflicting non-null values, equal/undated versions | `CONFLICT` |
+
+Rules:
+
+- Do not silently overwrite a richer entity with a poorer embedded summary.
+- `ENRICH` merges by keeping non-null values from either side (`merge_shared_entity`).
+- Conflicting non-null fields never merge; callers decide using `NEWER` /
+  `STALE` / `CONFLICT`.
+- Work checksum/date precedence remains in `versioning.py` and is not reused as
+  a silent last-writer-wins rule for shared entities.
+
+## Date normalization
+
+`_parse_date` accepts **only** exact `YYYY-MM-DD` calendar-date strings (or a
+Python `date`). It rejects:
+
+- timestamps / `datetime` values
+- truncated prefixes of longer strings
+- trailing garbage after a date
+- invalid calendar dates
+
+OpenAlex Work `publication_date`, `created_date`, and `updated_date` are modeled
+as calendar dates in this contract. No silent `text[:10]` truncation.
+
+## Version / deletion semantics (Works)
 
 `CanonicalLineage` attaches `source_asset_id`, `source_checksum_sha256`,
 `source_updated_date`, `run_id`, `processed_at`, `activity_state`, `deleted_at`.
@@ -145,4 +225,4 @@ Canonical rows carry the same asset checksum / run identity concepts as
 ## Out of scope
 
 Ingestion (#20), deletion processor (#21), BigQuery runtime (#22), GCS (#9),
-Airflow, AACT/other sources, ML/KG.
+Airflow, AACT/other sources, ML/KG. No BigQuery physical design in this step.

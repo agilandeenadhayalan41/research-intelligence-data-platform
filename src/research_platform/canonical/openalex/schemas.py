@@ -147,6 +147,7 @@ WORK_KEYWORDS_SCHEMA = _with_lineage(
 WORK_REFERENCES_SCHEMA = _with_lineage(
     [
         ("work_id", pa.string(), False),
+        ("reference_index", pa.int32(), False),
         ("referenced_work_id", pa.string(), True),
         ("raw_reference", pa.string(), True),
         ("reference_status", pa.string(), False),
@@ -156,6 +157,7 @@ WORK_REFERENCES_SCHEMA = _with_lineage(
 WORK_MESH_SCHEMA = _with_lineage(
     [
         ("work_id", pa.string(), False),
+        ("mesh_index", pa.int32(), False),
         ("descriptor_ui", pa.string(), False),
         ("descriptor_name", pa.string(), True),
         ("qualifier_ui", pa.string(), True),
@@ -168,6 +170,7 @@ WORK_LOCATIONS_SCHEMA = _with_lineage(
     [
         ("work_id", pa.string(), False),
         ("location_index", pa.int32(), False),
+        ("location_origin", pa.string(), False),
         ("source_id", pa.string(), True),
         ("is_oa", pa.bool_(), True),
         ("landing_page_url", pa.string(), True),
@@ -181,8 +184,9 @@ WORK_LOCATIONS_SCHEMA = _with_lineage(
 WORK_GRANTS_SCHEMA = _with_lineage(
     [
         ("work_id", pa.string(), False),
+        ("grant_index", pa.int32(), False),
         ("funder_id", pa.string(), True),
-        ("award_id", pa.string(), False),
+        ("award_id", pa.string(), True),
         ("funder_display_name", pa.string(), True),
     ]
 )

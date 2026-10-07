@@ -24,6 +24,7 @@ from research_platform.canonical.openalex.models import (
     CanonicalWorkBundle,
     Funder,
     Institution,
+    LocationOrigin,
     Publisher,
     ReferenceStatus,
     Source,
@@ -37,6 +38,11 @@ from research_platform.canonical.openalex.models import (
     WorkMesh,
     WorkReference,
     WorkTopic,
+)
+from research_platform.canonical.openalex.reconciliation import (
+    EntityReconciliation,
+    merge_shared_entity,
+    reconcile_shared_entity,
 )
 from research_platform.canonical.openalex.schemas import CANONICAL_SCHEMAS
 from research_platform.canonical.openalex.versioning import (
@@ -52,11 +58,13 @@ __all__ = [
     "CanonicalLineage",
     "CanonicalModelError",
     "CanonicalWorkBundle",
+    "EntityReconciliation",
     "FIELD_CATALOG",
     "FieldSupport",
     "Funder",
     "IdentifierError",
     "Institution",
+    "LocationOrigin",
     "MappingError",
     "Publisher",
     "ReferenceStatus",
@@ -74,6 +82,7 @@ __all__ = [
     "WorkTopic",
     "compare_work_versions",
     "map_openalex_work",
+    "merge_shared_entity",
     "normalize_doi",
     "normalize_issn",
     "normalize_keyword_id",
@@ -81,4 +90,5 @@ __all__ = [
     "normalize_orcid",
     "normalize_ror",
     "openalex_url",
+    "reconcile_shared_entity",
 ]

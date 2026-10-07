@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
-from typing import Mapping
+from typing import Any, Mapping
 
 from research_platform.canonical.openalex.errors import IdentifierError, MappingError
 from research_platform.canonical.openalex.identifiers import (
@@ -23,6 +24,7 @@ from research_platform.canonical.openalex.models import (
     CanonicalWorkBundle,
     Funder,
     Institution,
+    LocationOrigin,
     Publisher,
     ReferenceStatus,
     Source,
@@ -38,8 +40,10 @@ from research_platform.canonical.openalex.models import (
     WorkTopic,
 )
 
+_EXACT_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-def _presence(record: Mapping[str, Any], key: str) -> ArrayPresence:
+
+def _presence(record: Mapping[str, object], key: str) -> ArrayPresence:
     if key not in record:
         return ArrayPresence.MISSING
     value = record[key]
@@ -62,17 +66,29 @@ def _optional_str(value: object | None) -> str | None:
 
 
 def _parse_date(value: object | None, *, field_name: str) -> date | None:
+    """Accept only exact ``YYYY-MM-DD`` calendar dates (or Python ``date``).
+
+    Timestamps, truncated prefixes, and trailing garbage are rejected. OpenAlex
+    Work ``publication_date`` / ``created_date`` / ``updated_date`` are modeled
+    as calendar dates in this contract.
+    """
     if value is None:
         return None
-    if isinstance(value, date) and not isinstance(value, datetime):
+    if isinstance(value, datetime):
+        raise MappingError(f"{field_name} must be YYYY-MM-DD, not a timestamp")
+    if isinstance(value, date):
         return value
     if not isinstance(value, str) or not value.strip():
-        raise MappingError(f"{field_name} must be YYYY-MM-DD or null")
+        raise MappingError(f"{field_name} must be exact YYYY-MM-DD or null")
     text = value.strip()
+    if not _EXACT_DATE.fullmatch(text):
+        raise MappingError(f"{field_name} must be exact YYYY-MM-DD")
     try:
-        parsed = date.fromisoformat(text[:10])
+        parsed = date.fromisoformat(text)
     except ValueError as error:
-        raise MappingError(f"{field_name} must be YYYY-MM-DD") from error
+        raise MappingError(f"{field_name} must be a real calendar date") from error
+    if parsed.isoformat() != text:
+        raise MappingError(f"{field_name} must be exact YYYY-MM-DD")
     return parsed
 
 
@@ -325,24 +341,19 @@ def map_openalex_work(
 
     mesh_presence = _presence(record, "mesh")
     if mesh_presence is ArrayPresence.PRESENT:
-        seen_mesh: set[tuple[str, str | None]] = set()
-        for mesh_obj in record["mesh"]:
+        for mesh_index, mesh_obj in enumerate(record["mesh"]):
             if not isinstance(mesh_obj, Mapping):
                 raise MappingError("mesh entries must be objects")
             descriptor_ui = _optional_str(mesh_obj.get("descriptor_ui"))
             if descriptor_ui is None:
                 raise MappingError("mesh.descriptor_ui is required when mesh is present")
-            qualifier_ui = _optional_str(mesh_obj.get("qualifier_ui"))
-            key = (descriptor_ui, qualifier_ui)
-            if key in seen_mesh:
-                continue
-            seen_mesh.add(key)
             work_mesh.append(
                 WorkMesh(
                     work_id=work_id,
+                    mesh_index=mesh_index,
                     descriptor_ui=descriptor_ui,
                     descriptor_name=_optional_str(mesh_obj.get("descriptor_name")),
-                    qualifier_ui=qualifier_ui,
+                    qualifier_ui=_optional_str(mesh_obj.get("qualifier_ui")),
                     qualifier_name=_optional_str(mesh_obj.get("qualifier_name")),
                     is_major_topic=_optional_bool(
                         mesh_obj.get("is_major_topic"), field_name="is_major_topic"
@@ -353,12 +364,12 @@ def map_openalex_work(
 
     referenced_works_presence = _presence(record, "referenced_works")
     if referenced_works_presence is ArrayPresence.PRESENT:
-        seen_refs: set[str] = set()
-        for raw in record["referenced_works"]:
+        for reference_index, raw in enumerate(record["referenced_works"]):
             if raw is None or (isinstance(raw, str) and not raw.strip()):
                 work_references.append(
                     WorkReference(
                         work_id=work_id,
+                        reference_index=reference_index,
                         referenced_work_id=None,
                         raw_reference=None if raw is None else str(raw),
                         reference_status=ReferenceStatus.MISSING,
@@ -372,40 +383,34 @@ def map_openalex_work(
                 referenced_work_id = normalize_openalex_id(
                     raw, expected_prefix="W", field_name="referenced_works[]"
                 )
+                status = ReferenceStatus.RESOLVED_ID
             except IdentifierError:
-                work_references.append(
-                    WorkReference(
-                        work_id=work_id,
-                        referenced_work_id=None,
-                        raw_reference=raw,
-                        reference_status=ReferenceStatus.MALFORMED,
-                        lineage=lineage,
-                    )
-                )
-                continue
-            if referenced_work_id in seen_refs:
-                continue
-            seen_refs.add(referenced_work_id)
+                referenced_work_id = None
+                status = ReferenceStatus.MALFORMED
             work_references.append(
                 WorkReference(
                     work_id=work_id,
+                    reference_index=reference_index,
                     referenced_work_id=referenced_work_id,
                     raw_reference=raw,
-                    reference_status=ReferenceStatus.RESOLVED_ID,
+                    reference_status=status,
                     lineage=lineage,
                 )
             )
 
+    # Presence describes only the source `locations` field observation.
     locations_presence = _presence(record, "locations")
-    location_entries: list[Mapping[str, Any]] = []
+    location_entries: list[tuple[Mapping[str, object], LocationOrigin]] = []
     if locations_presence is ArrayPresence.PRESENT:
         for location_obj in record["locations"]:
             if not isinstance(location_obj, Mapping):
                 raise MappingError("locations entries must be objects")
-            location_entries.append(location_obj)
+            location_entries.append((location_obj, LocationOrigin.LOCATIONS_ARRAY))
     elif isinstance(primary_location, Mapping):
-        location_entries = [primary_location]
-        locations_presence = ArrayPresence.PRESENT
+        # Fallback creates a WorkLocation without rewriting locations_presence.
+        location_entries.append(
+            (primary_location, LocationOrigin.PRIMARY_LOCATION_FALLBACK)
+        )
 
     primary_landing = (
         _optional_str(primary_location.get("landing_page_url"))
@@ -413,22 +418,26 @@ def map_openalex_work(
         else None
     )
     primary_marked = False
-    for location_index, location_obj in enumerate(location_entries):
+    for location_index, (location_obj, location_origin) in enumerate(location_entries):
         source_id = None
         source_obj = location_obj.get("source")
         if isinstance(source_obj, Mapping):
             source_id = upsert_source(source_obj)
         is_primary = False
-        if not primary_marked and isinstance(primary_location, Mapping):
-            if location_obj is primary_location:
-                is_primary = True
-            elif (
+        if location_origin is LocationOrigin.PRIMARY_LOCATION_FALLBACK:
+            is_primary = True
+        elif not primary_marked and isinstance(primary_location, Mapping):
+            if (
                 source_id == primary_source_id
                 and primary_landing is not None
                 and _optional_str(location_obj.get("landing_page_url")) == primary_landing
             ):
                 is_primary = True
-            elif len(location_entries) == 1:
+            elif (
+                source_id == primary_source_id
+                and primary_landing is None
+                and len(location_entries) == 1
+            ):
                 is_primary = True
         if is_primary:
             primary_marked = True
@@ -436,6 +445,7 @@ def map_openalex_work(
             WorkLocation(
                 work_id=work_id,
                 location_index=location_index,
+                location_origin=location_origin,
                 source_id=source_id,
                 is_oa=_optional_bool(location_obj.get("is_oa"), field_name="location.is_oa"),
                 landing_page_url=_optional_str(location_obj.get("landing_page_url")),
@@ -449,8 +459,7 @@ def map_openalex_work(
 
     grants_presence = _presence(record, "grants")
     if grants_presence is ArrayPresence.PRESENT:
-        seen_grants: set[tuple[str | None, str]] = set()
-        for grant_obj in record["grants"]:
+        for grant_index, grant_obj in enumerate(record["grants"]):
             if not isinstance(grant_obj, Mapping):
                 raise MappingError("grants entries must be objects")
             funder_id = None
@@ -467,16 +476,12 @@ def map_openalex_work(
                         lineage=lineage,
                     ),
                 )
-            award_id = _optional_str(grant_obj.get("award_id")) or ""
-            key = (funder_id, award_id)
-            if key in seen_grants:
-                continue
-            seen_grants.add(key)
             work_grants.append(
                 WorkGrant(
                     work_id=work_id,
+                    grant_index=grant_index,
                     funder_id=funder_id,
-                    award_id=award_id,
+                    award_id=_optional_str(grant_obj.get("award_id")),
                     funder_display_name=_optional_str(grant_obj.get("funder_display_name")),
                     lineage=lineage,
                 )
