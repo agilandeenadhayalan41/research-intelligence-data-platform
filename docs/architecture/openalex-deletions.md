@@ -4,31 +4,47 @@ Step 13 applies bounded, idempotent OpenAlex Work deletions while preserving
 immutable raw bytes, lineage, and transactional correctness. It does not
 implement BigQuery models, GCS, Airflow, or a generic schema-migration system.
 
-## Source representation
+## Authoritative public source
 
-Primary deletion source: **`deleted_ids.csv.gz`**.
-
-Repository evidence does not pin a single public OpenAlex URI template for this
-file. Step 13 therefore defines an explicit local contract:
+OpenAlex documents the Works deletion ledger next to the Works manifest
+([Sync / deletions](https://help.openalex.org/access/sync/)):
 
 | Field | Value |
 | --- | --- |
-| `source` | `openalex` |
-| `entity` | `works-deletions` |
+| Canonical physical URI | `s3://openalex/data/jsonl/works/deleted_ids.csv.gz` |
+| Also published under | `s3://openalex/data/parquet/works/deleted_ids.csv.gz` (same file; **not** used as an alternate identity here) |
+| Logical control entity | `works-deletions` (distinct from Works-data `works`) |
 | `content_format` | `csv` (bytes are gzip-compressed) |
-| filename | `deleted_ids.csv.gz` |
-| URI shape | `s3://openalex/data/csv/works-deletions/.../deleted_ids.csv.gz` |
+| Asset id prefix | `oad-…` |
 
-CSV contract:
+Logical entity ≠ physical URI. Control identity uses `works-deletions`; the
+public path remains under `data/jsonl/works/`.
 
-- required header column: `id`
-- values: OpenAlex Work URL or short `W…` form
-- blank rows skipped
-- extra columns tolerated after `id`
-- IDs normalized with the Step 11 identifier contract (`expected_prefix="W"`)
+### CSV contract
 
-Asset identity (`oad-…`) includes source, snapshot date, entity, content format,
-and file URI — distinct from Works-data (`oa-…`) identities.
+```csv
+work_id,deleted_date
+https://openalex.org/W4245566371,2026-08-14
+```
+
+- Header must be exactly `work_id,deleted_date` (strict; unexpected schema fails)
+- `work_id`: OpenAlex Work URL or short `W…` form (Step 11 normalization)
+- `deleted_date`: exact `YYYY-MM-DD` (per-row source evidence for precedence)
+- Blank rows skipped
+- Extra/missing columns fail explicitly
+
+### Cumulative ledger
+
+`deleted_ids.csv.gz` is a **cumulative** Works deletion ledger, not a daily
+delta. The latest snapshot file is the whole truth. Public size is roughly
+**160 MB compressed / tens of millions of rows**.
+
+This local Step 13 runner **does not** ingest the full public ledger. Default
+local safety remains `max_file_size_bytes <= 25_000_000`. Full-scale ledger
+ingestion requires a later explicitly approved scalable/cloud path.
+
+Automatic restoration when a Work leaves the ledger is **out of scope**. Newer
+active observations after a tombstone still raise `RestoreRequiredError`.
 
 ## Raw layout
 
@@ -38,9 +54,8 @@ openalex/works-deletions/snapshot_date=YYYY-MM-DD/updated_date=…/
   <asset-id>/provenance.json
 ```
 
-Immutable `LocalObjectStore` semantics apply: identical bytes replay;
-conflicting bytes for the same key fail. Retries with a new run id may reuse
-content-checksum-matching raw objects (same recovery rule as Step 12).
+Immutable `LocalObjectStore` semantics apply. Retries with matching content
+checksum may reuse raw objects (same recovery rule as Step 12).
 
 ## Callable entry points
 
@@ -49,25 +64,28 @@ python -m research_platform.ingestion.deletion_cli \
   --config config/local.yaml \
   --backend postgres \
   --local-file /path/to/deleted_ids.csv.gz \
-  --file-uri s3://openalex/data/csv/works-deletions/updated_date=2024-01-10/deleted_ids.csv.gz \
-  --snapshot-date 2024-01-15 \
-  --updated-date 2024-01-10
+  --snapshot-date 2024-01-15
 ```
+
+Default `--file-uri` is the public JSONL Works path. The CLI opens the local
+file in `rb` mode (caller-owned stream); it does **not** `read_bytes()` the
+entire payload into memory.
 
 Programmatic: `run_openalex_deletions_local_ingest(..., deletion_asset=..., connector=...)`.
 
-`--backend memory|postgres` is required and printed.
-
 ## Deletion event grain
 
-Table `deletion_events` (and in-memory `_deletion_events`) stores:
+Table `deletion_events` stores:
 
 - `work_id`, `asset_id`, `source_checksum_sha256` (unique grain)
-- `run_id`, `source_uri`, `source_updated_date`, `processed_at`
+- `deleted_date` (**required** per-row OpenAlex source deletion date)
+- optional file-level `source_updated_date` when known for the asset
+- `run_id`, `source_uri`, `processed_at`
 - `outcome`: `DELETED` | `ALREADY_DELETED` | `UNKNOWN_WORK` | `STALE` | `CONFLICT` | `DUPLICATE`
 
-`RecordProvenance` rows with `entity_type=work-deletion` are also written.
-Prior Works ingestion provenance is never erased.
+`RecordProvenance` rows with `entity_type=work-deletion` set
+`source_updated_date` to the row’s `deleted_date`. Prior Works ingestion
+provenance is never erased.
 
 ## Tombstone semantics
 
@@ -76,89 +94,76 @@ Do **not** physically delete the Work row.
 On apply:
 
 - `activity_state = DELETED`
-- `deleted_at = processed_at` (deletion processing time)
-- lineage fields updated to the deletion asset/checksum/run
+- `CanonicalLineage.source_updated_date = deleted_date` (source calendar date for
+  precedence; no fabricated timestamp)
+- `deleted_at = processed_at` (processing time)
+- lineage asset/checksum/run updated to the deletion observation
 
-Payload fields (title, etc.) remain for audit/explanation.
-
-## Relationship semantics (policy A)
-
-Physical relationship rows owned by the deleted Work (`work_authors`, topics,
-locations, …) are **preserved**. Consumer-facing active models must filter
-through parent Work `activity_state = ACTIVE` (`is_active_work()`).
-
-Shared entities (authors, institutions, topics, …) are never removed because
-one Work is deleted.
-
-## References to deleted Works
-
-If Work A references Work B and B is tombstoned, A's `work_references` row
-remains as a source-observed relationship. That is not an orphan error.
-Unresolved/external references are unchanged.
-
-## Unknown IDs
-
-Deletion files may list IDs absent from the bounded local sample. Those yield
-`UNKNOWN_WORK` without failing the file. Replay remains idempotent.
-
-## Duplicate IDs
-
-Within one file, the first normalized ID performs the deletion action; later
-duplicates increment the `duplicates` counter only (no second mutation).
-
-## Version precedence / restore
+## Version precedence
 
 | Sequence | Result |
 | --- | --- |
-| Active T1 then deletion T2 | Work tombstoned (`DELETED`) |
-| Stale active T1 after deletion T2 | Upsert returns `STALE`; Work stays `DELETED` |
-| Newer active after deletion | `RestoreRequiredError` — no silent `DELETED → ACTIVE` |
+| Active T1, deletion T2 (`T2 > T1`) | Tombstone (`DELETED`) |
+| Active T3, deletion T2 (`T2 < T3`) | `STALE` — Work stays `ACTIVE` |
+| Active T2, deletion T2 | Deletion wins (`DELETED`) |
+| DELETED T2, same deletion T2 | `ALREADY_DELETED` |
+| DELETED T3, older deletion T2 | `STALE` |
+| Stale active T1 after deletion T2 | Upsert `STALE`; Work stays `DELETED` |
+| Newer active after deletion | `RestoreRequiredError` — no silent restore |
 
-Step 13 does **not** auto-restore. Explicit restore reconciliation is a later
-slice unless OpenAlex semantics later prove an automatic rule.
+Missing Work version date while ACTIVE → conservative `STALE` (do not destroy
+state when ordering cannot be proven).
+
+## Relationship / reference semantics
+
+Policy A: physical relationship rows owned by the deleted Work are preserved;
+filter via parent Work `activity_state = ACTIVE` (`is_active_work()`).
+
+Shared entities are never removed because one Work is deleted.
+
+Active Work → deleted target references remain as source observations.
+
+## Unknown / duplicate IDs
+
+Unknown IDs → `UNKNOWN_WORK` without failing the file (bounded local sample).
+
+Same `work_id` + same `deleted_date` → one mutation; later rows count as
+`duplicates`.
+
+Same `work_id` + conflicting `deleted_date` → explicit decode failure (source
+inconsistency); transaction rolls back.
 
 ## Transaction boundary
 
-Same pattern as Step 12:
-
 ```text
-immutable raw land (outside DB)
+immutable raw land (outside DB; streamed, not fully buffered by the CLI)
 BEGIN
   FOR UPDATE claim re-check
-  stream deletion IDs
-  for each unique ID: tombstone + deletion event + provenance
+  stream deletion rows
+  for each unique work_id: precedence + tombstone + event + provenance
   mark source SUCCESS
 COMMIT
 ```
 
-Failure at row N → `ROLLBACK` (no partial deletion mutations/events);
-raw bytes may remain; source → `FAILED`; retry reuses raw.
+Failure at row N → `ROLLBACK`; raw bytes may remain; source → `FAILED`; retry.
 
 ObjectStore + PostgreSQL are not one distributed ACID transaction.
 
 ## Counters
 
 `rows_seen`, `unique_ids`, `duplicates`, `deleted`, `already_deleted`,
-`unknown`, `stale`, `conflicts` — aggregate only; the whole file's events are
-not retained for statistics.
+`unknown`, `stale`, `conflicts`.
 
 ## Active filtering
 
 Use `research_platform.canonical.openalex.activity.is_active_work`.
-Consumer-facing active models must exclude `DELETED` Works. BigQuery models are
-out of scope here.
+Consumer-facing active models must exclude `DELETED` Works.
 
 ## Schema evolution / reprocessing boundary
 
-Step 13 establishes:
-
-- immutable raw enables replay
-- version precedence blocks stale overwrite / resurrection
-- claim/retry recovers failed assets
-- source/schema incompatibility fails explicitly at decode
-
-It does **not** ship a generic schema-migration framework. Broader OpenAlex
-schema-evolution support remains a later dedicated slice.
+Step 13 establishes immutable replay, per-row deletion precedence, claim/retry,
+and explicit decode failures. It does **not** ship a generic schema-migration
+framework or full-ledger cloud execution.
 
 ## Out of scope
 

@@ -624,16 +624,20 @@ def test_decode_failure_keeps_raw_marks_failed(tmp_path: Path, pg: psycopg.Conne
 # ---------------------------------------------------------------------------
 
 
-def _gz_csv(ids: list[str], *, header: str = "id") -> bytes:
-    return gzip.compress(("\n".join([header, *ids]) + "\n").encode("utf-8"))
+def _gz_csv(rows: list[tuple[str, str]]) -> bytes:
+    lines = ["work_id,deleted_date"] + [
+        f"{work_id},{deleted_date}" for work_id, deleted_date in rows
+    ]
+    return gzip.compress(("\n".join(lines) + "\n").encode("utf-8"))
 
 
 def _deletion_asset(
     *,
-    updated: date = date(2024, 2, 1),
+    updated: date | None = date(2024, 2, 1),
     snapshot: date = date(2024, 2, 5),
 ) -> "OpenAlexDeletionAssetMetadata":
     from research_platform.sources.openalex.deletion_metadata import (
+        DELETION_PUBLIC_URI,
         OpenAlexDeletionAssetMetadata,
     )
 
@@ -642,10 +646,7 @@ def _deletion_asset(
             "source": "openalex",
             "snapshot_date": snapshot,
             "entity": "works-deletions",
-            "file_uri": (
-                f"s3://openalex/data/csv/works-deletions/"
-                f"updated_date={updated.isoformat()}/deleted_ids.csv.gz"
-            ),
+            "file_uri": DELETION_PUBLIC_URI,
             "byte_size": 500,
             "updated_date": updated,
             "content_format": "csv",
@@ -689,7 +690,7 @@ def test_deletion_tombstone_survives_reconnect(
 
     _seed_works_pg(tmp_path, pg, [_work("W1"), _work("W2")])
     del_asset = _deletion_asset()
-    payload = _gz_csv(["W1", "W999"])
+    payload = _gz_csv([("W1", "2024-02-01"), ("W999", "2024-02-01")])
     landing = tmp_path / "landing-del"
     config_path = _write_config(tmp_path / "cfg-del", landing)
     object_store = LocalObjectStore(StorageConfig(backend="local", landing_path=landing))
@@ -764,7 +765,13 @@ def test_deletion_mid_file_rollback_then_retry(
 
     _seed_works_pg(tmp_path, pg, [_work("W1"), _work("W2"), _work("W3")])
     del_asset = _deletion_asset()
-    payload = _gz_csv(["W1", "W2", "W3"])
+    payload = _gz_csv(
+        [
+            ("W1", "2024-02-01"),
+            ("W2", "2024-02-01"),
+            ("W3", "2024-02-01"),
+        ]
+    )
     landing = tmp_path / "landing-del"
     config_path = _write_config(tmp_path / "cfg-del", landing)
     object_store = LocalObjectStore(StorageConfig(backend="local", landing_path=landing))
@@ -844,7 +851,7 @@ def test_deletion_idempotent_replay_and_no_resurrection(
 
     _seed_works_pg(tmp_path, pg, [_work("W1", updated="2024-01-10")])
     del_asset = _deletion_asset(updated=date(2024, 2, 1))
-    payload = _gz_csv(["W1"])
+    payload = _gz_csv([("W1", "2024-02-01")])
     landing = tmp_path / "landing-del"
     config_path = _write_config(tmp_path / "cfg-del", landing)
     object_store = LocalObjectStore(StorageConfig(backend="local", landing_path=landing))
@@ -916,6 +923,65 @@ def test_deletion_idempotent_replay_and_no_resurrection(
     assert is_deleted_work(canonical.get_work("W1"))  # type: ignore[arg-type]
 
 
+def test_deletion_older_than_active_work_is_stale(
+    tmp_path: Path, pg: psycopg.Connection
+) -> None:
+    from research_platform.canonical.openalex.activity import is_active_work
+    from research_platform.ingestion.deletion_pipeline import (
+        run_openalex_deletions_local_ingest,
+    )
+
+    newer_asset = _asset(uri_suffix="newer_active.gz", updated=date(2026, 9, 10))
+    landing_works = tmp_path / "landing-works-newer"
+    run_openalex_works_local_ingest(
+        _write_config(tmp_path / "cfg-works-newer", landing_works),
+        backend="postgres",
+        postgres_connection=pg,
+        object_store=LocalObjectStore(
+            StorageConfig(backend="local", landing_path=landing_works)
+        ),
+        connector=FakeConnector(
+            assets=[newer_asset],
+            payloads={
+                newer_asset.file_uri: _gz_jsonl(
+                    [_work("W1", updated="2026-09-10")]
+                )
+            },
+        ),  # type: ignore[arg-type]
+        now=_clock(),
+    )
+    del_asset = _deletion_asset()
+    result = run_openalex_deletions_local_ingest(
+        _write_config(tmp_path / "cfg-stale-del", tmp_path / "landing-stale-del"),
+        backend="postgres",
+        deletion_asset=del_asset,
+        postgres_connection=pg,
+        object_store=LocalObjectStore(
+            StorageConfig(backend="local", landing_path=tmp_path / "landing-stale-del")
+        ),
+        connector=FakeConnector(
+            assets=[del_asset],
+            payloads={del_asset.file_uri: _gz_csv([("W1", "2026-08-14")])},
+        ),
+        now=_clock(),
+    )
+    assert result.stats is not None
+    assert result.stats.stale == 1
+    assert result.stats.deleted == 0
+    canonical = PostgresCanonicalStore(pg)
+    work = canonical.get_work("W1")
+    assert work is not None
+    assert is_active_work(work)
+    with pg.cursor() as cur:
+        cur.execute(
+            "SELECT outcome, deleted_date FROM deletion_events WHERE work_id = %s",
+            ("W1",),
+        )
+        outcome, deleted_date = cur.fetchone()
+    assert outcome == "STALE"
+    assert deleted_date == date(2026, 8, 14)
+
+
 def test_deletion_reference_to_deleted_target_preserved(
     tmp_path: Path, pg: psycopg.Connection
 ) -> None:
@@ -945,7 +1011,8 @@ def test_deletion_reference_to_deleted_target_preserved(
             StorageConfig(backend="local", landing_path=tmp_path / "landing-d")
         ),
         connector=FakeConnector(
-            assets=[del_asset], payloads={del_asset.file_uri: _gz_csv(["W9"])}
+            assets=[del_asset],
+            payloads={del_asset.file_uri: _gz_csv([("W9", "2024-02-01")])},
         ),
         now=_clock(),
     )

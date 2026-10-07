@@ -44,11 +44,14 @@ class CanonicalStore(ABC):
         deletion_asset_id: str,
         source_checksum_sha256: str,
         run_id: UUID,
-        source_updated_date: date | None,
+        deleted_date: date,
         processed_at: datetime,
         deleted_at: datetime,
     ) -> DeletionOutcome:
-        """Apply a tombstone for ``work_id`` without removing physical history."""
+        """Apply a tombstone for ``work_id`` without removing physical history.
+
+        ``deleted_date`` is the per-row OpenAlex source deletion calendar date.
+        """
         raise NotImplementedError
 
     @abstractmethod

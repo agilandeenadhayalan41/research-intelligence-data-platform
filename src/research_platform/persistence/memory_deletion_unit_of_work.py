@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import date
 
 from research_platform.canonical.memory import InMemoryCanonicalStore
 from research_platform.canonical.openalex.deletions import DeletionOutcome
@@ -10,6 +11,8 @@ from research_platform.control.deletion_events import DeletionEvent
 from research_platform.control.lifecycle import assert_claim_owned
 from research_platform.control.memory import InMemoryControlStore
 from research_platform.control.models import RecordProvenance
+from research_platform.ingestion.deletions_csv import DeletedWorkRecord
+from research_platform.ingestion.errors import IngestionDecodeError
 from research_platform.persistence.deletion_unit_of_work import (
     DeletionCounters,
     DeletionPublishRequest,
@@ -35,34 +38,42 @@ def publish_claimed_deletions_memory(
 
     try:
         counters = DeletionCounters()
-        seen: set[str] = set()
-        for work_id in request.open_work_ids():
-            if work_id in seen:
+        seen: dict[str, date] = {}
+        for record in request.open_records():
+            prior = seen.get(record.work_id)
+            if prior is not None:
+                if prior != record.deleted_date:
+                    raise IngestionDecodeError(
+                        "conflicting deleted_date for the same work_id in one "
+                        "deletion ledger"
+                    )
                 counters = counters.after_duplicate()
                 continue
-            seen.add(work_id)
+            seen[record.work_id] = record.deleted_date
             outcome = canonical.apply_work_deletion(
-                work_id,
+                record.work_id,
                 deletion_asset_id=request.asset_id,
                 source_checksum_sha256=request.source_checksum_sha256,
                 run_id=request.retrieval_provenance.run_id,
-                source_updated_date=request.source_updated_date,
+                deleted_date=record.deleted_date,
                 processed_at=request.processed_at,
                 deleted_at=request.processed_at,
             )
             counters = counters.after_outcome(outcome)
-            control._deletion_events.append(_event(request, work_id, outcome))  # noqa: SLF001
+            control._deletion_events.append(  # noqa: SLF001
+                _event(request, record, outcome)
+            )
             control.record_provenance(
                 RecordProvenance.model_validate(
                     {
-                        "record_id": work_id,
+                        "record_id": record.work_id,
                         "entity_type": "work-deletion",
                         "asset_id": request.asset_id,
                         "source_checksum_sha256": request.source_checksum_sha256,
                         "run_id": request.retrieval_provenance.run_id,
                         "source_uri": request.source_uri,
                         "processed_at": request.processed_at,
-                        "source_updated_date": request.source_updated_date,
+                        "source_updated_date": record.deleted_date,
                     }
                 )
             )
@@ -83,15 +94,18 @@ def publish_claimed_deletions_memory(
 
 
 def _event(
-    request: DeletionPublishRequest, work_id: str, outcome: DeletionOutcome
+    request: DeletionPublishRequest,
+    record: DeletedWorkRecord,
+    outcome: DeletionOutcome,
 ) -> DeletionEvent:
     return DeletionEvent.model_validate(
         {
-            "work_id": work_id,
+            "work_id": record.work_id,
             "asset_id": request.asset_id,
             "source_checksum_sha256": request.source_checksum_sha256,
             "run_id": request.retrieval_provenance.run_id,
             "source_uri": request.source_uri,
+            "deleted_date": record.deleted_date,
             "source_updated_date": request.source_updated_date,
             "processed_at": request.processed_at,
             "outcome": outcome,

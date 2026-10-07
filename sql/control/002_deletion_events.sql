@@ -2,6 +2,8 @@
 --
 -- Additive audit of deletion applications. Does not erase ingestion
 -- RecordProvenance. Target dialect: PostgreSQL 16+.
+--
+-- deleted_date is the per-row OpenAlex source deletion calendar date.
 
 CREATE TABLE IF NOT EXISTS deletion_events (
     work_id TEXT NOT NULL,
@@ -9,6 +11,7 @@ CREATE TABLE IF NOT EXISTS deletion_events (
     source_checksum_sha256 TEXT NOT NULL,
     run_id UUID NOT NULL,
     source_uri TEXT NOT NULL,
+    deleted_date DATE NOT NULL,
     source_updated_date DATE NULL,
     processed_at TIMESTAMPTZ NOT NULL,
     outcome TEXT NOT NULL,
@@ -34,3 +37,6 @@ CREATE INDEX IF NOT EXISTS deletion_events_asset_idx
 
 CREATE INDEX IF NOT EXISTS deletion_events_work_idx
     ON deletion_events (work_id);
+
+-- deleted_date index is created in apply_ingestion_schema after the
+-- ADD COLUMN IF NOT EXISTS migration for databases created before that column.

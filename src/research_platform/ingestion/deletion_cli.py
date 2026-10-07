@@ -5,10 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from contextlib import contextmanager
 from datetime import date
-from io import BytesIO
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Iterator
 
 from research_platform.ingestion.deletion_pipeline import (
     PersistenceBackend,
@@ -17,24 +17,31 @@ from research_platform.ingestion.deletion_pipeline import (
 from research_platform.ingestion.errors import IngestionError
 from research_platform.sources.base import SourceAsset
 from research_platform.sources.openalex.deletion_metadata import (
+    DELETION_PUBLIC_URI,
     OpenAlexDeletionAssetMetadata,
 )
 
 
-class _LocalFileConnector:
+class LocalFileConnector:
+    """Caller-owned streamed binary fetch from a local path (no preload)."""
+
     def __init__(self, path: Path) -> None:
         self._path = path
 
-    def fetch(self, asset: SourceAsset) -> BinaryIO:
+    @contextmanager
+    def fetch(self, asset: SourceAsset) -> Iterator[BinaryIO]:
         del asset
-        return BytesIO(self._path.read_bytes())
+        with self._path.open("rb") as handle:
+            yield handle
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Apply one bounded OpenAlex deleted_ids.csv.gz file. "
-            "Choose --backend explicitly: memory is ephemeral; postgres is durable."
+            "Choose --backend explicitly: memory is ephemeral; postgres is durable. "
+            "Default local bounds remain <= 25 MB compressed; the public ledger is "
+            "much larger and is not ingested by this local runner."
         )
     )
     parser.add_argument("--config", type=Path, required=True)
@@ -51,11 +58,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--file-uri",
-        required=True,
-        help=(
-            "Logical source URI under "
-            "s3://openalex/data/csv/works-deletions/.../deleted_ids.csv.gz"
-        ),
+        default=DELETION_PUBLIC_URI,
+        help=f"Logical source URI (default: {DELETION_PUBLIC_URI})",
     )
     parser.add_argument("--snapshot-date", required=True, help="YYYY-MM-DD")
     parser.add_argument("--updated-date", default=None, help="YYYY-MM-DD if known")
@@ -95,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
             arguments.config,
             backend=backend,
             deletion_asset=asset,
-            connector=_LocalFileConnector(arguments.local_file),
+            connector=LocalFileConnector(arguments.local_file),
         )
     except (IngestionError, OSError, ValueError) as error:
         print(

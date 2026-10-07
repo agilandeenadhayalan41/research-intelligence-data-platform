@@ -50,3 +50,42 @@ def apply_ingestion_schema(connection: psycopg.Connection) -> None:
             CHECK (content_format IN ('jsonl', 'parquet', 'csv'))
             """
         )
+        # Harden DBs created before per-row deleted_date was required.
+        # Must run before any index that references deleted_date.
+        connection.execute(
+            """
+            ALTER TABLE deletion_events
+            ADD COLUMN IF NOT EXISTS deleted_date DATE
+            """
+        )
+        connection.execute(
+            """
+            UPDATE deletion_events
+            SET deleted_date = COALESCE(deleted_date, source_updated_date, DATE '1970-01-01')
+            WHERE deleted_date IS NULL
+            """
+        )
+        # Only enforce NOT NULL once every row has a value (fresh tables already do).
+        connection.execute(
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'deletion_events'
+                      AND column_name = 'deleted_date'
+                      AND is_nullable = 'YES'
+                ) THEN
+                    ALTER TABLE deletion_events
+                    ALTER COLUMN deleted_date SET NOT NULL;
+                END IF;
+            END $$
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS deletion_events_deleted_date_idx
+            ON deletion_events (deleted_date)
+            """
+        )

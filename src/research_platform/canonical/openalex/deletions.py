@@ -8,6 +8,11 @@ is deleted.
 References: if Work A references Work B and B is tombstoned, A's observed
 ``work_references`` row remains (source observation). Do not treat that as an
 orphan error.
+
+Precedence uses each deletion row's ``deleted_date`` (not a file-level date).
+For tombstoned Works, ``CanonicalLineage.source_updated_date`` carries that
+source ``deleted_date`` (calendar date only; no fabricated timestamp).
+``deleted_at`` remains the processing timestamp.
 """
 
 from __future__ import annotations
@@ -44,16 +49,20 @@ def tombstone_work(
     deletion_asset_id: str,
     source_checksum_sha256: str,
     run_id: UUID,
-    source_updated_date: date | None,
+    deleted_date: date,
     processed_at: datetime,
     deleted_at: datetime,
 ) -> Work:
-    """Return a Work copy with DELETED lineage; payload fields preserved."""
+    """Return a Work copy with DELETED lineage; payload fields preserved.
+
+    ``source_updated_date`` is set to the source ``deleted_date`` for
+    version precedence against later active ingestion.
+    """
     lineage = CanonicalLineage.model_validate(
         {
             "source_asset_id": deletion_asset_id,
             "source_checksum_sha256": source_checksum_sha256,
-            "source_updated_date": source_updated_date,
+            "source_updated_date": deleted_date,
             "run_id": run_id,
             "processed_at": processed_at,
             "activity_state": CanonicalActivityState.DELETED,
@@ -66,20 +75,34 @@ def tombstone_work(
 def classify_deletion(
     existing: Work | None,
     *,
-    deletion_updated_date: date | None,
+    deleted_date: date,
 ) -> DeletionOutcome:
-    """Decide the deletion outcome before mutating state."""
+    """Decide the deletion outcome before mutating state.
+
+    Rules (dates are calendar dates from source evidence):
+
+    - unknown Work → ``UNKNOWN_WORK``
+    - ACTIVE, deletion older than Work version → ``STALE`` (keep ACTIVE)
+    - ACTIVE, deletion equal/newer → ``DELETED``
+    - ACTIVE, Work version date missing → ``STALE`` (conservative; do not
+      destroy newer state when ordering cannot be proven)
+    - DELETED, older deletion → ``STALE``
+    - DELETED, equal/newer deletion → ``ALREADY_DELETED``
+    """
     if existing is None:
         return DeletionOutcome.UNKNOWN_WORK
+
+    existing_date = existing.lineage.source_updated_date
     if existing.lineage.activity_state is CanonicalActivityState.DELETED:
-        existing_date = existing.lineage.source_updated_date
-        if (
-            deletion_updated_date is not None
-            and existing_date is not None
-            and deletion_updated_date < existing_date
-        ):
+        if existing_date is not None and deleted_date < existing_date:
             return DeletionOutcome.STALE
         return DeletionOutcome.ALREADY_DELETED
+
+    # ACTIVE
+    if existing_date is None:
+        return DeletionOutcome.STALE
+    if deleted_date < existing_date:
+        return DeletionOutcome.STALE
     return DeletionOutcome.DELETED
 
 
