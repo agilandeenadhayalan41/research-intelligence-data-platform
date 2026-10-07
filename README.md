@@ -11,8 +11,8 @@ access, proprietary data, or cloud credentials are needed for the default tests.
 
 ## Current status
 
-**Steps 01–14 are complete.
-Step 15 / #22 (BigQuery analytical models) is next.
+**Steps 01–15 are complete through BigQuery analytical contracts.
+Step 16 / #55 (gold marts / materialized aggregates) is next.
 The full end-to-end / cloud pipeline is not implemented.**
 
 | Step | Delivered capability | Implementation boundary |
@@ -31,21 +31,23 @@ The full end-to-end / cloud pipeline is not implemented.**
 | 12 | One-file local Works ingestion | Manifest → claim → immutable land → stream decode/map/upsert/provenance inside one Postgres txn → SUCCESS; `--backend memory|postgres`; offline + Postgres tests ([#20](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/20)) |
 | 13 | OpenAlex Works deletions | Public `data/jsonl/works/deleted_ids.csv.gz` (`work_id,deleted_date`) → claim → stream tombstones with per-row precedence; no silent resurrection; offline + Postgres tests ([#21](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/21)) |
 | 14 | Query-pattern + benchmark registry | Typed OpenAlex workload registry, grains, fan-out risks, evidence-honest placements, FIXTURE_ONLY local harness; no BigQuery deploy ([#19](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/19)) |
+| 15 | BigQuery-first analytical contracts | BigQuery Standard SQL DDL/queries, grains, partition/cluster, MERGE/refresh, cost rules, DuckDB `SEMANTIC_ONLY` validation; no GCP deploy or paid queries ([#22](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/22)) |
 
 Constructing adapters or loading configuration does not connect to services.
 `LocalObjectStore` writes only under the configured local landing path. Default
 ingestion tests stay offline (fake connector + in-memory control/canonical).
 The GCS adapter remains a skeleton.
 
-**Still planned:** GCS landing, BigQuery analytical models, gold marts, data
-quality, consumer APIs, and orchestration. There is no implemented
-GCS/BigQuery deployment or production pipeline.
+**Still planned:** GCS landing, gold marts, data quality, consumer APIs, and
+orchestration. There is no implemented GCS/BigQuery deployment or production
+pipeline. Step 15 defines BigQuery contracts only.
 
 ### Next scoped work
 
-**Step 15 / [#22](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/22):**
-BigQuery-first analytical models, driven by the Step 14 registry in
-[query-pattern benchmarks](docs/architecture/query-pattern-benchmarks.md).
+**Step 16 / [#55](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/55):**
+Gold marts and justified materialized aggregates, driven by the Step 14 registry
+and Step 15 BigQuery contracts in
+[BigQuery analytical models](docs/architecture/bigquery-analytical-models.md).
 
 Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
@@ -289,6 +291,7 @@ tracked YAML or logs.
 | [GCP / BigQuery-first architecture](docs/architecture/gcp-bigquery-first.md) | Analytical strategy, cost safety, and optional operational storage |
 | [Query routing](docs/architecture/query-routing.md) | Capability routing decision model (pre-registry) |
 | [Query-pattern benchmarks](docs/architecture/query-pattern-benchmarks.md) | Step 14 registry fields, grains, fan-out, evidence, placement rules |
+| [BigQuery analytical models](docs/architecture/bigquery-analytical-models.md) | Step 15 BQ DDL/SQL contracts, partition/cluster, MERGE, SEMANTIC_ONLY limits |
 | [Public data sources](docs/architecture/public-data-sources.md) | Source priorities and source-specific normalization |
 | [OpenAlex contract](docs/architecture/openalex-manifest-contract.md) | Implemented metadata, parser, selector, connector, and public-access evidence |
 | [OpenAlex source profiling](docs/architecture/openalex-source-profiling.md) | Bounded profiler, evidence classes, verified representations, and format decision |
@@ -310,6 +313,7 @@ src\research_platform\
   control\                    Pipeline-control models, lifecycle, ControlStore protocol
   canonical\openalex\         Portable OpenAlex canonical models, schemas, mapping
   benchmarks\                 Query-pattern registry models, fan-out fixtures, FIXTURE_ONLY harness
+  analytics\bigquery\         Step 15 BigQuery table/query contracts + offline validation
   warehouse\                  Warehouse contract; DuckDB/BigQuery/PostgreSQL skeletons
   provenance\                 Immutable retrieval-provenance model
   ingestion\ quality\ serving\ Reserved runtime areas
@@ -317,6 +321,7 @@ tests\                        Offline unit/integration tests and synthetic fixtu
 docs\architecture\            Architecture, contracts, source strategy, roadmap
 sql\control\                  Versioned PostgreSQL control DDL specs (not auto-applied)
 sql\canonical\                Versioned PostgreSQL canonical DDL specs (not BigQuery)
+sql\bigquery\openalex\        BigQuery Standard SQL DDL, MERGE models, pattern queries (not deployed)
 scripts\ dags\                Reserved operational tools and later orchestration
 infrastructure\terraform\     Reserved infrastructure; no provisioned resources
 data\                         Ignored runtime-data locations; no committed datasets
