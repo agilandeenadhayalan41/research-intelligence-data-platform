@@ -8,14 +8,17 @@ import sys
 from pathlib import Path
 
 from research_platform.ingestion.errors import IngestionError
-from research_platform.ingestion.pipeline import run_openalex_works_local_ingest
+from research_platform.ingestion.pipeline import (
+    PersistenceBackend,
+    run_openalex_works_local_ingest,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Ingest at most one bounded OpenAlex Works JSONL.GZ file into local "
-            "immutable landing + in-memory control/canonical stores."
+            "Ingest at most one bounded OpenAlex Works JSONL.GZ file. "
+            "Choose --backend explicitly: memory is ephemeral; postgres is durable."
         )
     )
     parser.add_argument(
@@ -24,19 +27,51 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         help="Explicit platform config path (must select environment=local).",
     )
+    parser.add_argument(
+        "--backend",
+        choices=("memory", "postgres"),
+        required=True,
+        help=(
+            "Persistence backend. 'memory' is ephemeral (tests/demo only). "
+            "'postgres' uses local PostgreSQL behind the Step 10 write boundary."
+        ),
+    )
     arguments = parser.parse_args(argv)
+    backend: PersistenceBackend = arguments.backend
+    print(
+        json.dumps(
+            {
+                "persistence": backend,
+                "durable": backend == "postgres",
+                "note": (
+                    "ephemeral in-process stores; state is lost when the process exits"
+                    if backend == "memory"
+                    else "durable local PostgreSQL control/canonical write path"
+                ),
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
     try:
-        result = run_openalex_works_local_ingest(arguments.config)
+        result = run_openalex_works_local_ingest(arguments.config, backend=backend)
     except IngestionError as error:
         print(
             json.dumps(
-                {"ingest": "failed", "error": type(error).__name__, "message": str(error)},
+                {
+                    "ingest": "failed",
+                    "persistence": backend,
+                    "error": type(error).__name__,
+                    "message": str(error),
+                },
                 sort_keys=True,
             )
         )
         return 1
     payload: dict[str, object] = {
         "ingest": "ok",
+        "persistence": result.persistence_backend,
+        "durable": result.persistence_backend == "postgres",
         "run_id": str(result.run.run_id),
         "run_status": result.run.status.value,
         "skipped_reason": result.skipped_reason,

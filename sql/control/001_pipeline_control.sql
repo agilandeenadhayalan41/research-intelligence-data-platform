@@ -1,9 +1,10 @@
 -- Pipeline control schema specification (Step 10 / issue #18)
 --
 -- Target dialect: PostgreSQL 16+ (matches docker-compose local tooling).
--- This file is a versioned contract only. It is NOT executed by default tests,
--- CI, or package import. DuckDB or mock validation does NOT prove PostgreSQL
--- dialect compatibility.
+-- Versioned contract for review and for the optional local Step 12 durable
+-- ingestion path (PostgresControlStore / apply_ingestion_schema).
+-- Default offline tests and CI do NOT require applying this DDL.
+-- DuckDB or mock validation does NOT prove PostgreSQL dialect compatibility.
 --
 -- Logical tables:
 --   pipeline_runs      mutable run control

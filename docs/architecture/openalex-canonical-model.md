@@ -215,14 +215,16 @@ See `FIELD_CATALOG` in code. Highlights:
 ## Lineage integration with Step 10
 
 Canonical rows carry the same asset checksum / run identity concepts as
-`RecordProvenance` and immutable `IngestionProvenance`. Step 12 should:
+`RecordProvenance` and immutable `IngestionProvenance`. Step 12 local ingestion:
 
-1. land raw bytes + `IngestionProvenance`
+1. land raw bytes + `IngestionProvenance` (outside the DB transaction)
 2. map through `map_openalex_work`
-3. persist control success via `ControlStore`
-4. write `RecordProvenance` per canonical record id
+3. in one DB transaction: canonical upsert + `RecordProvenance` + source-file SUCCESS
+
+Durable writes use `PostgresCanonicalStore` when selected; they do not go through
+`Warehouse.query`. See [local Works ingestion](local-works-ingestion.md).
 
 ## Out of scope
 
-Ingestion (#20), deletion processor (#21), BigQuery runtime (#22), GCS (#9),
-Airflow, AACT/other sources, ML/KG. No BigQuery physical design in this step.
+Deletion processor (#21), BigQuery runtime (#22), GCS (#9), Airflow,
+AACT/other sources, ML/KG. No BigQuery physical design in this step.

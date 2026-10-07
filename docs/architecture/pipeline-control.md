@@ -163,18 +163,27 @@ DDL CHECK constraints mirror the important orderings; they do not encode the
 full transition table. Transactional `ControlStore` operations still own
 lifecycle correctness.
 
-Intended later ingestion boundary for one asset:
+Step 12 local ingestion boundary for one asset (durable PostgreSQL path):
 
 ```text
+register / claim_source_file          # atomic DB claim (FOR UPDATE)
+retrieve -> put_if_absent (ObjectStore)   # outside DB txn; immutable
+map all records from landed raw
 begin
-  claim_source_file
-  retrieve -> put_if_absent (ObjectStore) -> canonical publish
+  re-check claim token / lease
+  canonical upsert*
   record_provenance*
-  mark_source_file_success | mark_source_file_failed
+  mark_source_file_success
 commit
 ```
 
-`UnimplementedControlStore` is a fail-fast skeleton only.
+On failure after claim: DB ROLLBACK of the publish unit, then
+`mark_source_file_failed`. Raw ObjectStore bytes may remain; ObjectStore +
+PostgreSQL are **not** one distributed ACID transaction.
+
+`InMemoryControlStore` remains for offline tests. Durable local writes use
+`PostgresControlStore` (not `Warehouse.query`). `UnimplementedControlStore` is
+still the fail-fast skeleton when no adapter is selected.
 
 ## DDL / backend limitations
 

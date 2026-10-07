@@ -197,8 +197,9 @@ make build
 | Command | Purpose |
 | --- | --- |
 | `make install` | Install the package in editable mode with development dependencies |
-| `make test` | Run all default unit and local integration tests |
-| `make test-unit` | Run only unit tests |
+| `make test` | Run default offline unit/integration tests (`-m "not postgres"`) |
+| `make test-unit` | Run only unit tests (also excludes postgres) |
+| `make test-postgres-ingestion` | Separately invoked local PostgreSQL Step 12 transaction tests |
 | `make check` | Compile Python sources/tests and check installed dependency consistency |
 | `make build` | Build a wheel into the ignored `dist` directory without building dependency wheels |
 | `make postgres-up` / `make postgres-down` | Explicitly start/stop the optional local Compose service |
@@ -213,7 +214,8 @@ python -m pytest tests\unit\test_openalex_sample.py
 
 Default tests use tiny synthetic data, fake HTTP clients/sockets, and local
 DuckDB/PyArrow checks. They do not require cloud credentials, external services,
-or public-source downloads.
+or public-source downloads. Durable Step 12 PostgreSQL tests require
+`POSTGRES_DSN` and `make test-postgres-ingestion` (skipped when unavailable).
 
 The [Tests workflow](.github/workflows/tests.yml) runs install, check, test, and
 wheel packaging on pushes and pull requests, using Python 3.12 on `ubuntu-latest`

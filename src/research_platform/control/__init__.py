@@ -37,6 +37,7 @@ from research_platform.control.models import (
 from research_platform.control.reconciliation import (
     RegistrationOutcome,
     checksums_conflict,
+    declared_sizes_conflict,
     identity_fields_match,
     reconcile_registration,
 )
@@ -74,6 +75,7 @@ __all__ = [
     "assert_pipeline_run_transition",
     "assert_source_file_transition",
     "checksums_conflict",
+    "declared_sizes_conflict",
     "dumps_control_model",
     "identity_fields_match",
     "is_lease_expired",

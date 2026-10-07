@@ -8,12 +8,16 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import BinaryIO, Protocol
+from typing import TYPE_CHECKING, Any, BinaryIO, Literal, Protocol
 from uuid import UUID, uuid4
 
 from research_platform.canonical.memory import InMemoryCanonicalStore
 from research_platform.canonical.openalex import map_openalex_work
-from research_platform.canonical.openalex.models import CanonicalActivityState, CanonicalLineage
+from research_platform.canonical.openalex.models import (
+    CanonicalActivityState,
+    CanonicalLineage,
+    CanonicalWorkBundle,
+)
 from research_platform.canonical.store import (
     CanonicalConflictError,
     CanonicalStore,
@@ -25,6 +29,7 @@ from research_platform.control.errors import (
     ChecksumConflictError,
     ClaimConflictError,
     ControlError,
+    IdempotencyConflictError,
     StaleClaimError,
 )
 from research_platform.control.memory import InMemoryControlStore
@@ -38,6 +43,7 @@ from research_platform.control.models import (
 )
 from research_platform.control.reconciliation import RegistrationOutcome
 from research_platform.control.store import ControlStore
+from research_platform.ingestion.decode_limits import JsonlDecodeLimits
 from research_platform.ingestion.errors import (
     IngestionConfigError,
     IngestionDecodeError,
@@ -45,6 +51,7 @@ from research_platform.ingestion.errors import (
     IngestionFormatError,
 )
 from research_platform.ingestion.jsonl import iter_jsonl_gz_records
+from research_platform.persistence.memory_unit_of_work import publish_claimed_asset_memory
 from research_platform.provenance.models import IngestionProvenance
 from research_platform.sources.openalex.connector import OpenAlexConnector
 from research_platform.sources.openalex.metadata import OpenAlexAssetMetadata
@@ -53,9 +60,13 @@ from research_platform.storage.errors import ObjectConflictError, ObjectStoreErr
 from research_platform.storage.local import LocalObjectStore
 from research_platform.storage.openalex_layout import openalex_raw_object_key
 
+if TYPE_CHECKING:
+    import psycopg
+
 PIPELINE_NAME = "openalex-works-ingest"
 DEFAULT_LEASE = timedelta(minutes=15)
 DEFAULT_WORKER_ID = "local-worker"
+PersistenceBackend = Literal["memory", "postgres"]
 
 
 class _Discoverable(Protocol):
@@ -81,46 +92,73 @@ class LocalWorksIngestResult:
     source_file: SourceFileControl | None
     stats: FileIngestStats | None
     skipped_reason: str | None = None
+    persistence_backend: PersistenceBackend = "memory"
 
 
 def run_openalex_works_local_ingest(
     config_path: Path | str,
     *,
+    backend: PersistenceBackend = "memory",
     control_store: ControlStore | None = None,
     canonical_store: CanonicalStore | None = None,
     object_store: ObjectStore | None = None,
     connector: OpenAlexConnector | None = None,
+    postgres_connection: Any | None = None,
     worker_id: str = DEFAULT_WORKER_ID,
     lease_ttl: timedelta = DEFAULT_LEASE,
     now: Callable[[], datetime] | None = None,
     content_format: str = "jsonl",
+    decode_limits: JsonlDecodeLimits | None = None,
 ) -> LocalWorksIngestResult:
     """Run one bounded local Works ingestion against an explicitly selected config.
 
-    Requires ``environment=local`` and ``storage.backend=local``. Default sample
-    bounds remain ``MAX_FILES=1`` and ``max_file_size_bytes=25_000_000``.
+    Persistence:
 
-    Side-effect order for one file:
+    - ``backend="memory"``: ephemeral in-process stores (tests/demo only)
+    - ``backend="postgres"``: durable local PostgreSQL ControlStore/CanonicalStore
+      behind one asset publication transaction (not ``Warehouse.query``)
 
-    1. register DISCOVERED
-    2. transactional claim → PROCESSING
-    3. stream fetch → immutable raw land (``put_if_absent``)
-    4. stream decode landed JSONL.GZ → map → canonical upsert
-    5. record provenance per Work
-    6. mark SUCCESS (or FAILED)
+    After immutable raw landing, publication is:
 
-    Raw landing is immutable and may outlive a rolled-back/failed control
-    completion. Canonical + provenance + success share the control-store write
-    boundary after landing.
+    ``BEGIN → re-check claim → upsert canonical → provenance → SUCCESS → COMMIT``
+
+    Raw ObjectStore bytes are outside that DB transaction and may remain after rollback.
     """
     clock = now or (lambda: datetime.now(tz=UTC))
     config = load_config(Path(config_path))
     _require_local_config(config)
     if content_format != "jsonl":
         raise IngestionFormatError("Step 12 local ingestion supports jsonl only")
+    limits = decode_limits or JsonlDecodeLimits()
 
-    control = control_store or InMemoryControlStore()
-    canonical = canonical_store or InMemoryCanonicalStore()
+    owns_connection = False
+    connection: Any | None = None
+    if backend == "postgres":
+        from research_platform.persistence.postgres import (
+            PostgresCanonicalStore,
+            PostgresControlStore,
+            apply_ingestion_schema,
+            connect_postgres,
+            postgres_dsn_from_env,
+        )
+
+        if control_store is not None or canonical_store is not None:
+            raise IngestionConfigError(
+                "postgres backend manages its own ControlStore/CanonicalStore"
+            )
+        connection = postgres_connection
+        if connection is None:
+            connection = connect_postgres(
+                postgres_dsn_from_env(config.warehouse.postgres_dsn_env)
+            )
+            owns_connection = True
+            apply_ingestion_schema(connection)
+        control: ControlStore = PostgresControlStore(connection)
+        canonical: CanonicalStore = PostgresCanonicalStore(connection)
+    else:
+        control = control_store or InMemoryControlStore()
+        canonical = canonical_store or InMemoryCanonicalStore()
+
     objects = object_store or LocalObjectStore(config.storage)
     openalex = connector or OpenAlexConnector(
         sample_selection=config.sample_selection,
@@ -128,25 +166,60 @@ def run_openalex_works_local_ingest(
     )
 
     started = clock()
-    run = control.create_pipeline_run(
-        PipelineRun.model_validate(
-            {
-                "run_id": uuid4(),
-                "source": "openalex",
-                "pipeline_name": PIPELINE_NAME,
-                "status": PipelineRunStatus.PROCESSING,
-                "attempt": 1,
-                "started_at": started,
-                "created_at": started,
-                "updated_at": started,
-            }
-        )
-    )
-
     try:
-        selection = openalex.discover_metadata()
-        selected = tuple(getattr(selection, "selected", ()))
-        if not selected:
+        run = control.create_pipeline_run(
+            PipelineRun.model_validate(
+                {
+                    "run_id": uuid4(),
+                    "source": "openalex",
+                    "pipeline_name": PIPELINE_NAME,
+                    "status": PipelineRunStatus.PROCESSING,
+                    "attempt": 1,
+                    "started_at": started,
+                    "created_at": started,
+                    "updated_at": started,
+                }
+            )
+        )
+        try:
+            selection = openalex.discover_metadata()
+            selected = tuple(getattr(selection, "selected", ()))
+            if not selected:
+                finished = control.finish_pipeline_run(
+                    run.run_id,
+                    status=PipelineRunStatus.SUCCESS,
+                    completed_at=clock(),
+                )
+                return LocalWorksIngestResult(
+                    run=finished,
+                    source_file=None,
+                    stats=None,
+                    skipped_reason="NO_ELIGIBLE_FILE",
+                    persistence_backend=backend,
+                )
+            if len(selected) > config.sample_selection.max_files:
+                selected = selected[: config.sample_selection.max_files]
+            asset = selected[0]
+            if not isinstance(asset, OpenAlexAssetMetadata):
+                raise IngestionFormatError("selected asset must be OpenAlexAssetMetadata")
+            if asset.content_format != "jsonl":
+                raise IngestionFormatError("selected asset must be jsonl")
+
+            result = _ingest_one_asset(
+                asset=asset,
+                run=run,
+                config=config,
+                control=control,
+                canonical=canonical,
+                objects=objects,
+                connector=openalex,
+                worker_id=worker_id,
+                lease_ttl=lease_ttl,
+                clock=clock,
+                decode_limits=limits,
+                backend=backend,
+                postgres_connection=connection,
+            )
             finished = control.finish_pipeline_run(
                 run.run_id,
                 status=PipelineRunStatus.SUCCESS,
@@ -154,62 +227,36 @@ def run_openalex_works_local_ingest(
             )
             return LocalWorksIngestResult(
                 run=finished,
-                source_file=None,
-                stats=None,
-                skipped_reason="NO_ELIGIBLE_FILE",
+                source_file=result[0],
+                stats=result[1],
+                skipped_reason=result[2],
+                persistence_backend=backend,
             )
-        if len(selected) > config.sample_selection.max_files:
-            selected = selected[: config.sample_selection.max_files]
-        asset = selected[0]
-        if not isinstance(asset, OpenAlexAssetMetadata):
-            raise IngestionFormatError("selected asset must be OpenAlexAssetMetadata")
-        if asset.content_format != "jsonl":
-            raise IngestionFormatError("selected asset must be jsonl")
-
-        result = _ingest_one_asset(
-            asset=asset,
-            run=run,
-            config=config,
-            control=control,
-            canonical=canonical,
-            objects=objects,
-            connector=openalex,
-            worker_id=worker_id,
-            lease_ttl=lease_ttl,
-            clock=clock,
-        )
-        finished = control.finish_pipeline_run(
-            run.run_id,
-            status=PipelineRunStatus.SUCCESS,
-            completed_at=clock(),
-        )
-        return LocalWorksIngestResult(
-            run=finished,
-            source_file=result[0],
-            stats=result[1],
-            skipped_reason=result[2],
-        )
-    except Exception as error:
-        category, message = _classify_failure(error)
-        try:
-            control.finish_pipeline_run(
-                run.run_id,
-                status=PipelineRunStatus.FAILED,
-                completed_at=clock(),
-                failure_category=category,
-                failure_message=message,
-            )
-        except ControlError:
-            pass
-        if isinstance(
-            error,
-            IngestionError
-            | ControlError
-            | ObjectStoreError
-            | CanonicalConflictError,
-        ):
-            raise
-        raise IngestionError(message) from error
+        except Exception as error:
+            category, message = _classify_failure(error)
+            try:
+                control.finish_pipeline_run(
+                    run.run_id,
+                    status=PipelineRunStatus.FAILED,
+                    completed_at=clock(),
+                    failure_category=category,
+                    failure_message=message,
+                )
+            except ControlError:
+                pass
+            if isinstance(
+                error,
+                IngestionError
+                | ControlError
+                | ObjectStoreError
+                | CanonicalConflictError
+                | IdempotencyConflictError,
+            ):
+                raise
+            raise IngestionError(message) from error
+    finally:
+        if owns_connection and connection is not None:
+            connection.close()
 
 
 def _ingest_one_asset(
@@ -224,6 +271,9 @@ def _ingest_one_asset(
     worker_id: str,
     lease_ttl: timedelta,
     clock: Callable[[], datetime],
+    decode_limits: JsonlDecodeLimits,
+    backend: PersistenceBackend,
+    postgres_connection: Any | None,
 ) -> tuple[SourceFileControl, FileIngestStats | None, str | None]:
     discovered_at = clock()
     incoming = SourceFileControl.model_validate(
@@ -249,18 +299,14 @@ def _ingest_one_asset(
     if outcome is RegistrationOutcome.CHECKSUM_CONFLICT:
         raise ChecksumConflictError(
             "source checksum conflicts for an existing asset identity"
-        )  # surfaced to caller; run marked FAILED by outer handler
+        )
     if outcome is RegistrationOutcome.ALREADY_IN_PROGRESS:
-        # Attempt stale recovery; a still-valid claim remains a conflict.
         try:
             control.recover_stale_claim(asset.asset_id, now=clock())
         except ClaimConflictError:
-            raise ClaimConflictError("source file already claimed by another worker") from None
-        control_row = (
-            control.get_source_file(asset.asset_id)
-            if isinstance(control, InMemoryControlStore)
-            else control_row
-        )
+            raise ClaimConflictError(
+                "source file already claimed by another worker"
+            ) from None
 
     claim_token = uuid4()
     claimed_at = clock()
@@ -284,17 +330,17 @@ def _ingest_one_asset(
             max_bytes=config.sample_selection.max_file_size_bytes,
             clock=clock,
         )
-        stats = _canonicalize_landed(
+        processed_at = clock()
+        bundles, provenance_rows = _map_landed_records(
             asset=asset,
             run_id=run.run_id,
             checksum=checksum,
             objects=objects,
             raw_key=raw_key,
-            canonical=canonical,
-            control=control,
-            processed_at=clock(),
+            processed_at=processed_at,
+            decode_limits=decode_limits,
         )
-        provenance = IngestionProvenance.model_validate(
+        retrieval_provenance = IngestionProvenance.model_validate(
             {
                 "run_id": run.run_id,
                 "source": "openalex",
@@ -303,15 +349,36 @@ def _ingest_one_asset(
                 "sha256": checksum,
             }
         )
-        succeeded = control.mark_source_file_success(
-            asset.asset_id,
+        from research_platform.persistence.unit_of_work import AssetPublishRequest
+
+        publish_request = AssetPublishRequest(
+            asset_id=asset.asset_id,
             claim_token=claim_token,
-            processed_at=clock(),
+            now=clock(),
+            processed_at=processed_at,
             raw_object_key=raw_key,
             source_checksum_sha256=checksum,
-            retrieval_provenance=provenance,
+            retrieval_provenance=retrieval_provenance,
+            bundles=bundles,
+            provenance_rows=provenance_rows,
         )
-        return succeeded, stats, None
+        if backend == "postgres":
+            from research_platform.persistence.postgres import publish_claimed_asset
+
+            assert postgres_connection is not None
+            published = publish_claimed_asset(postgres_connection, publish_request)
+        else:
+            assert isinstance(control, InMemoryControlStore)
+            assert isinstance(canonical, InMemoryCanonicalStore)
+            published = publish_claimed_asset_memory(control, canonical, publish_request)
+
+        stats = _stats_from_outcomes(
+            asset_id=asset.asset_id,
+            outcomes=published.outcomes,
+            provenance_count=len(provenance_rows),
+            canonical=canonical,
+        )
+        return published.source_file, stats, None
     except Exception as error:
         category, message = _classify_failure(error)
         try:
@@ -324,13 +391,15 @@ def _ingest_one_asset(
             )
         except ControlError:
             failed = control_row
+        del failed
         if isinstance(
             error,
             IngestionError
             | ControlError
             | ObjectStoreError
             | CanonicalConflictError
-            | ChecksumConflictError,
+            | ChecksumConflictError
+            | IdempotencyConflictError,
         ):
             raise
         raise IngestionError(message) from error
@@ -378,25 +447,40 @@ def _land_raw(
         try:
             objects.put_if_absent(raw_key, tmp, provenance)
         except ObjectConflictError:
-            raise
+            # ObjectStore treats differing retrieval provenance (e.g. new run_id) as
+            # conflict even when bytes match. For FAILED→retry recovery, accept an
+            # already-landed immutable object whose content checksum matches.
+            if not _raw_checksum_matches(objects, raw_key, checksum):
+                raise
         return checksum, retrieved_at
 
 
-def _canonicalize_landed(
+def _raw_checksum_matches(objects: ObjectStore, raw_key: str, checksum: str) -> bool:
+    digest = hashlib.sha256()
+    with objects.open(raw_key) as handle:
+        while True:
+            chunk = handle.read(64 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest() == checksum
+
+
+def _map_landed_records(
     *,
     asset: OpenAlexAssetMetadata,
     run_id: UUID,
     checksum: str,
     objects: ObjectStore,
     raw_key: str,
-    canonical: CanonicalStore,
-    control: ControlStore,
     processed_at: datetime,
-) -> FileIngestStats:
-    inserted = identical = replaced = stale = 0
-    provenance_count = 0
+    decode_limits: JsonlDecodeLimits,
+) -> tuple[tuple[CanonicalWorkBundle, ...], tuple[RecordProvenance, ...]]:
+    """Decode/map the full asset before any canonical DB writes."""
+    bundles: list[CanonicalWorkBundle] = []
+    provenance_rows: list[RecordProvenance] = []
     with objects.open(raw_key) as handle:
-        for record in iter_jsonl_gz_records(handle):
+        for record in iter_jsonl_gz_records(handle, limits=decode_limits):
             lineage = CanonicalLineage.model_validate(
                 {
                     "source_asset_id": asset.asset_id,
@@ -408,16 +492,8 @@ def _canonicalize_landed(
                 }
             )
             bundle = map_openalex_work(record, lineage=lineage)
-            outcome = canonical.upsert_work_bundle(bundle)
-            if outcome is CanonicalUpsertOutcome.INSERTED:
-                inserted += 1
-            elif outcome is CanonicalUpsertOutcome.IDENTICAL:
-                identical += 1
-            elif outcome is CanonicalUpsertOutcome.REPLACED:
-                replaced += 1
-            elif outcome is CanonicalUpsertOutcome.STALE:
-                stale += 1
-            control.record_provenance(
+            bundles.append(bundle)
+            provenance_rows.append(
                 RecordProvenance.model_validate(
                     {
                         "record_id": bundle.work.work_id,
@@ -431,9 +507,22 @@ def _canonicalize_landed(
                     }
                 )
             )
-            provenance_count += 1
+    return tuple(bundles), tuple(provenance_rows)
+
+
+def _stats_from_outcomes(
+    *,
+    asset_id: str,
+    outcomes: tuple[CanonicalUpsertOutcome, ...],
+    provenance_count: int,
+    canonical: CanonicalStore,
+) -> FileIngestStats:
+    inserted = sum(1 for item in outcomes if item is CanonicalUpsertOutcome.INSERTED)
+    identical = sum(1 for item in outcomes if item is CanonicalUpsertOutcome.IDENTICAL)
+    replaced = sum(1 for item in outcomes if item is CanonicalUpsertOutcome.REPLACED)
+    stale = sum(1 for item in outcomes if item is CanonicalUpsertOutcome.STALE)
     return FileIngestStats(
-        asset_id=asset.asset_id,
+        asset_id=asset_id,
         works_inserted=inserted,
         works_identical=identical,
         works_replaced=replaced,
@@ -449,7 +538,9 @@ def _require_local_config(config: PlatformConfig) -> None:
     if config.storage.backend != "local":
         raise IngestionConfigError("local Works ingestion requires storage.backend=local")
     if config.sample_selection.max_files != 1:
-        raise IngestionConfigError("default local ingestion requires sample_selection.max_files=1")
+        raise IngestionConfigError(
+            "default local ingestion requires sample_selection.max_files=1"
+        )
     if config.sample_selection.max_file_size_bytes > 25_000_000:
         raise IngestionConfigError(
             "default local ingestion requires max_file_size_bytes <= 25000000"
@@ -461,6 +552,8 @@ def _classify_failure(error: BaseException) -> tuple[FailureCategory, str]:
         return FailureCategory.CHECKSUM, "source checksum or landing conflict"
     if isinstance(error, ClaimConflictError | StaleClaimError):
         return FailureCategory.CLAIM, "claim conflict"
+    if isinstance(error, IdempotencyConflictError):
+        return FailureCategory.VALIDATION, "source identity metadata conflict"
     if isinstance(error, CanonicalConflictError):
         return FailureCategory.CANONICAL, "canonical version or entity conflict"
     if isinstance(error, IngestionDecodeError):

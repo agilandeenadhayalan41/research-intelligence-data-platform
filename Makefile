@@ -1,15 +1,19 @@
 PYTHON ?= python
 
-.PHONY: install test test-unit check build postgres-up postgres-down
+.PHONY: install test test-unit test-postgres-ingestion check build postgres-up postgres-down
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"
 
 test:
-	$(PYTHON) -m pytest
+	$(PYTHON) -m pytest -m "not postgres"
 
 test-unit:
-	$(PYTHON) -m pytest tests/unit
+	$(PYTHON) -m pytest tests/unit -m "not postgres"
+
+test-postgres-ingestion:
+	$(PYTHON) -m pip install -e ".[dev,postgres]"
+	$(PYTHON) -m pytest tests/integration/test_postgres_ingestion.py -m postgres
 
 check:
 	$(PYTHON) -m compileall -q src tests
