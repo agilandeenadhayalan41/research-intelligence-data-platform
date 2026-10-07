@@ -48,21 +48,23 @@ def test_warehouse_skeletons_do_not_execute_queries(local_config: PlatformConfig
             adapter.query("SELECT :value", {"value": 1})
 
 
-def test_storage_skeletons_do_not_read_or_write(
+def test_gcs_skeleton_does_not_read_or_write(
     local_config: PlatformConfig, provenance: IngestionProvenance
 ) -> None:
-    adapters = [
-        LocalObjectStore(local_config.storage),
-        GCSObjectStore(local_config.storage, local_config.cloud),
-    ]
-    for adapter in adapters:
-        assert isinstance(adapter, ObjectStore)
-        with pytest.raises(NotImplementedError, match="later phase"):
-            adapter.put_if_absent("synthetic/empty", BytesIO(b""), provenance)
-        with pytest.raises(NotImplementedError, match="later phase"):
-            adapter.open("synthetic/empty")
+    adapter = GCSObjectStore(local_config.storage, local_config.cloud)
+    assert isinstance(adapter, ObjectStore)
+    with pytest.raises(NotImplementedError, match="later phase"):
+        adapter.put_if_absent("synthetic/empty/source.bin", BytesIO(b""), provenance)
+    with pytest.raises(NotImplementedError, match="later phase"):
+        adapter.open("synthetic/empty/source.bin")
+
+
+def test_local_object_store_is_concrete(local_config: PlatformConfig) -> None:
+    assert isinstance(LocalObjectStore(local_config.storage), ObjectStore)
 
 
 def test_landing_requires_provenance(local_config: PlatformConfig) -> None:
     with pytest.raises(TypeError, match="provenance"):
-        LocalObjectStore(local_config.storage).put_if_absent("synthetic/empty", BytesIO(b""))
+        LocalObjectStore(local_config.storage).put_if_absent(
+            "synthetic/empty/source.bin", BytesIO(b"")
+        )

@@ -11,47 +11,44 @@ access, proprietary data, or cloud credentials are needed for the default tests.
 
 ## Current status
 
-This overview reflects the completed OpenAlex connector in
-[PR #32](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/32)
-and the documentation-only architecture refresh in
-[PR #34](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/34).
-**Steps 01-07 are complete, and Step 08 adds bounded source profiling. The full
+**Steps 01-08 are complete, and Step 09 adds immutable local raw landing. The full
 data pipeline is not implemented.**
 
 | Step | Delivered capability | Implementation boundary |
 | --- | --- | --- |
 | 01 | Repository foundation | Python packaging, typed interfaces, structured logging, tests, CI, and optional local PostgreSQL tooling |
 | 02 | Configuration framework | Validated YAML, environment substitution, explicit environment selection, and strict sample limits |
-| 03 | Storage contracts | `ObjectStore` and immutable-write semantics; local/GCS implementations remain skeletons |
+| 03 | Storage contracts | `ObjectStore` and immutable-write semantics; GCS remains a skeleton |
 | 04 | Warehouse contracts | Parameterized query/PyArrow interface; DuckDB, BigQuery, and PostgreSQL adapters remain skeletons |
 | 05 | Bounded OpenAlex connector | Anonymous manifest discovery and separate caller-owned streaming retrieval |
 | 06 | Works manifest parser | Pure parsing, validated metadata, stable identities, and duplicate/conflict handling |
 | 07 | Development sample selector | Deterministic, metadata-only selection with file-count and byte-size bounds |
 | 08 | Bounded source profiling | One-file JSONL/JSONL.GZ streaming sample and footer-first Parquet profile with evidence-classified reports; live payload profile pending public network access |
+| 09 | Immutable local raw landing | `LocalObjectStore` with atomic content/provenance publish, OpenAlex raw key layout, replay/conflict, and offline contract tests |
 
-The OpenAlex connector is the only implemented runtime network adapter.
 Constructing adapters or loading configuration does not connect to services.
-The existing provenance model is not a pipeline control database or an ingestion
+`LocalObjectStore` writes only under the configured local landing path. The GCS
+adapter and provenance model are not a pipeline control database or an ingestion
 implementation.
 
-**Still planned:** immutable landing, pipeline
-control, canonical modeling, ingestion, change/deletion processing, analytical
-models, gold marts, data quality, consumer APIs, and orchestration. There is no
-implemented GCS/BigQuery deployment or production pipeline.
+**Still planned:** GCS landing, pipeline control, canonical modeling, ingestion,
+change/deletion processing, analytical models, gold marts, data quality, consumer
+APIs, and orchestration. There is no implemented GCS/BigQuery deployment or
+production pipeline.
 
 ### Next scoped work
 
-**Step 08: source-format and bounded sample profiling** has an implementation,
-tracked by [issue #16](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/16).
-Its [resource limits and evidence](docs/architecture/openalex-source-profiling.md)
-distinguish offline synthetic coverage from the still-pending real payload
-inspection. JSONL is never relabeled as Parquet.
+**Step 09: immutable local raw landing** is delivered for
+[issue #17](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/17).
+See [immutable local landing](docs/architecture/immutable-local-landing.md) for
+key layout, atomic publication, replay/conflict, and checksum rules. Raw landing
+preserves original OpenAlex bytes (`.gz` or `.parquet`); it does not convert
+JSONL.GZ to Parquet.
 
-**Step 09: immutable landing remains planned and requires a separate assignment.**
-Before assigning another implementation, synchronize the GitHub backlog with the
-merged [roadmap](docs/architecture/roadmap.md). Historical issue scopes and native
-dependencies still need alignment; this README does not perform that refresh.
-Keep [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
+**Step 10: pipeline control and provenance**
+([issue #18](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/18))
+is next and requires a separate assignment. Keep
+[issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
 as the open umbrella roadmap. Assign one scoped issue at a time and stop after
 its reviewable PR; do not reopen completed work or automatically start later steps.
 
@@ -121,6 +118,9 @@ canonicalize records, load a warehouse, or run a pipeline.
 | `OpenAlexConnector.discover_metadata()` | Returns the bounded selection with validated metadata; `discover()` delegates to it |
 | `OpenAlexConnector.fetch()` | Returns a caller-owned binary stream with actual-byte enforcement and explicit failures |
 | `profiling.profile_openalex_asset()` | Checks metadata, retrieves one bounded file, and returns an evidence-classified JSONL or Parquet profile |
+| `openalex_raw_object_key()` | Builds a deterministic local raw content key from validated OpenAlex metadata |
+| `LocalObjectStore.put_if_absent()` | Streams bytes, verifies SHA-256, and atomically publishes content + provenance |
+| `LocalObjectStore.open()` | Returns a caller-owned read-only stream for a committed object |
 
 The selector defaults are exactly `max_files=1` and
 `max_file_size_bytes=25_000_000` (decimal bytes). Invalid limits are rejected, never
@@ -297,7 +297,7 @@ src\research_platform\
   common\                     Structured JSON logging
   config\                     Validated models and explicit YAML loading
   sources\openalex\            Metadata, parser, selector, connector, profiler, connectivity/profile CLIs
-  storage\                    ObjectStore contract; local/GCS skeletons
+  storage\                    ObjectStore contract; LocalObjectStore; GCS skeleton
   warehouse\                  Warehouse contract; DuckDB/BigQuery/PostgreSQL skeletons
   provenance\                 Retrieval-provenance model
   ingestion\ quality\ serving\ Reserved runtime areas
