@@ -61,16 +61,33 @@ stateDiagram-v2
 | PROCESSING → FAILED | `fail` | unchanged |
 | FAILED → PROCESSING | `retry` | `attempt_count + 1` |
 
+Pipeline-run attempts:
+
+| Transition | Helper / event | `attempt` |
+| --- | --- | --- |
+| PENDING → PROCESSING | `apply_pipeline_run_start` / `start` | unchanged (normally `1`) |
+| PROCESSING → SUCCESS\|FAILED | `apply_pipeline_run_finish` | unchanged |
+| FAILED → PROCESSING | `apply_pipeline_run_retry` / `retry` | `attempt + 1` |
+
+Ordinary start must not silently retry a FAILED run. `SUCCESS` remains terminal.
+
 Illegal examples (rejected by contract helpers):
 
 - DISCOVERED → SUCCESS
 - SUCCESS → PROCESSING / FAILED
 - FAILED → PROCESSING without the explicit `retry` event
+- FAILED → `apply_pipeline_run_start` (must use `apply_pipeline_run_retry`)
+- SUCCESS → retry
+- PENDING → retry
 
 `SUCCESS` is terminal. Status field edits alone must never imply successful
 canonical publication; `ControlStore.mark_source_file_success` requires the
 current claim token and is intended to run inside the ingestion transaction
 boundary after durable side effects.
+
+Lifecycle helpers rebuild results through `model_validate(...)` so every returned
+model satisfies the same field/model validators as direct construction.
+`model_copy(update=...)` is not used for unvalidated transitions.
 
 ## Claim / lease sequence
 
@@ -129,12 +146,22 @@ OpenAlexAssetMetadata.asset_id
 
 `Warehouse.query()` stays read-only. Control writes use `ControlStore`:
 
-- `create_pipeline_run` / `finish_pipeline_run`
+- `create_pipeline_run` / `finish_pipeline_run` / `retry_pipeline_run`
 - `register_source_file`
 - `claim_source_file`
 - `mark_source_file_success` / `mark_source_file_failed`
 - `recover_stale_claim`
 - `record_provenance`
+
+Temporal invariants (when timestamps are present):
+
+- `PipelineRun`: `created_at <= started_at <= completed_at <= updated_at`
+- `SourceFileControl`: `created_at <= claimed_at < lease_expires_at` and
+  `created_at <= processed_at <= updated_at`
+
+DDL CHECK constraints mirror the important orderings; they do not encode the
+full transition table. Transactional `ControlStore` operations still own
+lifecycle correctness.
 
 Intended later ingestion boundary for one asset:
 

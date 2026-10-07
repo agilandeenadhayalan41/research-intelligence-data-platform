@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from research_platform.control.errors import (
@@ -20,7 +20,7 @@ from research_platform.control.models import (
 )
 
 SourceFileEvent = Literal["claim", "success", "fail", "retry"]
-PipelineRunEvent = Literal["start", "succeed", "fail"]
+PipelineRunEvent = Literal["start", "retry", "succeed", "fail"]
 
 SOURCE_FILE_TRANSITIONS: dict[ControlStatus, frozenset[ControlStatus]] = {
     ControlStatus.DISCOVERED: frozenset({ControlStatus.PROCESSING}),
@@ -44,6 +44,34 @@ EVENT_TARGET_STATUS: dict[SourceFileEvent, ControlStatus] = {
     "fail": ControlStatus.FAILED,
     "retry": ControlStatus.PROCESSING,
 }
+
+PIPELINE_RUN_EVENT_TARGET: dict[PipelineRunEvent, PipelineRunStatus] = {
+    "start": PipelineRunStatus.PROCESSING,
+    "retry": PipelineRunStatus.PROCESSING,
+    "succeed": PipelineRunStatus.SUCCESS,
+    "fail": PipelineRunStatus.FAILED,
+}
+
+
+def _rebuild_source_file(
+    control: SourceFileControl, updates: dict[str, Any]
+) -> SourceFileControl:
+    """Return a fully validated SourceFileControl after applying updates.
+
+    ``model_copy(update=...)`` skips field/model validators in Pydantic v2; this
+    rebuilds through ``model_validate`` so lifecycle helpers cannot emit states
+    that direct construction would reject.
+    """
+    payload = control.model_dump(mode="python")
+    payload.update(updates)
+    return SourceFileControl.model_validate(payload)
+
+
+def _rebuild_pipeline_run(run: PipelineRun, updates: dict[str, Any]) -> PipelineRun:
+    """Return a fully validated PipelineRun after applying updates."""
+    payload = run.model_dump(mode="python")
+    payload.update(updates)
+    return PipelineRun.model_validate(payload)
 
 
 def assert_source_file_transition(
@@ -126,8 +154,9 @@ def apply_source_file_claim(
     target = ControlStatus.PROCESSING
     assert_source_file_transition(control.status, target, event=event)
     attempt_count = next_attempt_count(control, event=event)
-    return control.model_copy(
-        update={
+    return _rebuild_source_file(
+        control,
+        {
             "run_id": run_id,
             "status": target,
             "attempt_count": attempt_count,
@@ -139,7 +168,7 @@ def apply_source_file_claim(
             "failure_category": None,
             "failure_message": None,
             "updated_at": updated_at,
-        }
+        },
     )
 
 
@@ -158,8 +187,9 @@ def apply_source_file_success(
     assert_source_file_transition(
         control.status, ControlStatus.SUCCESS, event="success"
     )
-    return control.model_copy(
-        update={
+    return _rebuild_source_file(
+        control,
+        {
             "status": ControlStatus.SUCCESS,
             "attempt_count": next_attempt_count(control, event="success"),
             "claimed_by": None,
@@ -172,7 +202,7 @@ def apply_source_file_success(
             "failure_category": None,
             "failure_message": None,
             "updated_at": updated_at,
-        }
+        },
     )
 
 
@@ -192,8 +222,9 @@ def apply_source_file_failure(
         control, claim_token=claim_token, now=now, allow_expired=allow_expired
     )
     assert_source_file_transition(control.status, ControlStatus.FAILED, event="fail")
-    return control.model_copy(
-        update={
+    return _rebuild_source_file(
+        control,
+        {
             "status": ControlStatus.FAILED,
             "attempt_count": next_attempt_count(control, event="fail"),
             "claimed_by": None,
@@ -204,7 +235,7 @@ def apply_source_file_failure(
             "failure_category": failure_category,
             "failure_message": failure_message,
             "updated_at": updated_at,
-        }
+        },
     )
 
 
@@ -239,8 +270,21 @@ def apply_stale_claim_recovery(
 
 
 def assert_pipeline_run_transition(
-    current: PipelineRunStatus, target: PipelineRunStatus
+    current: PipelineRunStatus,
+    target: PipelineRunStatus,
+    *,
+    event: PipelineRunEvent,
 ) -> None:
+    """Reject illegal pipeline-run transitions for an explicit event."""
+    expected = PIPELINE_RUN_EVENT_TARGET[event]
+    if target is not expected:
+        raise IllegalTransitionError(
+            f"event {event!r} must target {expected.value}, not {target.value}"
+        )
+    if event == "start" and current is not PipelineRunStatus.PENDING:
+        raise IllegalTransitionError("start requires PENDING status")
+    if event == "retry" and current is not PipelineRunStatus.FAILED:
+        raise IllegalTransitionError("retry requires FAILED status")
     if target not in PIPELINE_RUN_TRANSITIONS[current]:
         raise IllegalTransitionError(
             f"illegal pipeline-run transition {current.value} -> {target.value}"
@@ -250,16 +294,41 @@ def assert_pipeline_run_transition(
 def apply_pipeline_run_start(
     run: PipelineRun, *, started_at: datetime, updated_at: datetime
 ) -> PipelineRun:
-    assert_pipeline_run_transition(run.status, PipelineRunStatus.PROCESSING)
-    return run.model_copy(
-        update={
+    """PENDING -> PROCESSING. Keeps ``attempt`` unchanged (normally 1)."""
+    assert_pipeline_run_transition(
+        run.status, PipelineRunStatus.PROCESSING, event="start"
+    )
+    return _rebuild_pipeline_run(
+        run,
+        {
             "status": PipelineRunStatus.PROCESSING,
             "started_at": started_at,
             "completed_at": None,
             "failure_category": None,
             "failure_message": None,
             "updated_at": updated_at,
-        }
+        },
+    )
+
+
+def apply_pipeline_run_retry(
+    run: PipelineRun, *, started_at: datetime, updated_at: datetime
+) -> PipelineRun:
+    """FAILED -> PROCESSING via explicit retry; increments ``attempt`` by 1."""
+    assert_pipeline_run_transition(
+        run.status, PipelineRunStatus.PROCESSING, event="retry"
+    )
+    return _rebuild_pipeline_run(
+        run,
+        {
+            "status": PipelineRunStatus.PROCESSING,
+            "attempt": run.attempt + 1,
+            "started_at": started_at,
+            "completed_at": None,
+            "failure_category": None,
+            "failure_message": None,
+            "updated_at": updated_at,
+        },
     )
 
 
@@ -272,23 +341,28 @@ def apply_pipeline_run_finish(
     failure_category: FailureCategory | None = None,
     failure_message: str | None = None,
 ) -> PipelineRun:
-    assert_pipeline_run_transition(run.status, status)
+    event: PipelineRunEvent = (
+        "succeed" if status is PipelineRunStatus.SUCCESS else "fail"
+    )
+    assert_pipeline_run_transition(run.status, status, event=event)
     if status is PipelineRunStatus.SUCCESS:
-        return run.model_copy(
-            update={
+        return _rebuild_pipeline_run(
+            run,
+            {
                 "status": status,
                 "completed_at": completed_at,
                 "failure_category": None,
                 "failure_message": None,
                 "updated_at": updated_at,
-            }
+            },
         )
-    return run.model_copy(
-        update={
+    return _rebuild_pipeline_run(
+        run,
+        {
             "status": status,
             "completed_at": completed_at,
             "failure_category": failure_category,
             "failure_message": failure_message,
             "updated_at": updated_at,
-        }
+        },
     )

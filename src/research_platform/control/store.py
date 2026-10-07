@@ -62,6 +62,19 @@ class ControlStore(ABC):
         raise NotImplementedError("ControlStore persistence is deferred to a later phase")
 
     @abstractmethod
+    def retry_pipeline_run(
+        self,
+        run_id: UUID,
+        *,
+        started_at: datetime,
+    ) -> PipelineRun:
+        """Explicit FAILED -> PROCESSING retry; increments ``attempt`` by exactly 1.
+
+        Ordinary ``create``/start must not silently retry a FAILED run.
+        """
+        raise NotImplementedError("ControlStore persistence is deferred to a later phase")
+
+    @abstractmethod
     def register_source_file(
         self, control: SourceFileControl
     ) -> tuple[SourceFileControl, RegistrationOutcome]:
@@ -155,6 +168,14 @@ class UnimplementedControlStore(ControlStore):
         completed_at: datetime,
         failure_category: FailureCategory | None = None,
         failure_message: str | None = None,
+    ) -> PipelineRun:
+        raise NotImplementedError("ControlStore persistence is deferred to a later phase")
+
+    def retry_pipeline_run(
+        self,
+        run_id: UUID,
+        *,
+        started_at: datetime,
     ) -> PipelineRun:
         raise NotImplementedError("ControlStore persistence is deferred to a later phase")
 

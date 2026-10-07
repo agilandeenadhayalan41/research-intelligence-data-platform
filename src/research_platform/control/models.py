@@ -73,15 +73,21 @@ class PipelineRun(SettingsModel):
 
     @model_validator(mode="after")
     def validate_run_lifecycle(self) -> Self:
+        # created_at <= started_at <= completed_at <= updated_at (when present)
         if self.updated_at < self.created_at:
             raise ValueError("updated_at must not precede created_at")
-        if self.started_at is not None and self.started_at < self.created_at:
-            raise ValueError("started_at must not precede created_at")
+        if self.started_at is not None:
+            if self.started_at < self.created_at:
+                raise ValueError("started_at must not precede created_at")
+            if self.updated_at < self.started_at:
+                raise ValueError("updated_at must not precede started_at")
         if self.completed_at is not None:
             if self.started_at is None:
                 raise ValueError("completed_at requires started_at")
             if self.completed_at < self.started_at:
                 raise ValueError("completed_at must not precede started_at")
+            if self.updated_at < self.completed_at:
+                raise ValueError("updated_at must not precede completed_at")
 
         if self.status is PipelineRunStatus.PENDING:
             if self.started_at is not None or self.completed_at is not None:
@@ -159,6 +165,22 @@ class SourceFileControl(SettingsModel):
             return parsed
         return value
 
+    @field_validator("raw_object_key")
+    @classmethod
+    def validate_raw_object_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if value != value.strip() or value.endswith("/"):
+            raise ValueError("raw_object_key must be a normalized relative path")
+        if value.startswith("/") or value.startswith("\\") or "\\" in value:
+            raise ValueError("raw_object_key must be a relative POSIX path")
+        if "\x00" in value or any(character.isspace() for character in value):
+            raise ValueError("raw_object_key contains unsafe characters")
+        parts = value.split("/")
+        if len(parts) < 2 or any(part in {"", ".", ".."} for part in parts):
+            raise ValueError("raw_object_key must be a nested relative path")
+        return value
+
     @model_validator(mode="after")
     def validate_control_state(self) -> Self:
         if self.updated_at < self.created_at:
@@ -180,9 +202,21 @@ class SourceFileControl(SettingsModel):
         claim_set = [field is not None for field in claim_fields]
         if any(claim_set) and not all(claim_set):
             raise ValueError("claim fields must be set together")
+        if self.claimed_at is not None:
+            if self.claimed_at < self.created_at:
+                raise ValueError("claimed_at must not precede created_at")
+            if self.updated_at < self.claimed_at:
+                raise ValueError("updated_at must not precede claimed_at")
         if self.claimed_at is not None and self.lease_expires_at is not None:
             if self.lease_expires_at <= self.claimed_at:
                 raise ValueError("lease_expires_at must be after claimed_at")
+        if self.processed_at is not None:
+            if self.processed_at < self.created_at:
+                raise ValueError("processed_at must not precede created_at")
+            if self.updated_at < self.processed_at:
+                raise ValueError("updated_at must not precede processed_at")
+            if self.claimed_at is not None and self.processed_at < self.claimed_at:
+                raise ValueError("processed_at must not precede claimed_at")
 
         if self.status is ControlStatus.DISCOVERED:
             if any(claim_set):
