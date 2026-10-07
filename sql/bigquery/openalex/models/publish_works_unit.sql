@@ -17,8 +17,10 @@
 --
 -- Note: BigQuery scripting/TEMP TABLE variants are equivalent if they freeze
 -- the same pre-MERGE snapshot. Persistent staging tables are shown here so
--- contracts remain file-addressable. This unit does not claim one global
--- ACID commit across every canonical table beyond the scripted order.
+-- contracts remain file-addressable. Concurrent jobs need run-scoped tables,
+-- TEMP tables, or single-writer orchestration (Step 20) — not a Step 15 reopen.
+-- This unit does not claim one global ACID commit across every canonical table
+-- beyond the scripted order.
 
 -- Step 1–3: materialize frozen decision sets (see sibling .sql files).
 --   RUN: work_publication_decisions.sql

@@ -34,7 +34,7 @@ later steps remain planned.
 | 17 | Add data quality gates for non-null/unique canonical IDs, valid relationships, deleted-record exclusion, and reconciliation; measure DOI/title/topic gaps, authorless works, publication-year/type distributions, and reference reconciliation. |
 | 18 | Define storage-independent Data Service/API capabilities for metadata lookup and journal/publisher analytics. Add optional PostgreSQL/AlloyDB only if benchmarks show BigQuery plus cache/API is insufficient. |
 | 19 | Deliver a bounded end-to-end pipeline: discover → ingest → validate → canonicalize → apply deletions → build analytical models → quality gate → publish marts/views → final validation. Default `MAX_FILES=1`. |
-| 20 | After Step 19 works, evaluate local Airflow and future Composer compatibility, CI/CD, Dataform alignment, retries, scheduling, and monitoring. Keep business logic out of DAGs. |
+| 20 | After Step 19 works, evaluate local Airflow and future Composer compatibility, CI/CD, Dataform alignment, retries, scheduling, and monitoring. Keep business logic out of DAGs. Include run-scoped analytical publication decision tables (or TEMP tables / single-writer orchestration) so concurrent jobs do not clash on shared `work_publication_decisions` / `accepted_work_ids` / `relationship_publish_work_ids` (Step 15 contracts use shared names for file addressability only). |
 | 21 | Prepare sandbox/dev/QA/prod readiness documentation for IAM, workload identity, secrets, monitoring, recovery, cost controls, deployment, rollback, lineage, and governance. Do not automatically deploy production. |
 
 ## Source extension
