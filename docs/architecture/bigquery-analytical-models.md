@@ -168,6 +168,12 @@ Recalculating decisions after `merge_works` would turn `APPLY_UPDATE` into
 Offline helpers: `decide_analytical_works_merge`,
 `is_accepted_publication_decision`, `is_relationship_refresh_eligible`.
 
+**Future deployment (Step 20 — not blocking Step 16):** the contracts show
+shared persistent table names for file addressability. Concurrent publication
+jobs will need run-scoped names, BigQuery `TEMP` tables, or single-writer
+orchestration so one job cannot overwrite another’s frozen decision set. That
+is orchestration/deployment work, not a Step 15 reopen.
+
 ### Works MERGE precedence
 
 | Case | Decision |
