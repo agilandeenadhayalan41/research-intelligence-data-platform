@@ -23,6 +23,8 @@ def iter_jsonl_gz_records(
 
     Enforces finite ``max_decompressed_bytes``, ``max_records``, and
     ``max_record_bytes``. Does not materialize the full decompressed payload.
+    A stream whose decompressed length equals ``max_decompressed_bytes`` exactly
+    is accepted; ``max_decompressed_bytes + 1`` is rejected.
     The caller owns ``stream``.
     """
     bounds = limits or JsonlDecodeLimits()
@@ -31,11 +33,11 @@ def iter_jsonl_gz_records(
     try:
         with gzip.GzipFile(fileobj=stream, mode="rb") as reader:
             while True:
+                remaining = bounds.max_decompressed_bytes - decoded_total
                 line, consumed = _read_bounded_line(
                     reader,
                     max_record_bytes=bounds.max_record_bytes,
-                    max_decompressed_remaining=bounds.max_decompressed_bytes
-                    - decoded_total,
+                    max_decompressed_remaining=remaining,
                 )
                 if consumed == 0:
                     break
@@ -79,20 +81,29 @@ def _read_bounded_line(
     max_record_bytes: int,
     max_decompressed_remaining: int,
 ) -> tuple[bytes, int]:
-    """Read one newline-terminated record with chunked accumulation."""
-    if max_decompressed_remaining <= 0:
+    """Read one newline-terminated record with chunked accumulation.
+
+    When the decompressed budget is already exhausted (remaining == 0), probe for
+    EOF before raising a size-limit error so exact-boundary streams succeed.
+    """
+    if max_decompressed_remaining < 0:
         raise IngestionDecodeError("JSONL stream exceeds max_decompressed_bytes")
+    if max_decompressed_remaining == 0:
+        probe = reader.read(1)
+        if not probe:
+            return b"", 0
+        raise IngestionDecodeError("JSONL stream exceeds max_decompressed_bytes")
+
     parts: list[bytes] = []
     total = 0
     while True:
         remaining_record = max_record_bytes - total
         remaining_stream = max_decompressed_remaining - total
-        if remaining_record <= 0 or remaining_stream <= 0:
-            raise IngestionDecodeError(
-                "JSONL record exceeds max_record_bytes"
-                if remaining_record <= 0
-                else "JSONL stream exceeds max_decompressed_bytes"
-            )
+        if remaining_record <= 0:
+            raise IngestionDecodeError("JSONL record exceeds max_record_bytes")
+        if remaining_stream <= 0:
+            # Exact record end already consumed the budget; stop without error.
+            break
         to_read = min(_CHUNK, remaining_record + 1, remaining_stream + 1)
         chunk = reader.readline(to_read)
         if not chunk:

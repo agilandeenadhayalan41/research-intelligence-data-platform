@@ -1,4 +1,4 @@
-"""One-asset publication transaction: claim check + canonical + provenance + SUCCESS."""
+"""One-asset publication transaction: claim check + streamed canonical + SUCCESS."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from research_platform.persistence.postgres.row_codec import source_file_from_ro
 from research_platform.persistence.unit_of_work import (
     AssetPublishRequest,
     AssetPublishResult,
+    PublishCounters,
 )
 
 __all__ = ["AssetPublishRequest", "AssetPublishResult", "publish_claimed_asset"]
@@ -23,10 +24,11 @@ __all__ = ["AssetPublishRequest", "AssetPublishResult", "publish_claimed_asset"]
 def publish_claimed_asset(
     connection: psycopg.Connection, request: AssetPublishRequest
 ) -> AssetPublishResult:
-    """Commit canonical rows, provenance, and SUCCESS in one PostgreSQL transaction.
+    """Stream canonical rows, provenance, and SUCCESS in one PostgreSQL transaction.
 
-    Raw ObjectStore landing is intentionally outside this transaction. On failure the
-    database rolls back; immutable raw bytes may remain for explicit retry.
+    Raw ObjectStore landing is intentionally outside this transaction. Records are
+    decoded/mapped/persisted incrementally; the whole file's mapped output is not
+    retained. On failure the database rolls back; immutable raw bytes may remain.
     """
     # retrieval_provenance is ObjectStore sidecar metadata; SUCCESS records key/checksum.
     _ = request.retrieval_provenance
@@ -45,12 +47,12 @@ def publish_claimed_asset(
             existing, claim_token=request.claim_token, now=request.now
         )
 
-        outcomes = []
-        for bundle in request.bundles:
-            outcomes.append(upsert_work_bundle(connection, bundle))
-
-        for provenance in request.provenance_rows:
-            control._upsert_provenance(provenance)  # noqa: SLF001 - same txn
+        counters = PublishCounters()
+        for item in request.open_records():
+            outcome = upsert_work_bundle(connection, item.bundle)
+            control._upsert_provenance(item.provenance)  # noqa: SLF001 - same txn
+            counters = counters.after_outcome(outcome)
+            del item
 
         succeeded = apply_source_file_success(
             existing,
@@ -62,4 +64,4 @@ def publish_claimed_asset(
             now=request.now,
         )
         stored = control._update_file(succeeded)  # noqa: SLF001 - same txn
-        return AssetPublishResult(source_file=stored, outcomes=tuple(outcomes))
+        return AssetPublishResult(source_file=stored, counters=counters)

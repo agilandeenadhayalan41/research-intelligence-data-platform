@@ -168,11 +168,12 @@ Step 12 local ingestion boundary for one asset (durable PostgreSQL path):
 ```text
 register / claim_source_file          # atomic DB claim (FOR UPDATE)
 retrieve -> put_if_absent (ObjectStore)   # outside DB txn; immutable
-map all records from landed raw
 begin
   re-check claim token / lease
-  canonical upsert*
-  record_provenance*
+  open immutable raw
+  for each bounded JSONL record:
+      decode → map → canonical upsert → record_provenance
+      (counters only; no whole-file mapped list)
   mark_source_file_success
 commit
 ```

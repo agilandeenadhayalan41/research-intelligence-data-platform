@@ -67,44 +67,52 @@ manifest discover (metadata only)
        (validate identity + declared size + known checksums)
   → claim → PROCESSING (atomic DB claim / lease + claim_token)
   → stream fetch → hash → put_if_absent (immutable raw + IngestionProvenance)
-  → open landed object → stream JSONL.GZ decode (bounded)
-  → map all records → CanonicalWorkBundle (+ RecordProvenance rows)
   → BEGIN asset DB transaction:
        re-check claim token / lease
-       upsert all canonical records for the asset
-       write record provenance
+       open immutable raw
+       for each bounded JSONL record:
+           decode → map → canonical upsert → record provenance
+           (aggregate counters only; no whole-file mapped list)
        mark source file SUCCESS
     COMMIT
   → finish PipelineRun SUCCESS | FAILED
 ```
 
-On mapping/publish failure after claim: mark source file FAILED (separate control
-write), finish run FAILED. Raw ObjectStore bytes may remain.
+On decode/map/publish failure after claim: DB `ROLLBACK`, mark source file FAILED
+(separate control write), finish run FAILED. Raw ObjectStore bytes may remain.
+Mapped `CanonicalWorkBundle` / `RecordProvenance` rows are not accumulated for
+the whole file.
 
 ## One-asset database transaction
 
 After immutable raw landing, canonical publication runs in **one explicit
 database transaction** (PostgreSQL) or an in-memory rollback emulation for
-offline tests:
+offline tests. Decode/map/persist happen **incrementally inside** that
+transaction:
 
 ```text
 BEGIN
   SELECT source_files … FOR UPDATE
   re-check claim_token + PROCESSING + non-expired lease
-  upsert all canonical records for the asset
-  write record provenance
+  open immutable raw object
+  for each bounded JSONL record:
+      decode
+      map_openalex_work
+      canonical upsert
+      record provenance
+      update counters only
   mark source file SUCCESS
 COMMIT
 ```
 
-If canonical mapping/persistence or provenance fails:
+If decoding/mapping/persistence fails at record N:
 
 ```text
 ROLLBACK
 ```
 
-The database must not retain partial canonical rows or partial provenance from
-that failed attempt. Then the control path marks the source file `FAILED`.
+No canonical rows or provenance from records 1..N-1 may remain. Then the
+control path marks the source file `FAILED`.
 
 ### What is intentionally *not* one distributed ACID transaction
 

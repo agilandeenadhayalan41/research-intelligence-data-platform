@@ -661,6 +661,7 @@ def test_publish_failure_rolls_back_prior_canonical_and_provenance(
     assert row is not None
     assert row.status is ControlStatus.FAILED
     assert canonical.work_count() == 0
+    assert all(count == 0 for count in canonical.relationship_counts().values())
     assert control.list_record_provenance(asset_id=asset.asset_id) == ()
     key = openalex_raw_object_key(asset)
     with object_store.open(key) as handle:
@@ -681,6 +682,82 @@ def test_publish_failure_rolls_back_prior_canonical_and_provenance(
     assert result.source_file.status is ControlStatus.SUCCESS
     assert canonical.work_count() == 3
     assert len(control.list_record_provenance(asset_id=asset.asset_id)) == 3
+
+
+def test_publication_processes_records_incrementally_without_materializing_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Record N is upserted before record N+1 is requested from the stream."""
+    from research_platform.persistence import memory_unit_of_work as mem_uow
+
+    asset = _asset(uri_suffix="stream.gz")
+    payload = _gz_jsonl([_work("W1"), _work("W2"), _work("W3")])
+    landing = tmp_path / "landing"
+    config_path = _write_config(tmp_path, landing)
+    control = InMemoryControlStore()
+    canonical = InMemoryCanonicalStore()
+    object_store = LocalObjectStore(StorageConfig(backend="local", landing_path=landing))
+
+    events: list[str] = []
+    original_publish = mem_uow.publish_claimed_asset_memory
+
+    def instrumented(control_store, canonical_store, request):  # type: ignore[no-untyped-def]
+        original_open = request.open_records
+
+        def traced_open():
+            for index, item in enumerate(original_open(), start=1):
+                events.append(f"yield:{index}:{item.bundle.work.work_id}")
+                yield item
+                events.append(f"after-yield:{index}")
+
+        from research_platform.persistence.unit_of_work import AssetPublishRequest
+
+        traced = AssetPublishRequest(
+            asset_id=request.asset_id,
+            claim_token=request.claim_token,
+            now=request.now,
+            processed_at=request.processed_at,
+            raw_object_key=request.raw_object_key,
+            source_checksum_sha256=request.source_checksum_sha256,
+            retrieval_provenance=request.retrieval_provenance,
+            open_records=traced_open,
+        )
+        original_upsert = canonical_store.upsert_work_bundle
+
+        def tracking_upsert(bundle):  # type: ignore[no-untyped-def]
+            events.append(f"upsert:{bundle.work.work_id}")
+            return original_upsert(bundle)
+
+        monkeypatch.setattr(canonical_store, "upsert_work_bundle", tracking_upsert)
+        return original_publish(control_store, canonical_store, traced)
+
+    monkeypatch.setattr(mem_uow, "publish_claimed_asset_memory", instrumented)
+    # Pipeline imports the symbol by name; patch the pipeline binding too.
+    import research_platform.ingestion.pipeline as pipeline_mod
+
+    monkeypatch.setattr(pipeline_mod, "publish_claimed_asset_memory", instrumented)
+
+    result = run_openalex_works_local_ingest(
+        config_path,
+        control_store=control,
+        canonical_store=canonical,
+        object_store=object_store,
+        connector=FakeConnector(assets=[asset], payloads={asset.file_uri: payload}),  # type: ignore[arg-type]
+        now=_clock(),
+    )
+    assert result.run.status is PipelineRunStatus.SUCCESS
+    # Each record is upserted before the next yield is requested.
+    assert events == [
+        "yield:1:W1",
+        "upsert:W1",
+        "after-yield:1",
+        "yield:2:W2",
+        "upsert:W2",
+        "after-yield:2",
+        "yield:3:W3",
+        "upsert:W3",
+        "after-yield:3",
+    ]
 
 
 def test_cli_requires_backend_and_prints_persistence_mode(

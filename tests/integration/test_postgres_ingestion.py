@@ -47,7 +47,10 @@ from research_platform.persistence.postgres import (
     connect_postgres,
     publish_claimed_asset,
 )
-from research_platform.persistence.unit_of_work import AssetPublishRequest
+from research_platform.persistence.unit_of_work import (
+    AssetPublishRequest,
+    StreamedWorkRecord,
+)
 from research_platform.provenance.models import IngestionProvenance
 from research_platform.sources.base import SourceAsset
 from research_platform.sources.openalex.metadata import OpenAlexAssetMetadata
@@ -355,6 +358,7 @@ def test_mid_publish_failure_rolls_back_then_retry_succeeds(
     assert row is not None
     assert row.status is ControlStatus.FAILED
     assert canonical.work_count() == 0
+    assert all(count == 0 for count in canonical.relationship_counts().values())
     assert control.list_record_provenance(asset_id=asset.asset_id) == ()
     key = openalex_raw_object_key(asset)
     with object_store.open(key) as handle:
@@ -374,7 +378,9 @@ def test_mid_publish_failure_rolls_back_then_retry_succeeds(
     assert result.source_file is not None
     assert result.source_file.status is ControlStatus.SUCCESS
     assert canonical.work_count() == 3
-    assert len(control.list_record_provenance(asset_id=asset.asset_id)) == 3
+    provenance = control.list_record_provenance(asset_id=asset.asset_id)
+    assert len(provenance) == 3
+    assert {row.record_id for row in provenance} == {"W1", "W2", "W3"}
 
 
 def test_idempotent_replay_and_changed_version(tmp_path: Path, pg: psycopg.Connection) -> None:
@@ -509,6 +515,18 @@ def test_provenance_uniqueness_and_success_atomicity(pg: psycopg.Connection) -> 
             "source_updated_date": asset.updated_date,
         }
     )
+    def open_one():
+        yield StreamedWorkRecord(bundle=bundle, provenance=provenance)
+
+    retrieval = IngestionProvenance.model_validate(
+        {
+            "run_id": run.run_id,
+            "source": "openalex",
+            "source_uri": asset.file_uri,
+            "retrieved_at": _ts(hour=1, minute=1),
+            "sha256": "ab" * 32,
+        }
+    )
     published = publish_claimed_asset(
         pg,
         AssetPublishRequest(
@@ -518,20 +536,12 @@ def test_provenance_uniqueness_and_success_atomicity(pg: psycopg.Connection) -> 
             processed_at=_ts(hour=1, minute=2),
             raw_object_key="raw/openalex/works/atom.gz",
             source_checksum_sha256="ab" * 32,
-            retrieval_provenance=IngestionProvenance.model_validate(
-                {
-                    "run_id": run.run_id,
-                    "source": "openalex",
-                    "source_uri": asset.file_uri,
-                    "retrieved_at": _ts(hour=1, minute=1),
-                    "sha256": "ab" * 32,
-                }
-            ),
-            bundles=(bundle,),
-            provenance_rows=(provenance,),
+            retrieval_provenance=retrieval,
+            open_records=open_one,
         ),
     )
     assert published.source_file.status is ControlStatus.SUCCESS
+    assert published.counters.record_provenance_count == 1
     rows = control.list_record_provenance(asset_id=asset.asset_id)
     assert len(rows) == 1
 
@@ -546,17 +556,8 @@ def test_provenance_uniqueness_and_success_atomicity(pg: psycopg.Connection) -> 
                 processed_at=_ts(hour=1, minute=3),
                 raw_object_key="raw/openalex/works/atom.gz",
                 source_checksum_sha256="ab" * 32,
-                retrieval_provenance=IngestionProvenance.model_validate(
-                    {
-                        "run_id": run.run_id,
-                        "source": "openalex",
-                        "source_uri": asset.file_uri,
-                        "retrieved_at": _ts(hour=1, minute=1),
-                        "sha256": "ab" * 32,
-                    }
-                ),
-                bundles=(bundle,),
-                provenance_rows=(provenance,),
+                retrieval_provenance=retrieval,
+                open_records=open_one,
             ),
         )
     assert len(control.list_record_provenance(asset_id=asset.asset_id)) == 1
