@@ -147,11 +147,24 @@ List capabilities return `ServiceResponse[Page[T]]`.
 Page[T]:
   items          # never NULL; empty page is []
   page.limit
-  page.next_cursor   # None when has_more is False
+  page.next_cursor   # None when has_more is False;
+                     # non-empty when has_more is True
   page.has_more
 ```
 
 `len(items) <= limit`.
+
+Invariant:
+
+- `has_more=False` → `next_cursor` must be `None`
+- `has_more=True` → `next_cursor` must be a non-empty string
+- empty-string `next_cursor` is always invalid
+
+### Identifier strings
+
+Consumer identifier/filter strings are **trimmed** of surrounding whitespace
+before storage/lookup. Whitespace-only values are rejected as invalid input
+(not silent `NOT_FOUND`).
 
 ---
 
@@ -164,6 +177,10 @@ Page[T]:
   `capability_id` and `contract_version`
 - Reject malformed / wrong-capability / wrong-contract-version cursors with
   `INVALID_CURSOR`
+- `publisher_topic_analytics` cursor keys are type-validated:
+  - `last_publication_year`: int in `1000..3000` or `NULL` (bool rejected)
+  - `last_topic_id`: non-empty string (`NULL`/empty invalid)
+  - invalid values → `INVALID_CURSOR` (never `TypeError`/`BACKEND_ERROR`)
 - No SQL text, credentials, or backend state in cursors
 - OFFSET is not the primary product contract
 

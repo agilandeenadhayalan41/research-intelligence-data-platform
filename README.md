@@ -11,9 +11,8 @@ access, proprietary data, or cloud credentials are needed for the default tests.
 
 ## Current status
 
-**Steps 01–17 are complete through data-quality gates and metrics.
-Step 18 / #26 (Data Service domain layer) is implemented pending review/merge.
-Step 19 / #27 remains next after merge; do not start it from this work.
+**Steps 01–18 are complete through the storage-independent Data Service domain
+layer. Step 19 / #27 (bounded end-to-end pipeline) is next.
 The full end-to-end / cloud pipeline is not implemented.**
 
 | Step | Delivered capability | Implementation boundary |
@@ -49,14 +48,14 @@ is deployed or MEASURED. Step 18 adds no HTTP service and no Postgres serving.
 
 ### Next scoped work
 
-**Step 18 / [#26](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/26)**
-(this PR, pending review/merge): storage-independent Data Service domain layer.
-See [Data Service](docs/architecture/data-service.md).
-
-**After merge — Step 19 / [#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27):**
+**Step 19 / [#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27):**
 bounded end-to-end pipeline (discover → ingest → validate → canonicalize →
 deletions → analytical models → quality gate → publish). Do not start #27 from
-this PR.
+this hardening PR.
+
+Step 18 / [#26](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/26)
+Data Service domain layer is complete; see
+[Data Service](docs/architecture/data-service.md).
 
 Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)

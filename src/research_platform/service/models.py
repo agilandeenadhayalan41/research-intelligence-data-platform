@@ -82,6 +82,17 @@ class PageInfo(SettingsModel):
     next_cursor: str | None = None
     has_more: bool = False
 
+    @model_validator(mode="after")
+    def cursor_has_more_invariant(self) -> PageInfo:
+        if self.next_cursor is not None and not self.next_cursor.strip():
+            raise ValueError("next_cursor must be non-empty when provided")
+        if self.has_more:
+            if self.next_cursor is None or not self.next_cursor.strip():
+                raise ValueError("next_cursor required when has_more is True")
+        elif self.next_cursor is not None:
+            raise ValueError("next_cursor must be None when has_more is False")
+        return self
+
 
 T = TypeVar("T")
 
@@ -94,8 +105,7 @@ class Page(SettingsModel, Generic[T]):
     def bounded_items(self) -> Page[T]:
         if len(self.items) > self.page.limit:
             raise ValueError("page items exceed limit")
-        if not self.page.has_more and self.page.next_cursor is not None:
-            raise ValueError("next_cursor must be None when has_more is False")
+        # PageInfo already enforces has_more <-> next_cursor invariant.
         return self
 
 

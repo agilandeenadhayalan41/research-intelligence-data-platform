@@ -27,6 +27,8 @@ from research_platform.service.models import (
     FreshnessMetadata,
     FreshnessStatus,
     JournalMetricsRecord,
+    Page,
+    PageInfo,
     PublisherSummaryRecord,
     ServiceErrorCode,
     ServiceErrorException,
@@ -565,3 +567,110 @@ def test_extra_fields_forbid_on_requests() -> None:
         PublisherSummaryRequest.model_validate(
             {"publisher_id": "P1", "raw_sql": "select 1"}
         )
+
+
+# ---------------------------------------------------------------------------
+# Contract hardening (cursor types, page invariant, whitespace IDs)
+# ---------------------------------------------------------------------------
+
+
+def _publisher_topic_cursor(**keys: Any) -> str:
+    return encode_cursor(capability_id="publisher_topic_analytics", keys=keys)
+
+
+@pytest.mark.parametrize(
+    "keys",
+    [
+        {"last_publication_year": "2021", "last_topic_id": "T1"},
+        {"last_publication_year": True, "last_topic_id": "T1"},
+        {"last_publication_year": 999, "last_topic_id": "T1"},
+        {"last_publication_year": 3001, "last_topic_id": "T1"},
+        {"last_publication_year": 2021, "last_topic_id": None},
+        {"last_publication_year": 2021, "last_topic_id": ""},
+        {"last_publication_year": 2021, "last_topic_id": 123},
+        {"last_publication_year": 2021, "last_topic_id": "   "},
+    ],
+)
+def test_publisher_topic_cursor_invalid_types(keys: dict[str, Any]) -> None:
+    svc = DataService(build_reference_fixture())
+    cursor = _publisher_topic_cursor(**keys)
+    with pytest.raises(ServiceErrorException) as ei:
+        svc.list_publisher_topic_analytics(
+            PublisherTopicAnalyticsRequest(
+                publisher_id="P1",
+                page=PageRequest(limit=2, cursor=cursor),
+            )
+        )
+    assert ei.value.error.code is ServiceErrorCode.INVALID_CURSOR
+    assert ei.value.error.code is not ServiceErrorCode.BACKEND_ERROR
+
+
+def test_publisher_topic_cursor_null_year_valid() -> None:
+    """NULL publication_year is valid for the NULLS LAST bucket."""
+    svc = DataService(build_reference_fixture())
+    cursor = _publisher_topic_cursor(
+        last_publication_year=None, last_topic_id="T2"
+    )
+    # Should not raise INVALID_CURSOR / BACKEND_ERROR
+    resp = svc.list_publisher_topic_analytics(
+        PublisherTopicAnalyticsRequest(
+            publisher_id="P1",
+            page=PageRequest(limit=10, cursor=cursor),
+        )
+    )
+    assert resp.capability_id == "publisher_topic_analytics"
+
+
+def test_page_has_more_requires_cursor() -> None:
+    with pytest.raises(ValidationError):
+        PageInfo(limit=10, has_more=True, next_cursor=None)
+    with pytest.raises(ValidationError):
+        PageInfo(limit=10, has_more=True, next_cursor="")
+    with pytest.raises(ValidationError):
+        PageInfo(limit=10, has_more=True, next_cursor="   ")
+    ok_none = PageInfo(limit=10, has_more=False, next_cursor=None)
+    assert ok_none.next_cursor is None
+    ok_cursor = PageInfo(limit=10, has_more=True, next_cursor="opaque-cursor")
+    assert ok_cursor.next_cursor == "opaque-cursor"
+    page = Page[WorkMetadataRecord](
+        items=(),
+        page=PageInfo(limit=10, has_more=True, next_cursor="c1"),
+    )
+    assert page.page.has_more is True
+
+
+def test_whitespace_only_identifiers_rejected() -> None:
+    with pytest.raises(ValidationError):
+        JournalMetricsRequest(source_id="   ")
+    with pytest.raises(ValidationError):
+        PublisherSummaryRequest(publisher_id="   ")
+    with pytest.raises(ValidationError):
+        PublisherTopicAnalyticsRequest(publisher_id="   ")
+    with pytest.raises(ValidationError):
+        PublisherTopicAnalyticsRequest(publisher_id="P1", topic_id="   ")
+    for field in (
+        "primary_publisher_id",
+        "primary_source_id",
+        "work_type",
+        "language",
+        "oa_status",
+        "topic_id",
+        "institution_id",
+        "author_id",
+    ):
+        with pytest.raises(ValidationError):
+            ResearchDiscoveryRequest.model_validate({field: "   "})
+
+
+def test_identifier_whitespace_trimmed() -> None:
+    """Surrounding whitespace is trimmed before storage/lookup."""
+    assert JournalMetricsRequest(source_id="  S1  ").source_id == "S1"
+    assert PublisherSummaryRequest(publisher_id=" P1 ").publisher_id == "P1"
+    req = ResearchDiscoveryRequest(primary_publisher_id="  P1  ", author_id=" A1 ")
+    assert req.primary_publisher_id == "P1"
+    assert req.author_id == "A1"
+    work = WorkMetadataRequest(work_id="  W001  ")
+    assert work.work_id == "W001"
+    svc = DataService(build_reference_fixture())
+    resp = svc.get_journal_metrics(JournalMetricsRequest(source_id="  S1  "))
+    assert resp.data.source_id == "S1"
