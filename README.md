@@ -71,14 +71,23 @@ rules, and bounded sample-selection contract are specified in
 
 The connector defaults to the current Works JSON Lines manifest at
 `https://openalex.s3.amazonaws.com/data/jsonl/works/manifest.json`. Public OpenAlex
-documentation describes the `openalex` S3 bucket and anonymous access (AWS CLI
-examples use `--no-sign-request`); this adapter uses anonymous HTTPS only and never
-uses AWS credential discovery. `jsonl` is gzip-compressed `.gz`; Parquet is
-Snappy-compressed `.parquet`. Discovery reads a manifest capped at 1,000,000 bytes,
-then applies the existing selector (default one file, 25,000,000 bytes). Fetching
-streams from the fixed public bucket and independently enforces actual returned
-bytes. The [architecture contract](docs/architecture/openalex-manifest-contract.md)
-records the live connectivity observation and any environment limitation.
+The architecture contract records observed anonymous manifest access and the live
+declared formats. Public documentation describes JSONL `.gz` and Snappy `.parquet`
+payload codecs; these are expected codecs, not payloads inspected by this connector.
+The adapter uses anonymous HTTPS only, never AWS credential discovery, and accepts
+the observed `binary/octet-stream` manifest MIME while validating the bounded JSON
+body.
+
+Discovery caps the manifest at 1,000,000 actual bytes and applies the existing
+selector (default one file, 25,000,000 bytes). `fetch()` returns a caller-owned
+binary stream, reads in bounded chunks, enforces actual cumulative bytes including a
+bounded overflow probe, checks declared length for truncation, and closes responses
+on EOF, explicit close, or errors. HTTP attempts have monotonic deadlines (10
+seconds by default, at most 30); at most 3 attempts are made by default, with
+bounded exponential backoff. A stream is never restarted after it is returned.
+`OpenAlexConnector` has no constructor-time network side effects.
+
+The opt-in connectivity check reads only the bounded Works manifest:
 
 The network check is opt-in and reads only the bounded Works manifest:
 

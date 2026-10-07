@@ -34,15 +34,35 @@ redirects, and does not invoke AWS credential discovery.
 The selected JSON Lines manifest is expected to declare `jsonl`; its payload files
 are gzip-compressed `.gz` files. Selecting `parquet` instead reads that format's
 separate Works manifest and expects Snappy-compressed `.parquet` files. These are
-documented source-format expectations, not a claim about bytes observed by this
-connector.
+codec expectations from OpenAlex documentation, not a claim about payload bytes
+downloaded or decoded by this connector.
 
-An explicit connectivity check was attempted on **2026-10-06 UTC** with
-`python -m research_platform.sources.openalex.connectivity`. It failed with
-`OpenAlex request failed` before an HTTP response was received. Consequently, this
-environment did not verify anonymous access or observe a live manifest-declared
-format; the actual format is **unobserved**. The documented expected format for the
-default check remains `jsonl`. No credentials or alternate source were used.
+Independent public metadata observations on **2026-10-06** verified anonymous
+access. At 23:43:11 UTC, anonymous `HEAD` requests to both endpoints returned the
+following:
+
+| Endpoint | Anonymous HEAD at 23:43:11 UTC | Anonymous bounded range at 23:56:02 UTC |
+| --- | --- | --- |
+| `https://openalex.s3.amazonaws.com/data/jsonl/works/manifest.json` | HTTP 200, Content-Length 383359, `binary/octet-stream` | `Range: bytes=0-4095` observed `format: jsonl`, `entity: works` |
+| `https://openalex.s3.amazonaws.com/data/parquet/works/manifest.json` | HTTP 200, Content-Length 397668, `binary/octet-stream` | `Range: bytes=0-4095` observed `format: parquet`, `entity: works` |
+
+The bounded requests disabled curl configuration, redirects, and non-HTTPS
+protocols, used 10-second connect / 20-second total timeouts, and capped response
+size at 4096 bytes. A 1024-byte JSONL prefix also confirmed the per-entity schema:
+`date`, `format`, `entity`, `record_count`, `content_length`, `files`, `url`, and
+`meta`. No snapshot payload object was requested. Thus the **live
+manifest-declared formats** and anonymous metadata access are verified, while gzip
+and Snappy remain documented codec expectations only.
+
+The opt-in command was separately attempted in the Copilot cloud environment and
+could not obtain an HTTP response because that environment's DNS firewall blocked
+`openalex.s3.amazonaws.com` (cloud run 37548052335). A repeat on
+**2026-10-07 00:05:11 UTC** returned `OpenAlexNetworkError`, `actual_format: null`,
+for the JSONL manifest endpoint, using one 5-second attempt and a 1,000,000-byte
+manifest cap. This does not contradict the independent successful anonymous
+observations. It means the command could not verify connectivity from that
+restricted runtime. The firewall was not changed, and no credentials or
+authenticated fallback were used.
 
 The typed model deliberately represents the manifest's declared `format`
 (`jsonl` or `parquet`), not the compression codec. Thus, a gzip-compressed JSONL
@@ -210,18 +230,29 @@ Manifest
    -> OpenAlexConnector.fetch(): bounded stream
 ```
 
-Selection reads or writes no objects. The connector downloads the manifest only;
-`fetch()` streams a selected file with bounded reads and independently enforces
-actual returned bytes up to the configured limit, even if `Content-Length` or
-manifest metadata is missing or wrong. The default selector limits are
-`max_files=1` and `max_file_size_bytes=25_000_000`; the connector's timeout defaults
-to 10 seconds, with at most 3 attempts and exponential 0.1-second base backoff.
-Configuration is hard-bounded to 30 seconds per request, 5 attempts, and 1 second
-of base backoff. The explicit connectivity command uses one 5-second attempt.
+Selection reads or writes no objects. The connector reads a selected-format manifest
+only, accepts the observed `binary/octet-stream` response MIME plus supported JSON
+MIME types, and treats bounded JSON parsing—not the MIME label—as authoritative.
+HTML/XML and malformed JSON are rejected. It checks the actual manifest bytes
+against both the 1,000,000-byte cap and any valid declared `Content-Length`.
+
+`fetch()` streams a selected file through a caller-owned binary stream. Each
+underlying read is bounded, cumulative actual returned bytes cannot exceed the
+configured limit, and a one-byte probe detects overflow rather than silently
+truncating. Declared lengths are checked for truncation. EOF, explicit close, and
+all error paths close the response; after a stream is returned, failures are
+reported and never retried from byte zero.
+
+The default selector limits are `max_files=1` and
+`max_file_size_bytes=25_000_000`. Each HTTP attempt uses a monotonic deadline,
+including response-header and body reads; each bounded socket read gets only the
+remaining time. Timeout defaults to 10 seconds, with at most 3 attempts and
+exponential 0.1-second base backoff. Configuration is hard-bounded to 30 seconds
+per attempt, 5 attempts, and 1 second of base backoff. Retries apply only before a
+response stream is returned and failed/retried responses are closed. The explicit
+connectivity command uses one 5-second attempt and a 1,000,000-byte manifest cap.
 401/403, unavailable endpoints, malformed manifests, timeouts, transport failures,
 unexpected formats, truncation, and actual-byte overflow are explicit errors.
-Retryable request errors are retried only before a response stream is returned;
-payload streams are never restarted after delivery begins.
 
 This connector does **not** write raw data, connect to GCP, PostgreSQL, or BigQuery,
 or run Airflow. Its public connectivity check is an explicit, read-only request

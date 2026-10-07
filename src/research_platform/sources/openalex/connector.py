@@ -100,14 +100,48 @@ class AnonymousOpenAlexHTTPClient:
         headers: dict[str, str],
     ) -> _Response:
         path = _public_path(uri)
+        deadline = time.monotonic() + timeout
         connection = http.client.HTTPSConnection(_PUBLIC_HOST, timeout=timeout)
         try:
             connection.request("GET", path, headers=headers)
-            response = connection.getresponse()
+            response = http.client.HTTPResponse(
+                _DeadlineSocket(connection.sock, deadline), method="GET"
+            )
+            response.begin()
         except Exception:
             connection.close()
             raise
         return _HTTPResponse(response, connection)
+
+
+class _DeadlineSocket:
+    def __init__(self, connection_socket: socket.socket, deadline: float):
+        self._socket = connection_socket
+        self._deadline = deadline
+
+    def makefile(self, mode: str = "rb") -> io.BufferedReader:
+        if mode != "rb":
+            raise ValueError("OpenAlex transport supports read-only HTTP responses")
+        return io.BufferedReader(_DeadlineSocketIO(self))
+
+    def recv_into(self, buffer: memoryview) -> int:
+        remaining = self._deadline - time.monotonic()
+        if remaining <= 0:
+            raise socket.timeout("OpenAlex request deadline expired")
+        self._socket.settimeout(remaining)
+        return self._socket.recv_into(buffer)
+
+
+class _DeadlineSocketIO(io.RawIOBase):
+    def __init__(self, deadline_socket: _DeadlineSocket):
+        super().__init__()
+        self._deadline_socket = deadline_socket
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: bytearray | memoryview) -> int:
+        return self._deadline_socket.recv_into(memoryview(buffer))
 
 
 class _HTTPResponse:
@@ -120,11 +154,15 @@ class _HTTPResponse:
         self.headers = response.headers
 
     def read(self, size: int = -1) -> bytes:
+        if size < 0:
+            raise ValueError("OpenAlex transport requires bounded response reads")
         return self._response.read(size)
 
     def close(self) -> None:
-        self._response.close()
-        self._connection.close()
+        try:
+            self._response.close()
+        finally:
+            self._connection.close()
 
 
 class _BoundedStream(io.RawIOBase):
@@ -312,7 +350,10 @@ class OpenAlexConnector(SourceConnector):
         try:
             _raise_for_status(response)
             content_type = _header(response, "Content-Type")
-            if content_type and "json" not in content_type.lower():
+            normalized_type = (
+                content_type.split(";", 1)[0].strip().lower() if content_type else ""
+            )
+            if normalized_type and not _is_json_or_binary_mime(normalized_type):
                 raise OpenAlexFormatError("OpenAlex manifest response is not JSON")
             length = _parse_content_length(_header(response, "Content-Length"))
             if length is not None and length > _MANIFEST_LIMIT:
@@ -321,24 +362,26 @@ class OpenAlexConnector(SourceConnector):
         finally:
             response.close()
         try:
-            decoded = json.loads(content)
-        except (UnicodeDecodeError, json.JSONDecodeError):
+            decoded = json.loads(content, object_pairs_hook=_reject_duplicate_keys)
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
             raise OpenAlexManifestError("OpenAlex Works manifest is malformed") from None
         if not isinstance(decoded, dict):
             raise OpenAlexManifestError("OpenAlex Works manifest is malformed") from None
-        declared_format = decoded.get("format")
-        if not isinstance(declared_format, str) or declared_format not in _FORMATS:
+        if "format" in decoded and (
+            not isinstance(decoded["format"], str) or decoded["format"] not in _FORMATS
+        ):
             raise OpenAlexFormatError("OpenAlex Works manifest declares an unsupported format")
+        if "format" not in decoded:
+            raise OpenAlexManifestError("OpenAlex Works manifest is malformed")
+        declared_format = decoded["format"]
+        if declared_format != self._content_format:
+            raise OpenAlexFormatError("OpenAlex Works manifest format differs from the requested format")
         try:
             assets = parse_openalex_works_manifest(
                 content, content_format=self._content_format, entity="works"
             )
-        except ValueError as error:
-            if "format" in str(error).lower() or "unsupported" in str(error).lower():
-                raise OpenAlexFormatError("OpenAlex Works manifest format is unexpected") from None
+        except (ValueError, TypeError, RecursionError):
             raise OpenAlexManifestError("OpenAlex Works manifest is malformed") from None
-        if declared_format != self._content_format:
-            raise OpenAlexFormatError("OpenAlex Works manifest format differs from the requested format")
         return assets, declared_format
 
     def _request(self, uri: str) -> _Response:
@@ -401,6 +444,13 @@ class PublicConnectivityResult:
 
 
 def _public_path(uri: str) -> str:
+    if not isinstance(uri, str) or any(
+        ord(character) < 32 or ord(character) == 127 or character.isspace()
+        for character in uri
+    ):
+        raise OpenAlexEndpointUnavailableError("OpenAlex URI contains unsafe characters")
+    if not uri.startswith("s3://"):
+        raise OpenAlexEndpointUnavailableError("OpenAlex URI is not canonical")
     parsed = urlsplit(uri)
     if (
         parsed.scheme != "s3"
@@ -472,7 +522,19 @@ def _header(response: _Response, name: str) -> str | None:
 def _parse_content_length(value: str | None) -> int | None:
     if value is None or not re.fullmatch(r"\d+", value.strip()):
         return None
-    return int(value)
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
 
 
 def _raise_for_status(response: _Response) -> None:
@@ -497,12 +559,30 @@ def _validate_payload_content_type(response: _Response, content_format: str) -> 
         raise OpenAlexFormatError("OpenAlex payload response has an unexpected content type")
 
 
+def _is_json_or_binary_mime(content_type: str) -> bool:
+    return content_type in {
+        "application/json",
+        "application/x-json",
+        "text/json",
+        "application/octet-stream",
+        "binary/octet-stream",
+    } or (
+        content_type.startswith("application/")
+        and content_type.endswith("+json")
+    )
+
+
 def _read_bounded(response: _Response, max_bytes: int) -> bytes:
     content = bytearray()
     try:
         while True:
             chunk = response.read(min(_CHUNK_SIZE, max_bytes + 1 - len(content)))
             if not chunk:
+                expected_length = _parse_content_length(_header(response, "Content-Length"))
+                if expected_length is not None and len(content) < expected_length:
+                    raise OpenAlexTruncatedError(
+                        "OpenAlex Works manifest ended before its declared length"
+                    )
                 return bytes(content)
             content.extend(chunk)
             if len(content) > max_bytes:

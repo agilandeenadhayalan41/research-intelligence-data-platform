@@ -2,14 +2,17 @@
 
 import json
 
-from research_platform.sources.openalex.connector import OpenAlexConnector
+from research_platform.sources.openalex.connector import (
+    OpenAlexConnector,
+    OpenAlexConnectorError,
+)
 
 
 def main() -> int:
     connector = OpenAlexConnector(timeout_seconds=5, max_attempts=1)
     try:
         result = connector.check_public_connectivity()
-    except Exception as error:
+    except OpenAlexConnectorError as error:
         print(
             json.dumps(
                 {
@@ -19,7 +22,7 @@ def main() -> int:
                     "expected_format": "jsonl",
                     "actual_format": None,
                     "manifest_byte_limit": 1_000_000,
-                    "error": str(error),
+                    "error_category": type(error).__name__,
                 },
                 sort_keys=True,
             )
