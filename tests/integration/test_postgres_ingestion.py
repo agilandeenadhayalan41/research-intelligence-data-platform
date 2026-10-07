@@ -165,6 +165,7 @@ def _write_config(path: Path, landing: Path) -> Path:
 
 def _truncate(connection: psycopg.Connection) -> None:
     tables = (
+        "deletion_events",
         "record_provenance",
         "work_author_institutions",
         "work_authors",
@@ -616,3 +617,338 @@ def test_decode_failure_keeps_raw_marks_failed(tmp_path: Path, pg: psycopg.Conne
     assert canonical.work_count() == 0
     with object_store.open(openalex_raw_object_key(asset)) as handle:
         assert handle.read() == payload
+
+
+# ---------------------------------------------------------------------------
+# Step 13 — OpenAlex Works deletions (PostgreSQL)
+# ---------------------------------------------------------------------------
+
+
+def _gz_csv(ids: list[str], *, header: str = "id") -> bytes:
+    return gzip.compress(("\n".join([header, *ids]) + "\n").encode("utf-8"))
+
+
+def _deletion_asset(
+    *,
+    updated: date = date(2024, 2, 1),
+    snapshot: date = date(2024, 2, 5),
+) -> "OpenAlexDeletionAssetMetadata":
+    from research_platform.sources.openalex.deletion_metadata import (
+        OpenAlexDeletionAssetMetadata,
+    )
+
+    return OpenAlexDeletionAssetMetadata.model_validate(
+        {
+            "source": "openalex",
+            "snapshot_date": snapshot,
+            "entity": "works-deletions",
+            "file_uri": (
+                f"s3://openalex/data/csv/works-deletions/"
+                f"updated_date={updated.isoformat()}/deleted_ids.csv.gz"
+            ),
+            "byte_size": 500,
+            "updated_date": updated,
+            "content_format": "csv",
+        }
+    )
+
+
+def _seed_works_pg(
+    tmp_path: Path,
+    pg: psycopg.Connection,
+    records: list[dict[str, object]],
+    *,
+    uri_suffix: str = "seed.gz",
+) -> OpenAlexAssetMetadata:
+    asset = _asset(uri_suffix=uri_suffix)
+    landing = tmp_path / "landing-works"
+    config_path = _write_config(tmp_path / "cfg-works", landing)
+    object_store = LocalObjectStore(StorageConfig(backend="local", landing_path=landing))
+    result = run_openalex_works_local_ingest(
+        config_path,
+        backend="postgres",
+        postgres_connection=pg,
+        object_store=object_store,
+        connector=FakeConnector(
+            assets=[asset], payloads={asset.file_uri: _gz_jsonl(records)}
+        ),  # type: ignore[arg-type]
+        now=_clock(),
+    )
+    assert result.run.status is PipelineRunStatus.SUCCESS
+    return asset
+
+
+def test_deletion_tombstone_survives_reconnect(
+    tmp_path: Path, pg: psycopg.Connection
+) -> None:
+    from research_platform.canonical.openalex.activity import is_deleted_work
+    from research_platform.ingestion.deletion_pipeline import (
+        run_openalex_deletions_local_ingest,
+    )
+    from research_platform.storage.openalex_layout import openalex_deletion_raw_object_key
+
+    _seed_works_pg(tmp_path, pg, [_work("W1"), _work("W2")])
+    del_asset = _deletion_asset()
+    payload = _gz_csv(["W1", "W999"])
+    landing = tmp_path / "landing-del"
+    config_path = _write_config(tmp_path / "cfg-del", landing)
+    object_store = LocalObjectStore(StorageConfig(backend="local", landing_path=landing))
+    canonical_before = PostgresCanonicalStore(pg)
+    rel_before = canonical_before.relationship_counts()
+
+    result = run_openalex_deletions_local_ingest(
+        config_path,
+        backend="postgres",
+        deletion_asset=del_asset,
+        postgres_connection=pg,
+        object_store=object_store,
+        connector=FakeConnector(
+            assets=[del_asset], payloads={del_asset.file_uri: payload}
+        ),
+        now=_clock(),
+    )
+    assert result.run.status is PipelineRunStatus.SUCCESS
+    assert result.persistence_backend == "postgres"
+    assert result.stats is not None
+    assert result.stats.deleted == 1
+    assert result.stats.unknown == 1
+    assert result.source_file is not None
+    assert result.source_file.status is ControlStatus.SUCCESS
+
+    reconnect = connect_postgres(DSN)
+    try:
+        control = PostgresControlStore(reconnect)
+        canonical = PostgresCanonicalStore(reconnect)
+        row = control.get_source_file(del_asset.asset_id)
+        assert row is not None
+        assert row.status is ControlStatus.SUCCESS
+        w1 = canonical.get_work("W1")
+        assert w1 is not None
+        assert is_deleted_work(w1)
+        assert w1.lineage.deleted_at is not None
+        assert canonical.relationship_counts() == rel_before
+        provenance = control.list_record_provenance(asset_id=del_asset.asset_id)
+        assert any(p.entity_type == "work-deletion" for p in provenance)
+        with reconnect.cursor() as cur:
+            cur.execute(
+                "SELECT outcome FROM deletion_events WHERE work_id = %s",
+                ("W1",),
+            )
+            outcomes = {r[0] for r in cur.fetchall()}
+        assert "DELETED" in outcomes
+        with reconnect.cursor() as cur:
+            cur.execute(
+                "SELECT outcome FROM deletion_events WHERE work_id = %s",
+                ("W999",),
+            )
+            assert cur.fetchone()[0] == "UNKNOWN_WORK"
+    finally:
+        reconnect.close()
+
+    with object_store.open(openalex_deletion_raw_object_key(del_asset)) as handle:
+        assert handle.read() == payload
+
+
+def test_deletion_mid_file_rollback_then_retry(
+    tmp_path: Path, pg: psycopg.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from research_platform.canonical.openalex.activity import is_active_work
+    from research_platform.ingestion.deletion_pipeline import (
+        run_openalex_deletions_local_ingest,
+    )
+    from research_platform.persistence.postgres import canonical_store as canonical_mod
+    import research_platform.persistence.postgres.deletion_unit_of_work as del_uow
+    from research_platform.storage.openalex_layout import openalex_deletion_raw_object_key
+
+    _seed_works_pg(tmp_path, pg, [_work("W1"), _work("W2"), _work("W3")])
+    del_asset = _deletion_asset()
+    payload = _gz_csv(["W1", "W2", "W3"])
+    landing = tmp_path / "landing-del"
+    config_path = _write_config(tmp_path / "cfg-del", landing)
+    object_store = LocalObjectStore(StorageConfig(backend="local", landing_path=landing))
+
+    original = canonical_mod.apply_work_deletion
+    calls = {"n": 0}
+
+    def flaky(connection, work_id, **kwargs):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] >= 3:
+            raise RuntimeError("forced deletion failure at row 3")
+        return original(connection, work_id, **kwargs)
+
+    monkeypatch.setattr(canonical_mod, "apply_work_deletion", flaky)
+    monkeypatch.setattr(del_uow, "apply_work_deletion", flaky)
+
+    with pytest.raises(Exception):
+        run_openalex_deletions_local_ingest(
+            config_path,
+            backend="postgres",
+            deletion_asset=del_asset,
+            postgres_connection=pg,
+            object_store=object_store,
+            connector=FakeConnector(
+                assets=[del_asset], payloads={del_asset.file_uri: payload}
+            ),
+            now=_clock(),
+        )
+
+    control = PostgresControlStore(pg)
+    canonical = PostgresCanonicalStore(pg)
+    row = control.get_source_file(del_asset.asset_id)
+    assert row is not None
+    assert row.status is ControlStatus.FAILED
+    for work_id in ("W1", "W2", "W3"):
+        work = canonical.get_work(work_id)
+        assert work is not None
+        assert is_active_work(work)
+    with pg.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM deletion_events WHERE asset_id = %s",
+            (del_asset.asset_id,),
+        )
+        assert cur.fetchone()[0] == 0
+    assert control.list_record_provenance(asset_id=del_asset.asset_id) == ()
+    with object_store.open(openalex_deletion_raw_object_key(del_asset)) as handle:
+        assert handle.read() == payload
+
+    monkeypatch.setattr(del_uow, "apply_work_deletion", original)
+    monkeypatch.setattr(canonical_mod, "apply_work_deletion", original)
+    result = run_openalex_deletions_local_ingest(
+        config_path,
+        backend="postgres",
+        deletion_asset=del_asset,
+        postgres_connection=pg,
+        object_store=object_store,
+        connector=FakeConnector(
+            assets=[del_asset], payloads={del_asset.file_uri: payload}
+        ),
+        now=_clock(),
+    )
+    assert result.run.status is PipelineRunStatus.SUCCESS
+    assert result.stats is not None
+    assert result.stats.deleted == 3
+    assert result.source_file is not None
+    assert result.source_file.status is ControlStatus.SUCCESS
+
+
+def test_deletion_idempotent_replay_and_no_resurrection(
+    tmp_path: Path, pg: psycopg.Connection
+) -> None:
+    from research_platform.canonical.openalex.activity import is_deleted_work
+    from research_platform.canonical.openalex.deletions import RestoreRequiredError
+    from research_platform.ingestion.deletion_pipeline import (
+        run_openalex_deletions_local_ingest,
+    )
+
+    _seed_works_pg(tmp_path, pg, [_work("W1", updated="2024-01-10")])
+    del_asset = _deletion_asset(updated=date(2024, 2, 1))
+    payload = _gz_csv(["W1"])
+    landing = tmp_path / "landing-del"
+    config_path = _write_config(tmp_path / "cfg-del", landing)
+    object_store = LocalObjectStore(StorageConfig(backend="local", landing_path=landing))
+
+    first = run_openalex_deletions_local_ingest(
+        config_path,
+        backend="postgres",
+        deletion_asset=del_asset,
+        postgres_connection=pg,
+        object_store=object_store,
+        connector=FakeConnector(
+            assets=[del_asset], payloads={del_asset.file_uri: payload}
+        ),
+        now=_clock(),
+    )
+    assert first.stats is not None and first.stats.deleted == 1
+
+    second = run_openalex_deletions_local_ingest(
+        config_path,
+        backend="postgres",
+        deletion_asset=del_asset,
+        postgres_connection=pg,
+        object_store=object_store,
+        connector=FakeConnector(
+            assets=[del_asset], payloads={del_asset.file_uri: payload}
+        ),
+        now=_clock(),
+    )
+    assert second.skipped_reason == "ALREADY_SUCCESS"
+
+    stale_asset = _asset(uri_suffix="stale_after_del.gz", updated=date(2024, 1, 10))
+    run_openalex_works_local_ingest(
+        _write_config(tmp_path / "cfg-stale", tmp_path / "landing-stale"),
+        backend="postgres",
+        postgres_connection=pg,
+        object_store=LocalObjectStore(
+            StorageConfig(backend="local", landing_path=tmp_path / "landing-stale")
+        ),
+        connector=FakeConnector(
+            assets=[stale_asset],
+            payloads={stale_asset.file_uri: _gz_jsonl([_work("W1", title="Stale")])},
+        ),  # type: ignore[arg-type]
+        now=_clock(),
+    )
+    canonical = PostgresCanonicalStore(pg)
+    work = canonical.get_work("W1")
+    assert work is not None
+    assert is_deleted_work(work)
+
+    newer = _asset(uri_suffix="newer_after_del.gz", updated=date(2024, 3, 1))
+    with pytest.raises(RestoreRequiredError):
+        run_openalex_works_local_ingest(
+            _write_config(tmp_path / "cfg-new", tmp_path / "landing-new"),
+            backend="postgres",
+            postgres_connection=pg,
+            object_store=LocalObjectStore(
+                StorageConfig(backend="local", landing_path=tmp_path / "landing-new")
+            ),
+            connector=FakeConnector(
+                assets=[newer],
+                payloads={
+                    newer.file_uri: _gz_jsonl(
+                        [_work("W1", title="New", updated="2024-03-01")]
+                    )
+                },
+            ),  # type: ignore[arg-type]
+            now=_clock(),
+        )
+    assert is_deleted_work(canonical.get_work("W1"))  # type: ignore[arg-type]
+
+
+def test_deletion_reference_to_deleted_target_preserved(
+    tmp_path: Path, pg: psycopg.Connection
+) -> None:
+    from research_platform.canonical.openalex.activity import is_active_work
+    from research_platform.ingestion.deletion_pipeline import (
+        run_openalex_deletions_local_ingest,
+    )
+
+    _seed_works_pg(
+        tmp_path,
+        pg,
+        [_work("W1"), _work("W9", title="Cited")],
+        uri_suffix="refs.gz",
+    )
+    canonical = PostgresCanonicalStore(pg)
+    refs_before = canonical.relationship_counts()["work_references"]
+    assert refs_before >= 1
+
+    del_asset = _deletion_asset()
+    result = run_openalex_deletions_local_ingest(
+        _write_config(tmp_path / "d", tmp_path / "landing-d"),
+        backend="postgres",
+        deletion_asset=del_asset,
+        postgres_connection=pg,
+        object_store=LocalObjectStore(
+            StorageConfig(backend="local", landing_path=tmp_path / "landing-d")
+        ),
+        connector=FakeConnector(
+            assets=[del_asset], payloads={del_asset.file_uri: _gz_csv(["W9"])}
+        ),
+        now=_clock(),
+    )
+    assert result.stats is not None
+    assert result.stats.deleted == 1
+    w1 = canonical.get_work("W1")
+    assert w1 is not None
+    assert is_active_work(w1)
+    assert canonical.relationship_counts()["work_references"] == refs_before

@@ -1,0 +1,124 @@
+"""Validated metadata for one OpenAlex Works deletion asset (Step 13 / #21).
+
+Repository evidence does not pin a single public URI template for
+``deleted_ids.csv.gz``. Step 13 therefore defines an explicit local contract:
+
+- ``entity = works-deletions``
+- ``content_format = csv`` (bytes are gzip-compressed ``.csv.gz``)
+- URI shape: ``s3://openalex/data/csv/works-deletions/.../deleted_ids.csv.gz``
+
+If future OpenAlex snapshot paths differ, adapt the connector mapping here
+rather than inventing silent URI rewrites.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from datetime import date, datetime
+from typing import Literal
+from urllib.parse import urlsplit
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from research_platform.sources.base import SourceAsset
+
+DELETION_ENTITY = "works-deletions"
+DELETION_CONTENT_FORMAT = "csv"
+DELETION_FILENAME = "deleted_ids.csv.gz"
+
+
+class OpenAlexDeletionAssetMetadata(BaseModel):
+    """Identity metadata for one OpenAlex deletion CSV.GZ object."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    source: Literal["openalex"] = "openalex"
+    snapshot_date: date
+    entity: Literal["works-deletions"] = DELETION_ENTITY
+    file_uri: str = Field(min_length=1)
+    byte_size: int | None = Field(default=None, strict=True, ge=0)
+    updated_date: date | None = None
+    content_format: Literal["csv"] = DELETION_CONTENT_FORMAT
+
+    @field_validator("snapshot_date", "updated_date", mode="before")
+    @classmethod
+    def require_calendar_date(cls, value: object) -> object:
+        if isinstance(value, datetime):
+            raise ValueError("date fields must be calendar dates, not timestamps")
+        if value is not None and not isinstance(value, (date, str)):
+            raise ValueError("date fields must be calendar dates or YYYY-MM-DD strings")
+        if isinstance(value, str):
+            try:
+                parsed = date.fromisoformat(value)
+            except ValueError as error:
+                raise ValueError("date fields must use YYYY-MM-DD") from error
+            if parsed.isoformat() != value:
+                raise ValueError("date fields must use YYYY-MM-DD")
+            return parsed
+        return value
+
+    @model_validator(mode="after")
+    def validate_file_uri(self) -> OpenAlexDeletionAssetMetadata:
+        parsed = urlsplit(self.file_uri)
+        if (
+            parsed.scheme != "s3"
+            or parsed.netloc != "openalex"
+            or "?" in self.file_uri
+            or "#" in self.file_uri
+            or any(character.isspace() for character in self.file_uri)
+        ):
+            raise ValueError("file_uri must be a canonical OpenAlex S3 object URI")
+
+        parts = parsed.path.split("/")
+        if (
+            len(parts) < 5
+            or parts[0] != ""
+            or parts[1] != "data"
+            or parts[2] != "csv"
+            or parts[3] != DELETION_ENTITY
+            or parts[-1] != DELETION_FILENAME
+            or any(part in {".", ".."} for part in parts)
+        ):
+            raise ValueError(
+                "deletion file_uri must be under data/csv/works-deletions/…/"
+                f"{DELETION_FILENAME}"
+            )
+
+        for part in parts:
+            if part.startswith("updated_date="):
+                partition_date = part.removeprefix("updated_date=")
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", partition_date):
+                    raise ValueError("updated_date URI partition must use YYYY-MM-DD")
+                try:
+                    date.fromisoformat(partition_date)
+                except ValueError as error:
+                    raise ValueError(
+                        "updated_date URI partition must be a real date"
+                    ) from error
+                if (
+                    self.updated_date is not None
+                    and self.updated_date.isoformat() != partition_date
+                ):
+                    raise ValueError("updated_date does not match the URI partition")
+        return self
+
+    @property
+    def asset_id(self) -> str:
+        """Stable identity distinct from Works-data asset ids."""
+        identity = json.dumps(
+            [
+                self.source,
+                self.snapshot_date.isoformat(),
+                self.entity,
+                self.content_format,
+                self.file_uri,
+            ],
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+        return f"oad-{hashlib.sha256(identity.encode('utf-8')).hexdigest()}"
+
+    def to_source_asset(self) -> SourceAsset:
+        return SourceAsset(source=self.source, identifier=self.asset_id, uri=self.file_uri)

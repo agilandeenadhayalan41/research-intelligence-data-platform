@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import date, datetime
 from enum import StrEnum
+from uuid import UUID
 
+from research_platform.canonical.openalex.deletions import DeletionOutcome
 from research_platform.canonical.openalex.models import CanonicalWorkBundle, Work
 
 
@@ -23,11 +26,29 @@ class CanonicalConflictError(ValueError):
 
 
 class CanonicalStore(ABC):
-    """Portable canonical write surface used by Step 12 ingestion."""
+    """Portable canonical write surface used by Step 12/13 ingestion."""
 
     @abstractmethod
     def upsert_work_bundle(self, bundle: CanonicalWorkBundle) -> CanonicalUpsertOutcome:
-        """Apply one Work bundle with Work versioning and shared-entity reconciliation."""
+        """Apply one Work bundle with Work versioning and shared-entity reconciliation.
+
+        Must not silently resurrect a DELETED Work to ACTIVE (Step 13).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def apply_work_deletion(
+        self,
+        work_id: str,
+        *,
+        deletion_asset_id: str,
+        source_checksum_sha256: str,
+        run_id: UUID,
+        source_updated_date: date | None,
+        processed_at: datetime,
+        deleted_at: datetime,
+    ) -> DeletionOutcome:
+        """Apply a tombstone for ``work_id`` without removing physical history."""
         raise NotImplementedError
 
     @abstractmethod
