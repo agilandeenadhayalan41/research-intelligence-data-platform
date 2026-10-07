@@ -11,8 +11,8 @@ access, proprietary data, or cloud credentials are needed for the default tests.
 
 ## Current status
 
-**Steps 01-08 are complete, and Step 09 adds immutable local raw landing. The full
-data pipeline is not implemented.**
+**Steps 01-09 are complete, and Step 10 adds pipeline-control/provenance
+contracts. The full data pipeline is not implemented.**
 
 | Step | Delivered capability | Implementation boundary |
 | --- | --- | --- |
@@ -25,28 +25,28 @@ data pipeline is not implemented.**
 | 07 | Development sample selector | Deterministic, metadata-only selection with file-count and byte-size bounds |
 | 08 | Bounded source profiling | One-file JSONL/JSONL.GZ streaming sample and footer-first Parquet profile with evidence-classified reports; live payload profile pending public network access |
 | 09 | Immutable local raw landing | `LocalObjectStore` with atomic content/provenance publish, OpenAlex raw key layout, replay/conflict, and offline contract tests |
+| 10 | Pipeline control contracts | `PipelineRun`, `SourceFileControl`, `RecordProvenance`, lifecycle/claim rules, `ControlStore` protocol, and versioned PostgreSQL DDL specs |
 
 Constructing adapters or loading configuration does not connect to services.
-`LocalObjectStore` writes only under the configured local landing path. The GCS
-adapter and provenance model are not a pipeline control database or an ingestion
-implementation.
+`LocalObjectStore` writes only under the configured local landing path. Control
+models and `ControlStore` are contracts only: no database persistence, claims, or
+ingestion loop. The GCS adapter remains a skeleton.
 
-**Still planned:** GCS landing, pipeline control, canonical modeling, ingestion,
-change/deletion processing, analytical models, gold marts, data quality, consumer
-APIs, and orchestration. There is no implemented GCS/BigQuery deployment or
-production pipeline.
+**Still planned:** GCS landing, canonical modeling, ingestion, change/deletion
+processing, analytical models, gold marts, data quality, consumer APIs, and
+orchestration. There is no implemented GCS/BigQuery deployment or production
+pipeline.
 
 ### Next scoped work
 
-**Step 09: immutable local raw landing** is delivered for
-[issue #17](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/17).
-See [immutable local landing](docs/architecture/immutable-local-landing.md) for
-key layout, atomic publication, replay/conflict, and checksum rules. Raw landing
-preserves original OpenAlex bytes (`.gz` or `.parquet`); it does not convert
-JSONL.GZ to Parquet.
+**Step 10: pipeline control and provenance** is delivered for
+[issue #18](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/18).
+See [pipeline control](docs/architecture/pipeline-control.md) for lifecycle,
+claim/lease, idempotency, and the write-boundary protocol. Immutable retrieval
+provenance remains `IngestionProvenance` beside raw objects.
 
-**Step 10: pipeline control and provenance**
-([issue #18](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/18))
+**Step 11: canonical OpenAlex model**
+([issue #15](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/15))
 is next and requires a separate assignment. Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
 as the open umbrella roadmap. Assign one scoped issue at a time and stop after
@@ -288,6 +288,8 @@ tracked YAML or logs.
 | [Public data sources](docs/architecture/public-data-sources.md) | Source priorities and source-specific normalization |
 | [OpenAlex contract](docs/architecture/openalex-manifest-contract.md) | Implemented metadata, parser, selector, connector, and public-access evidence |
 | [OpenAlex source profiling](docs/architecture/openalex-source-profiling.md) | Bounded profiler, evidence classes, verified representations, and format decision |
+| [Immutable local landing](docs/architecture/immutable-local-landing.md) | Raw key layout, atomic publish, replay/conflict, open integrity |
+| [Pipeline control](docs/architecture/pipeline-control.md) | Control models, lifecycle, claims, idempotency, ControlStore boundary |
 | [21-step roadmap](docs/architecture/roadmap.md) | Completed stages and separately scoped future work |
 | [Copilot instructions](.github/copilot-instructions.md) | Engineering rules, phase boundaries, and required validation |
 
@@ -298,12 +300,13 @@ src\research_platform\
   config\                     Validated models and explicit YAML loading
   sources\openalex\            Metadata, parser, selector, connector, profiler, connectivity/profile CLIs
   storage\                    ObjectStore contract; LocalObjectStore; GCS skeleton
+  control\                    Pipeline-control models, lifecycle, ControlStore protocol
   warehouse\                  Warehouse contract; DuckDB/BigQuery/PostgreSQL skeletons
-  provenance\                 Retrieval-provenance model
+  provenance\                 Immutable retrieval-provenance model
   ingestion\ quality\ serving\ Reserved runtime areas
 tests\                        Offline unit/integration tests and synthetic fixtures
 docs\architecture\            Architecture, contracts, source strategy, roadmap
-sql\                          Reserved control/canonical/serving/quality SQL areas
+sql\control\                  Versioned PostgreSQL control DDL specs (not auto-applied)
 scripts\ dags\                Reserved operational tools and later orchestration
 infrastructure\terraform\     Reserved infrastructure; no provisioned resources
 data\                         Ignored runtime-data locations; no committed datasets

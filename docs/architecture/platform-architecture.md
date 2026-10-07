@@ -26,9 +26,11 @@ flowchart LR
 
 The diagram describes the target architecture. The current foundation includes
 configuration, contracts, bounded OpenAlex discovery/retrieval/profiling,
-immutable **local** raw landing (`LocalObjectStore`), and tests. It does not
-implement GCS landing, canonicalization, BigQuery runtime, a Data Service/API, or
-downstream consumers. See [immutable local landing](immutable-local-landing.md).
+immutable **local** raw landing (`LocalObjectStore`), pipeline-control/provenance
+**contracts** (no DB persistence yet), and tests. It does not implement control
+persistence, GCS landing, canonicalization, BigQuery runtime, a Data Service/API,
+or downstream consumers. See [immutable local landing](immutable-local-landing.md)
+and [pipeline control](pipeline-control.md).
 
 ## Layer responsibilities
 
@@ -38,6 +40,10 @@ downstream consumers. See [immutable local landing](immutable-local-landing.md).
   Local landing streams source bytes, verifies SHA-256, and atomically publishes
   content with `IngestionProvenance`. Raw data and provenance are not overwritten;
   identical replay is a no-op and conflicts fail explicitly. GCS landing is later.
+- **Pipeline control (contracts):** typed `PipelineRun` / `SourceFileControl` /
+  `RecordProvenance` models, explicit DISCOVERED→PROCESSING→SUCCESS|FAILED
+  lifecycle, claim/lease rules, and a `ControlStore` write protocol separate from
+  `Warehouse.query()`. Persistence adapters are a later step.
 - **Canonical layer:** normalized, portable schemas independent of PostgreSQL or
   BigQuery. Use Parquet where applicable. Keep entities and relationships
   normalized rather than creating one giant flattened table.
