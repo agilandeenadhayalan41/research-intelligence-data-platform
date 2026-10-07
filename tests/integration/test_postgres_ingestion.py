@@ -693,8 +693,10 @@ def test_deletion_tombstone_survives_reconnect(
     landing = tmp_path / "landing-del"
     config_path = _write_config(tmp_path / "cfg-del", landing)
     object_store = LocalObjectStore(StorageConfig(backend="local", landing_path=landing))
-    canonical_before = PostgresCanonicalStore(pg)
-    rel_before = canonical_before.relationship_counts()
+    # Commit any idle SELECT transaction so later ControlStore.transaction()
+    # blocks commit durably (nested savepoints would not).
+    rel_before = PostgresCanonicalStore(pg).relationship_counts()
+    pg.commit()
 
     result = run_openalex_deletions_local_ingest(
         config_path,
@@ -931,6 +933,7 @@ def test_deletion_reference_to_deleted_target_preserved(
     canonical = PostgresCanonicalStore(pg)
     refs_before = canonical.relationship_counts()["work_references"]
     assert refs_before >= 1
+    pg.commit()
 
     del_asset = _deletion_asset()
     result = run_openalex_deletions_local_ingest(
