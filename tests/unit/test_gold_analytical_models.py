@@ -202,6 +202,42 @@ def test_research_discovery_has_independent_ctes() -> None:
     assert "authors_agg" in text
     assert "topics_agg" in text
     assert "institutions_agg" in text
+    assert "coalesce" in text
+    assert "array<string>[]" in text
+
+
+def test_research_discovery_array_columns_non_nullable() -> None:
+    mart = next(m for m in load_gold_registry() if m.mart_id == "research_discovery")
+    by_name = {c.name: c for c in mart.output_columns}
+    for name in ("author_ids", "topic_ids", "institution_ids"):
+        assert by_name[name].nullable is False
+        assert by_name[name].bq_type == "ARRAY<STRING>"
+
+
+def test_research_discovery_empty_arrays_not_null() -> None:
+    report = validate_gold_semantics_with_duckdb()
+    assert report.ok, report.errors
+    empty = report.results["research_discovery_empty_arrays"]
+    assert empty["work_id"] == "W6"
+    assert empty["author_ids"] == []
+    assert empty["topic_ids"] == []
+    assert empty["institution_ids"] == []
+
+
+def test_publisher_topic_year_rationale_cites_step14_accurately() -> None:
+    mart = next(m for m in load_gold_registry() if m.mart_id == "publisher_topic_year_stats")
+    assert mart.source_pattern_ids == ("publisher-topic-counts",)
+    assert "candidate_materialization: publisher-topic-counts" in mart.materialization_rationale
+    assert "roll up" in mart.materialization_rationale.lower()
+    assert "publisher-topic-year-counts" not in mart.materialization_rationale
+    assert "publisher-topic-year-counts" not in mart.consumer_purpose
+    # Pattern field must remain publisher-topic-counts (not the year candidate id).
+    pattern = next(
+        p
+        for p in load_query_pattern_registry().patterns
+        if p.pattern_id == "publisher-topic-counts"
+    )
+    assert pattern.candidate_materialization == "publisher-topic-counts"
 
 
 def test_institution_topic_has_distinct_works() -> None:

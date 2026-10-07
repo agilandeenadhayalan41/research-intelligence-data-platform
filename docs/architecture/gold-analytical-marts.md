@@ -16,7 +16,7 @@ Authoritative inputs: Step 11 canonical model, Step 13 ACTIVE/deletion Policy A,
 | `research_discovery` | `work_id` | doi-work-lookup, openalex-work-id-lookup | COMPUTE_ON_READ |
 | `journal_author_stats` | `source_id` | unique-authors-per-journal | MATERIALIZATION_CANDIDATE |
 | `publisher_author_stats` | `publisher_id` | unique-authors-per-publisher | MATERIALIZATION_CANDIDATE |
-| `publisher_topic_year_stats` | `publisher_id + topic_id + publication_year` | publisher-topic-counts (+ year candidate) | MATERIALIZATION_CANDIDATE |
+| `publisher_topic_year_stats` | `publisher_id + topic_id + publication_year` | publisher-topic-counts (year grain; Step 14 notes intentional rollup) | MATERIALIZATION_CANDIDATE |
 | `publisher_topic_license_year_stats` | `publisher_id + topic_id + primary_location_license + publication_year` | publisher-topic-license-year | MATERIALIZATION_CANDIDATE |
 | `institution_topic_stats` | `institution_id + topic_id` | institution-topic-relationships | COMPUTE_ON_READ |
 | `publication_trends` | `publication_year` | publication-trends | MATERIALIZATION_CANDIDATE |
@@ -57,7 +57,7 @@ Step 13 Policy A remains authoritative: physical relationship rows for deleted W
 
 Preferred pattern: aggregate multi-valued dimensions **independently**, then join at Work (or mart) grain.
 
-- `research_discovery`: `authors_agg` / `topics_agg` / `institutions_agg` CTEs (deterministic `ARRAY_AGG(... ORDER BY ...)`), never authors × topics × institutions × locations.
+- `research_discovery`: `authors_agg` / `topics_agg` / `institutions_agg` CTEs (deterministic `ARRAY_AGG(... ORDER BY ...)`), never authors × topics × institutions × locations. Absent relationship aggregates `COALESCE` to empty `ARRAY<STRING>[]` (never NULL arrays).
 - `journal_author_stats` / `institution_topic_stats`: `DISTINCT` work grain before author/topic aggregation.
 - `publisher_topic_year_stats`: works ⋈ topics only.
 - `publisher_topic_license_year_stats`: primary location CTE, then topics — never `MIN/MAX/ANY_VALUE(license)`.
@@ -90,7 +90,7 @@ NULL primary license → explicit NULL / UNKNOWN bucket. Never fabricate a licen
 |---|---|
 | missing DOI / title | NULL |
 | missing publication_year | explicit NULL year bucket (not year 0) |
-| missing publisher / source / topic / author / institution | excluded from that dimension grain; discovery arrays omit NULLs |
+| missing publisher / source / topic / author / institution | excluded from that dimension grain; discovery arrays omit NULLs; discovery returns `[]` (not NULL) when a Work has no observations |
 | missing OA status / is_oa | NULL preserved; do not invent `closed` |
 | missing primary license | NULL license bucket |
 | unresolved citation target | retained via LEFT JOIN |
