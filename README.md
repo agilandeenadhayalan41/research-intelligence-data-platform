@@ -253,8 +253,9 @@ working directory. Python does not automatically load `.env`.
 
 The scaffold still includes `warehouse.transactional: postgres`; that setting
 does not implement PostgreSQL persistence or make operational serving mandatory.
-Storage/warehouse adapters remain skeletons. Configuration alignment and runtime
-implementation require separately scoped work.
+GCS and warehouse adapters remain skeletons; `ControlStore` is a fail-fast
+protocol only. Configuration alignment and runtime persistence require separately
+scoped work.
 
 The sandbox template references `GOOGLE_CLOUD_PROJECT`, `GCS_BUCKET`, and
 `BIGQUERY_DATASET`. Future cloud adapters must obtain credentials through approved
