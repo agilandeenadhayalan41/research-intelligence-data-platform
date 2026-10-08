@@ -26,7 +26,7 @@ implemented.
 | 01 | Repository foundation | Python packaging, typed interfaces, structured logging, tests, CI, and optional local PostgreSQL tooling |
 | 02 | Configuration framework | Validated YAML, environment substitution, explicit environment selection, and strict sample limits |
 | 03 | Storage contracts | `ObjectStore` and immutable-write semantics; `GCSObjectStore` adapter (#9) with offline fake-client tests |
-| 04 | Warehouse contracts | Parameterized query/PyArrow interface; `BigQueryWarehouse` (#10) and `PostgreSQLWarehouse` (#7) implement `query`; DuckDB adapter remains a skeleton |
+| 04 | Warehouse contracts | Parameterized query/PyArrow interface; `DuckDBWarehouse` local queries (#8); `BigQueryWarehouse` offline (#10); `PostgreSQLWarehouse` query (#7) |
 | 05 | Bounded OpenAlex connector | Anonymous manifest discovery and separate caller-owned streaming retrieval |
 | 06 | Works manifest parser | Pure parsing, validated metadata, stable identities, and duplicate/conflict handling |
 | 07 | Development sample selector | Deterministic, metadata-only selection with file-count and byte-size bounds |
@@ -57,6 +57,12 @@ approved and is not part of default CI.
 (dry-run + `maximum_bytes_billed`; default tests use an injected fake client —
 no live credentials/network/paid queries). Live dataset validation is
 separately approved and is not part of default CI.
+
+`DuckDBWarehouse` implements local `Warehouse.query` for `:memory:` or an
+explicit DuckDB file path. Construction does not open a connection or create a
+file. Named values are driver-bound (`$name`; supplied `:name` placeholders are
+rewritten to `$name` outside quotes and comments). Local DuckDB queries do not
+prove BigQuery dialect, BigQuery cost, cloud readiness, or production readiness.
 
 `PostgreSQLWarehouse` implements the same read `Warehouse.query` contract for
 PostgreSQL (`%(name)s` placeholders, lazy DSN lookup, PyArrow results). Default
@@ -100,7 +106,9 @@ Keep
 as the open umbrella for deferred/runtime work and live-validation tracking.
 **#9** (GCS) and **#10** (BigQuery) adapter implementations are complete
 (`READY_TO_VALIDATE`) and should be closed; live sandbox smoke is separately
-scoped. Do not automatically start (#7, #8, #23) or claim production readiness.
+scoped. **#7** (PostgreSQL) and **#8** (DuckDB) query adapters are implemented;
+neither is cloud or production evidence. Do not automatically start #23 or
+claim production readiness.
 
 ## Target architecture
 
@@ -308,10 +316,10 @@ working directory. Python does not automatically load `.env`.
 The scaffold still includes `warehouse.transactional: postgres`; that setting
 does not implement PostgreSQL persistence or make operational serving mandatory.
 `GCSObjectStore` and `BigQueryWarehouse` are available with injectable clients
-for offline tests. `PostgreSQLWarehouse` implements read `Warehouse.query`
-(offline by default; local PostgreSQL integration is separate). The DuckDB
-warehouse adapter remains a skeleton. Issue #23 serving projections are not
-implemented.
+for offline tests. `DuckDBWarehouse` executes local queries only.
+`PostgreSQLWarehouse` implements read `Warehouse.query` (offline by default;
+local PostgreSQL integration is separate). Issue #23 serving projections are
+not implemented.
 `ControlStore` is a fail-fast protocol only. Configuration alignment and
 runtime persistence require separately scoped work.
 
@@ -378,7 +386,7 @@ src\research_platform\
   e2e\                        Step 19 bounded SEMANTIC_ONLY composition runner
   orchestration\              Step 20 thin DAG / TaskMessage / retry / publication-scope contracts
   readiness\                  Step 21 environment readiness registry + promotion gates
-  warehouse\                  Warehouse contract; BigQueryWarehouse; PostgreSQLWarehouse query; DuckDB skeleton
+  warehouse\                  Warehouse contract; BigQueryWarehouse; DuckDBWarehouse; PostgreSQLWarehouse
   provenance\                 Immutable retrieval-provenance model
   ingestion\ serving\         Reserved runtime areas
 tests\                        Offline unit/integration tests and synthetic fixtures

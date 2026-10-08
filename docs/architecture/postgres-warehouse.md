@@ -2,7 +2,8 @@
 
 `PostgreSQLWarehouse` implements the existing read `Warehouse.query` contract
 for PostgreSQL. BigQuery remains the first GCP analytical implementation.
-DuckDB remains the local analytical prototype and is unchanged.
+`DuckDBWarehouse` (#8) is the separate local query adapter; this adapter does
+not change it.
 
 This adapter is a supported PostgreSQL **query backend** only. It is not:
 

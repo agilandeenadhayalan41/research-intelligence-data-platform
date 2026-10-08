@@ -17,6 +17,10 @@ environment readiness assessment/contracts are complete (no cloud provisioning).
 
 GCS (#9 / PR #84) and BigQuery (#10 / PR #85) **adapters** are complete offline
 (`READY_TO_VALIDATE`). Live cloud validation is **not yet done**.
+DuckDBWarehouse (#8) implements local query execution only. That local adapter
+is not BigQuery dialect, cost, cloud, or production evidence.
+PostgreSQLWarehouse (#7) implements read `Warehouse.query` offline (fake
+connection by default; local PostgreSQL check is separate).
 
 Explicit remaining gaps (separately scoped; do not start automatically):
 
@@ -34,7 +38,7 @@ Explicit remaining gaps (separately scoped; do not start automatically):
 | 01 | Repository foundation | Complete |
 | 02 | Configuration framework | Complete |
 | 03 | Storage abstraction/contracts | Complete contract; GCSObjectStore adapter in #9 (live sandbox validation separate) |
-| 04 | Warehouse abstraction/contracts | Complete contract; BigQueryWarehouse via #10 (offline); PostgreSQLWarehouse query via #7 (offline); DuckDB adapter separate |
+| 04 | Warehouse abstraction/contracts | Complete contract; BigQueryWarehouse via #10 (offline); DuckDBWarehouse via #8 (local query only; not BigQuery/production evidence); PostgreSQLWarehouse query via #7 (offline) |
 | 05 | Bounded public OpenAlex connector | Complete |
 | 06 | OpenAlex Works manifest parser | Complete |
 | 07 | Bounded deterministic development sample selector | Complete |
@@ -63,7 +67,9 @@ Explicit remaining gaps (separately scoped; do not start automatically):
 | — | HTTP Data Service deployment | Domain contracts only today |
 | — | Cloud IAM / WIF / secrets | Documented; not provisioned |
 | — | Monitoring / cost / network validation | Documented; not verified |
-| #8 / #23 | DuckDB query adapter / operational serving projection | Separately scoped; do not auto-start. #7 does not approve #23 |
+| #8 | DuckDB Warehouse query adapter | Local query adapter implemented; not BigQuery dialect, cost, or production evidence |
+| #7 | PostgreSQL Warehouse query adapter | Read `Warehouse.query` implemented offline (fake connection by default); `make test-postgres-warehouse` is separate; not cloud/AlloyDB evidence and not #23 |
+| #23 | Operational serving projection | Separately scoped; do not auto-start. #7 does not approve #23 |
 
 ## Source extension
 
