@@ -5,8 +5,9 @@ source profiling through consumer delivery. It does not authorize work beyond an
 explicitly scoped task. Steps 01–20 are complete. Step 19 / #27 bounded E2E
 pipeline is complete (local `SEMANTIC_ONLY`). Step 20 / #25 orchestration
 contracts are complete (logical DAG + physical ExecutionUnits; no
-Airflow/Composer/Dataform/GCP deploy). Step 21 / #28 is next. GCS landing and
-later steps remain planned.
+Airflow/Composer/Dataform/GCP deploy). Step 21 / #28 is **ACTIVE**
+(environment readiness contracts; no cloud provisioning). GCS landing (#9),
+BigQuery runtime (#10), and later deploy work remain planned gaps.
 
 ## Completed foundation
 
@@ -33,11 +34,11 @@ later steps remain planned.
 | 19 | Bounded end-to-end pipeline ([details](end-to-end-pipeline.md)) | Complete — one outer `PipelineRun`, reusable Step-12/13 stages, DuckDB `SEMANTIC_ONLY` analytical/Gold, Step-17 gates, atomic local publication, Data Service final validation; no BigQuery/Airflow ([#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27)) |
 | 20 | Orchestration contracts ([details](orchestration.md)) | Complete — thin DAG + physical ExecutionUnits (`WORKS_INGEST_UNIT` = one `ingest_works_asset`), bounded TaskMessage/XCom, recursive safe metadata, retries, publication concurrency scope; no Airflow/Composer/Dataform/GCP deploy ([#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25)) |
 
-## Planned steps
+## Active / planned steps
 
 | Step | Work | Status |
 | --- | --- | --- |
-| 21 | Prepare sandbox/dev/QA/prod readiness documentation for IAM, workload identity, secrets, monitoring, recovery, cost controls, deployment, rollback, lineage, and governance. Do not automatically deploy production. | Next ([#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28)) |
+| 21 | Environment readiness: Sandbox→DEV→QA→PROD matrix, evidence levels, promotion gates, IAM/WIF/secrets/GCS/BigQuery/orchestration gaps; docs/contracts only — no cloud provisioning ([details](environment-readiness.md)) | **ACTIVE** ([#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28)) |
 
 ## Source extension
 
