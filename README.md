@@ -11,10 +11,12 @@ access, proprietary data, or cloud credentials are needed for the default tests.
 
 ## Current status
 
-**Steps 01–20 are complete.** Step 19 / #27 delivered the bounded end-to-end
+**Steps 01–21 are complete.** 21-step implementation/readiness roadmap
+complete. Cloud runtime and deployment gaps remain explicitly documented; this
+does not mean production-ready. Step 19 / #27 delivered the bounded end-to-end
 pipeline (`research_platform.e2e`, local `SEMANTIC_ONLY`). Step 20 / #25
 delivered orchestration contracts (`research_platform.orchestration`).
-**Step 21 / #28 is ACTIVE** (environment readiness contracts in
+**Step 21 / #28 is complete, closed** (environment readiness contracts in
 `research_platform.readiness`; Sandbox→DEV→QA→PROD matrix; no cloud
 provisioning/deploy/PROD access). The full cloud/Airflow pipeline is not
 implemented.
@@ -41,7 +43,7 @@ implemented.
 | 18 | Data Service domain layer | Storage-independent capabilities, capability registry, typed request/response contracts, cursor pagination, freshness/`PUBLISHED_SNAPSHOT`, in-memory `SEMANTIC_ONLY` repository; no HTTP deploy, no raw SQL, no Postgres/AlloyDB serving ([#26](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/26)) |
 | 19 | Bounded end-to-end pipeline | One outer `PipelineRun`, reusable Step-12/13 stages, DuckDB `SEMANTIC_ONLY` analytical/Gold, real Step-17 gates, atomic local publication, Data Service final validation; no BigQuery/Airflow/GCP ([#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27)) |
 | 20 | Orchestration contracts | Thin DAG + physical ExecutionUnits (REGISTER/INGEST/CANONICALIZE → one `WORKS_INGEST_UNIT`), bounded TaskMessage/XCom, recursive safe metadata, retries, backfill bounds, publication concurrency scope (`TEMP_TABLES` recommended), dry-run plan renderer; no Airflow/Composer/Dataform/GCP deploy ([#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25)) |
-| 21 | Environment readiness (ACTIVE) | Truthful Sandbox→DEV→QA→PROD readiness registry, evidence levels, promotion gates, IAM/WIF/secrets/GCS/BigQuery gaps documented; no cloud provisioning ([#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28)) |
+| 21 | Environment readiness | Truthful Sandbox→DEV→QA→PROD readiness registry, evidence levels, promotion gates, IAM/WIF/secrets/GCS/BigQuery gaps documented; no cloud provisioning ([#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28)) |
 
 Constructing adapters or loading configuration does not connect to services.
 `LocalObjectStore` writes only under the configured local landing path. Default
@@ -55,15 +57,18 @@ contracts only — nothing is deployed or MEASURED. Step 20 adds orchestration
 **contracts** only (no scheduler deploy). Step 18 adds no HTTP service and no
 Postgres serving.
 
-### Next scoped work
+### Roadmap completion status
 
-**Steps 01–20 ✅ complete.**
+**Steps 01–21 ✅ complete.**
 
 **Step 21 / [#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28)**
-(**ACTIVE**, pending review/merge): environment readiness contracts
+(complete, closed): environment readiness contracts
 (`research_platform.readiness`) — Sandbox→DEV→QA→PROD matrix, evidence-honest
 statuses, promotion gates. Docs/contracts only; no cloud provisioning, no PROD
 access. See [Environment readiness](docs/architecture/environment-readiness.md).
+
+21-step implementation/readiness roadmap complete. Cloud runtime and deployment
+gaps remain explicitly documented; this does not mean production-ready.
 
 ```text
 LOCAL (evidence only) → GCP_SANDBOX → DEV → QA → PROD
@@ -74,8 +79,8 @@ Composer gaps). Do not equate YAML presence with readiness.
 
 Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
-as the open umbrella roadmap. Assign one scoped issue at a time and stop after
-its reviewable PR; do not reopen completed work or automatically start later steps.
+as the open umbrella roadmap for deferred/runtime work. Do not automatically
+start deferred issues (#7, #8, #9, #10, #23) or claim production readiness.
 
 ## Target architecture
 

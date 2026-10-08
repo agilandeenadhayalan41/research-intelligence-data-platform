@@ -18,6 +18,7 @@ from research_platform.readiness import (
     EnvironmentName,
     EnvironmentOverallStatus,
     ReadinessDomain,
+    ReadinessEntry,
     build_readiness_registry,
     can_promote,
     environment_progression,
@@ -25,6 +26,64 @@ from research_platform.readiness import (
     parse_environment,
     readiness_report,
 )
+
+
+def _synthetic_env_entries(
+    environment: EnvironmentName,
+    *,
+    mandatory_level: EvidenceLevel,
+    optional_level: EvidenceLevel = EvidenceLevel.CLOUD_UNVERIFIED,
+    override_domains: dict[ReadinessDomain, EvidenceLevel] | None = None,
+) -> list[ReadinessEntry]:
+    """Build deterministic synthetic registry rows for one environment."""
+    overrides = override_domains or {}
+    rows: list[ReadinessEntry] = []
+    for domain in DOMAIN_INVENTORY:
+        if domain is ReadinessDomain.OPERATIONAL_STORE_OPTIONAL:
+            level = overrides.get(domain, optional_level)
+            blocking = False
+        else:
+            level = overrides.get(domain, mandatory_level)
+            blocking = level not in {
+                EvidenceLevel.READY_TO_VALIDATE,
+                EvidenceLevel.VERIFIED,
+            }
+        rows.append(
+            ReadinessEntry(
+                domain=domain,
+                environment=environment,
+                evidence_level=level,
+                evidence=f"synthetic {environment.value} {domain.value}={level.value}",
+                gaps=() if not blocking else (f"gap:{domain.value}",),
+                required_next_action="synthetic next action",
+                blocking=blocking,
+            )
+        )
+    return rows
+
+
+def _synthetic_promotion_registry(
+    *,
+    source_level: EvidenceLevel,
+    target_level: EvidenceLevel,
+    source_overrides: dict[ReadinessDomain, EvidenceLevel] | None = None,
+    target_overrides: dict[ReadinessDomain, EvidenceLevel] | None = None,
+    source_env: EnvironmentName = EnvironmentName.GCP_SANDBOX,
+    target_env: EnvironmentName = EnvironmentName.DEV,
+) -> tuple[ReadinessEntry, ...]:
+    """Minimal adjacent Sandbox→DEV registry for promotion gate tests."""
+    return tuple(
+        _synthetic_env_entries(
+            source_env,
+            mandatory_level=source_level,
+            override_domains=source_overrides,
+        )
+        + _synthetic_env_entries(
+            target_env,
+            mandatory_level=target_level,
+            override_domains=target_overrides,
+        )
+    )
 
 
 def test_stable_environment_progression() -> None:
@@ -193,10 +252,128 @@ def test_report_output_deterministic() -> None:
     a = evaluate_environment_readiness(EnvironmentName.DEV).model_dump(mode="json")
     b = evaluate_environment_readiness("dev").model_dump(mode="json")
     assert a == b
-    assert list(a.keys()) == sorted(a.keys()) or True  # stable model fields
+    # Same environment string alias and enum must serialize identically twice.
+    c = evaluate_environment_readiness(EnvironmentName.DEV).model_dump(mode="json")
+    assert a == c
+    assert a["contract_version"] == b["contract_version"]
+    assert a["environment"] == "DEV"
+    assert a["overall_status"] == b["overall_status"]
     # Domain order stable by domain name in registry sort.
     domains = [e["domain"] for e in a["entries"]]
     assert domains == sorted(domains)
+
+
+def test_promotion_denied_when_source_only_ready_to_validate() -> None:
+    """A: source READY_TO_VALIDATE + target READY_TO_VALIDATE => DENIED."""
+    registry = _synthetic_promotion_registry(
+        source_level=EvidenceLevel.READY_TO_VALIDATE,
+        target_level=EvidenceLevel.READY_TO_VALIDATE,
+    )
+    source = evaluate_environment_readiness(
+        EnvironmentName.GCP_SANDBOX, registry=registry
+    )
+    target = evaluate_environment_readiness(EnvironmentName.DEV, registry=registry)
+    assert source.overall_status is EnvironmentOverallStatus.READY_TO_VALIDATE
+    assert target.overall_status is EnvironmentOverallStatus.READY_TO_VALIDATE
+    decision = can_promote(
+        EnvironmentName.GCP_SANDBOX, EnvironmentName.DEV, registry=registry
+    )
+    assert decision.allowed is False
+    assert any("source overall_status must be READY" in r for r in decision.reasons)
+
+
+def test_promotion_allowed_source_verified_target_ready_to_validate() -> None:
+    """B: source VERIFIED + target READY_TO_VALIDATE => ALLOWED."""
+    registry = _synthetic_promotion_registry(
+        source_level=EvidenceLevel.VERIFIED,
+        target_level=EvidenceLevel.READY_TO_VALIDATE,
+    )
+    source = evaluate_environment_readiness(
+        EnvironmentName.GCP_SANDBOX, registry=registry
+    )
+    target = evaluate_environment_readiness(EnvironmentName.DEV, registry=registry)
+    assert source.overall_status is EnvironmentOverallStatus.READY
+    assert target.overall_status is EnvironmentOverallStatus.READY_TO_VALIDATE
+    decision = can_promote(
+        EnvironmentName.GCP_SANDBOX, EnvironmentName.DEV, registry=registry
+    )
+    assert decision.allowed is True
+    assert decision.blocking_domains == ()
+
+
+def test_promotion_allowed_source_and_target_verified() -> None:
+    """C: source VERIFIED + target VERIFIED => ALLOWED."""
+    registry = _synthetic_promotion_registry(
+        source_level=EvidenceLevel.VERIFIED,
+        target_level=EvidenceLevel.VERIFIED,
+    )
+    source = evaluate_environment_readiness(
+        EnvironmentName.GCP_SANDBOX, registry=registry
+    )
+    target = evaluate_environment_readiness(EnvironmentName.DEV, registry=registry)
+    assert source.overall_status is EnvironmentOverallStatus.READY
+    assert target.overall_status is EnvironmentOverallStatus.READY
+    decision = can_promote(
+        EnvironmentName.GCP_SANDBOX, EnvironmentName.DEV, registry=registry
+    )
+    assert decision.allowed is True
+    assert decision.blocking_domains == ()
+
+
+def test_promotion_denied_when_target_has_cloud_unverified_mandatory() -> None:
+    """D: source VERIFIED + target one CLOUD_UNVERIFIED mandatory => DENIED."""
+    registry = _synthetic_promotion_registry(
+        source_level=EvidenceLevel.VERIFIED,
+        target_level=EvidenceLevel.READY_TO_VALIDATE,
+        target_overrides={
+            ReadinessDomain.GCS_RAW_LANDING: EvidenceLevel.CLOUD_UNVERIFIED,
+        },
+    )
+    source = evaluate_environment_readiness(
+        EnvironmentName.GCP_SANDBOX, registry=registry
+    )
+    target = evaluate_environment_readiness(EnvironmentName.DEV, registry=registry)
+    assert source.overall_status is EnvironmentOverallStatus.READY
+    assert target.overall_status is EnvironmentOverallStatus.NOT_READY
+    assert ReadinessDomain.GCS_RAW_LANDING in target.mandatory_blocking_domains
+    decision = can_promote(
+        EnvironmentName.GCP_SANDBOX, EnvironmentName.DEV, registry=registry
+    )
+    assert decision.allowed is False
+    assert ReadinessDomain.GCS_RAW_LANDING in decision.blocking_domains
+
+
+def test_promotion_ignores_optional_operational_store() -> None:
+    """E: OPERATIONAL_STORE_OPTIONAL remains irrelevant to promotion."""
+    registry = _synthetic_promotion_registry(
+        source_level=EvidenceLevel.VERIFIED,
+        target_level=EvidenceLevel.READY_TO_VALIDATE,
+        source_overrides={
+            ReadinessDomain.OPERATIONAL_STORE_OPTIONAL: EvidenceLevel.BLOCKED,
+        },
+        target_overrides={
+            ReadinessDomain.OPERATIONAL_STORE_OPTIONAL: EvidenceLevel.BLOCKED,
+        },
+    )
+    source = evaluate_environment_readiness(
+        EnvironmentName.GCP_SANDBOX, registry=registry
+    )
+    target = evaluate_environment_readiness(EnvironmentName.DEV, registry=registry)
+    assert source.overall_status is EnvironmentOverallStatus.READY
+    assert target.overall_status is EnvironmentOverallStatus.READY_TO_VALIDATE
+    assert (
+        ReadinessDomain.OPERATIONAL_STORE_OPTIONAL
+        not in source.mandatory_blocking_domains
+    )
+    assert (
+        ReadinessDomain.OPERATIONAL_STORE_OPTIONAL
+        not in target.mandatory_blocking_domains
+    )
+    decision = can_promote(
+        EnvironmentName.GCP_SANDBOX, EnvironmentName.DEV, registry=registry
+    )
+    assert decision.allowed is True
+    assert ReadinessDomain.OPERATIONAL_STORE_OPTIONAL not in decision.blocking_domains
 
 
 def test_registry_complete_for_all_domains_and_envs() -> None:

@@ -3,7 +3,7 @@
 **Status:** COMPLETE — contracts and deterministic local validation only.  
 Package: `research_platform.orchestration` (`orchestration-contract-v1.1`)  
 Issue: [#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25) (CLOSED)  
-Umbrella: [#2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2) (remains OPEN; Step 21 / #28 next)
+Umbrella: [#2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2) (remains OPEN; 21-step roadmap complete)
 
 ### Explicit non-claims
 
