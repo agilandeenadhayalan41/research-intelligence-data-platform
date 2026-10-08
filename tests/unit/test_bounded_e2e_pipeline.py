@@ -173,20 +173,25 @@ class FakeConnector:
         *,
         assets: list[OpenAlexAssetMetadata],
         payloads: dict[str, bytes],
+        select_all: bool = False,
     ) -> None:
         self._assets = assets
         self._payloads = payloads
+        self._select_all = select_all
+        self.fetch_calls = 0
 
     def discover_metadata(self) -> OpenAlexSampleSelection:
+        selected = tuple(self._assets) if self._select_all else tuple(self._assets[:1])
         return OpenAlexSampleSelection(
             max_files=1,
             max_file_size_bytes=25_000_000,
             eligible_count=len(self._assets),
-            selected=tuple(self._assets[:1]),
+            selected=selected,
             skipped=(),
         )
 
     def fetch(self, asset: SourceAsset) -> BinaryIO:
+        self.fetch_calls += 1
         return io.BytesIO(self._payloads[asset.uri])
 
 
@@ -681,12 +686,17 @@ def test_recovery_same_staged_version() -> None:
 
 
 def test_final_validation_failure(tmp_path: Path) -> None:
-    result = _run_ok(tmp_path, force_final_validation_fail=True)
+    pubs = InMemoryPublicationStore()
+    result = _run_ok(
+        tmp_path, force_final_validation_fail=True, publication_store=pubs
+    )
     assert not result.success
     assert result.run.status is PipelineRunStatus.FAILED
     assert next(
         s for s in result.stages if s.stage is StageName.FINAL_VALIDATION
     ).status is StageStatus.FAILED
+    # First publication: final-validation failure must leave no current.
+    assert pubs.current() is None
 
 
 def test_safe_summaries(tmp_path: Path) -> None:
@@ -758,3 +768,363 @@ def test_step12_top_level_still_creates_own_run(tmp_path: Path) -> None:
 
 def test_reusable_ingest_works_asset_exported() -> None:
     assert callable(ingest_works_asset)
+
+
+# ---------------------------------------------------------------------------
+# Correctness hardening
+# ---------------------------------------------------------------------------
+
+
+def test_true_unknown_deletion_before_stale_active(tmp_path: Path) -> None:
+    """W absent → deletion T2 → stale ACTIVE T1 must NOT expose W."""
+    from research_platform.service.contracts import ResearchDiscoveryRequest
+
+    control = InMemoryControlStore()
+    canonical = InMemoryCanonicalStore()
+    pubs = InMemoryPublicationStore()
+    del_asset = _deletion_asset()
+    # No Works asset first — only apply unknown-work deletion via stage path
+    # Seed empty works run with a dummy that we skip by using deletion-only
+    # through direct barrier + later E2E stale ingest.
+    landing = tmp_path / "landing"
+    cfg = _write_config(tmp_path / "cfg", landing)
+    # Apply unknown deletion under a works+deletion run with empty-related works
+    # that don't include W99, then ingest stale W99.
+    seed_asset = _asset(uri_suffix="part_seed.gz")
+    r1 = run_bounded_e2e_pipeline(
+        cfg,
+        works_connector=FakeConnector(
+            assets=[seed_asset],
+            payloads={seed_asset.file_uri: _gz_jsonl([_work("W1")])},
+        ),
+        deletion_asset=del_asset,
+        deletion_connector=FakeDeletionConnector(
+            {del_asset.file_uri: _gz_csv([("W99", "2024-02-01")])}
+        ),
+        control_store=control,
+        canonical_store=canonical,
+        object_store=LocalObjectStore(
+            StorageConfig(backend="local", landing_path=landing)
+        ),
+        publication_store=pubs,
+        now=_clock(),
+    )
+    assert r1.success
+    assert canonical.get_work("W99") is None
+    assert canonical.deletion_barriers().get("W99") == date(2024, 2, 1)
+
+    stale = _asset(uri_suffix="part_stale_w99.gz", updated=date(2024, 1, 10))
+    r2 = run_bounded_e2e_pipeline(
+        cfg,
+        works_connector=FakeConnector(
+            assets=[stale],
+            payloads={
+                stale.file_uri: _gz_jsonl(
+                    [_work("W99", title="Stale", updated="2024-01-10")]
+                )
+            },
+        ),
+        control_store=control,
+        canonical_store=canonical,
+        object_store=LocalObjectStore(
+            StorageConfig(backend="local", landing_path=landing)
+        ),
+        publication_store=pubs,
+        now=_clock(),
+    )
+    assert r2.success
+    assert canonical.get_work("W99") is None
+    current = pubs.current()
+    assert current is not None
+    svc = DataService(current.repository)
+    with pytest.raises(ServiceErrorException) as ei:
+        svc.get_work(WorkMetadataRequest(work_id="W99"))
+    assert ei.value.error.code is ServiceErrorCode.NOT_FOUND
+    page = svc.search_research(ResearchDiscoveryRequest())
+    assert all(w.work_id != "W99" for w in page.data.items)
+
+
+def test_unknown_deletion_barrier_rollback() -> None:
+    from research_platform.control.models import (
+        ControlStatus,
+        PipelineRun,
+        SourceFileControl,
+    )
+    from research_platform.persistence.memory_deletion_unit_of_work import (
+        publish_claimed_deletions_memory,
+    )
+    from research_platform.persistence.deletion_unit_of_work import (
+        DeletionPublishRequest,
+    )
+    from research_platform.provenance.models import IngestionProvenance
+    from research_platform.ingestion.deletions_csv import DeletedWorkRecord
+    from uuid import uuid4
+
+    control = InMemoryControlStore()
+    canonical = InMemoryCanonicalStore()
+    run = control.create_pipeline_run(
+        PipelineRun.model_validate(
+            {
+                "run_id": uuid4(),
+                "source": "openalex",
+                "pipeline_name": "test",
+                "status": PipelineRunStatus.PROCESSING,
+                "attempt": 1,
+                "started_at": _ts(),
+                "created_at": _ts(),
+                "updated_at": _ts(),
+            }
+        )
+    )
+    token = uuid4()
+    asset_id = "del-barrier-rollback"
+    control.register_source_file(
+        SourceFileControl.model_validate(
+            {
+                "asset_id": asset_id,
+                "run_id": run.run_id,
+                "source": "openalex",
+                "entity": "works-deletions",
+                "source_uri": "s3://x/del.csv.gz",
+                "snapshot_date": date(2024, 2, 5),
+                "updated_date": date(2024, 2, 1),
+                "content_format": "csv",
+                "declared_size_bytes": 10,
+                "status": ControlStatus.DISCOVERED,
+                "attempt_count": 0,
+                "created_at": _ts(),
+                "updated_at": _ts(),
+            }
+        )
+    )
+    control.claim_source_file(
+        asset_id,
+        run_id=run.run_id,
+        claimed_by="t",
+        claim_token=token,
+        claimed_at=_ts(),
+        lease_expires_at=_ts(hour=2),
+    )
+    provenance = IngestionProvenance.model_validate(
+        {
+            "run_id": run.run_id,
+            "source": "openalex",
+            "source_uri": "s3://x/del.csv.gz",
+            "retrieved_at": _ts(),
+            "sha256": "a" * 64,
+        }
+    )
+
+    def boom():
+        yield DeletedWorkRecord(work_id="W77", deleted_date=date(2024, 2, 1))
+        raise RuntimeError("force rollback")
+
+    with pytest.raises(RuntimeError):
+        publish_claimed_deletions_memory(
+            control,
+            canonical,
+            DeletionPublishRequest(
+                asset_id=asset_id,
+                claim_token=token,
+                now=_ts(),
+                processed_at=_ts(),
+                raw_object_key="openalex/raw/del.csv.gz",
+                source_checksum_sha256="a" * 64,
+                source_uri="s3://x/del.csv.gz",
+                source_updated_date=date(2024, 2, 1),
+                retrieval_provenance=provenance,
+                open_records=boom,
+            ),
+        )
+    assert canonical.deletion_barriers() == {}
+
+
+def test_replay_reconciliation_all_zeros(tmp_path: Path) -> None:
+    from research_platform.e2e.runner import _expectation_from_stats
+
+    control = InMemoryControlStore()
+    canonical = InMemoryCanonicalStore()
+    pubs = InMemoryPublicationStore()
+    asset = _asset()
+    landing = tmp_path / "landing"
+    cfg = _write_config(tmp_path / "cfg", landing)
+    connector = FakeConnector(
+        assets=[asset], payloads={asset.file_uri: _gz_jsonl([_work("W1")])}
+    )
+    first = run_bounded_e2e_pipeline(
+        cfg,
+        works_connector=connector,
+        control_store=control,
+        canonical_store=canonical,
+        object_store=LocalObjectStore(
+            StorageConfig(backend="local", landing_path=landing)
+        ),
+        publication_store=pubs,
+        now=_clock(),
+    )
+    assert first.success
+    # Direct unit: replay expectation is all zeros
+    zeros = _expectation_from_stats(None, replay=True)
+    assert zeros.source_records_seen == 0
+    assert zeros.source_records_decoded == 0
+    assert zeros.records_mapped_successfully == 0
+    assert zeros.records_rejected == 0
+    assert zeros.unique_work_ids_evaluated == 0
+    assert zeros.identical == 0
+
+    second = run_bounded_e2e_pipeline(
+        cfg,
+        works_connector=connector,
+        control_store=control,
+        canonical_store=canonical,
+        object_store=LocalObjectStore(
+            StorageConfig(backend="local", landing_path=landing)
+        ),
+        publication_store=pubs,
+        now=_clock(),
+    )
+    assert second.success
+    assert second.pre_serving_report is not None
+    assert second.pre_serving_report.publication_allowed
+
+
+def test_duplicate_observations_not_rejected() -> None:
+    from research_platform.e2e.runner import _expectation_from_stats
+    from research_platform.ingestion.pipeline import FileIngestStats
+
+    # Two observations of same work: provenance=2, insert+identical=2
+    stats = FileIngestStats(
+        asset_id="a",
+        works_inserted=1,
+        works_identical=1,
+        works_replaced=0,
+        works_stale=0,
+        record_provenance_count=2,
+    )
+    exp = _expectation_from_stats(stats, replay=False)
+    assert exp.source_records_decoded == 2
+    assert exp.records_mapped_successfully == 2
+    assert exp.records_rejected == 0
+    assert exp.unique_work_ids_evaluated == 2
+    assert exp.inserted + exp.identical == 2
+
+
+def test_final_validation_failure_restores_old_current(tmp_path: Path) -> None:
+    pubs = InMemoryPublicationStore()
+    first = _run_ok(tmp_path / "a", publication_store=pubs)
+    assert first.success
+    old = pubs.current()
+    assert old is not None
+    second = _run_ok(
+        tmp_path / "b",
+        publication_store=pubs,
+        force_final_validation_fail=True,
+        control=InMemoryControlStore(),
+        canonical=InMemoryCanonicalStore(),
+        asset=_asset(uri_suffix="part_b.gz"),
+    )
+    assert not second.success
+    assert pubs.current() is old
+
+
+def test_over_bound_selected_assets_fail_without_fetch(tmp_path: Path) -> None:
+    a1 = _asset(uri_suffix="p1.gz")
+    a2 = _asset(uri_suffix="p2.gz")
+    landing = tmp_path / "landing"
+    cfg = _write_config(tmp_path / "cfg", landing)
+    connector = FakeConnector(
+        assets=[a1, a2],
+        payloads={
+            a1.file_uri: _gz_jsonl([_work("W1")]),
+            a2.file_uri: _gz_jsonl([_work("W2")]),
+        },
+        select_all=True,
+    )
+    result = run_bounded_e2e_pipeline(
+        cfg,
+        works_connector=connector,
+        object_store=LocalObjectStore(
+            StorageConfig(backend="local", landing_path=landing)
+        ),
+        now=_clock(),
+    )
+    assert not result.success
+    select = next(s for s in result.stages if s.stage is StageName.SELECT)
+    assert select.status is StageStatus.FAILED
+    assert connector.fetch_calls == 0
+
+
+def test_invalid_non_local_config_fails_before_discovery(tmp_path: Path) -> None:
+    asset = _asset()
+    landing = tmp_path / "landing"
+    path = tmp_path / "cfg"
+    path.mkdir(parents=True)
+    bad = {
+        "environment": "dev",
+        "log_level": "INFO",
+        "source": "openalex",
+        "storage": {"backend": "local", "landing_path": str(landing)},
+        "warehouse": {
+            "transactional": "postgres",
+            "analytical": "duckdb",
+            "postgres_dsn_env": "POSTGRES_DSN",
+            "duckdb_path": ":memory:",
+        },
+        "sample_selection": {"max_files": 1, "max_file_size_bytes": 25_000_000},
+    }
+    cfg = path / "dev.yaml"
+    cfg.write_text(yaml.safe_dump(bad), encoding="utf-8")
+    connector = FakeConnector(
+        assets=[asset], payloads={asset.file_uri: _gz_jsonl([_work("W1")])}
+    )
+    with pytest.raises(ValueError, match="environment=local"):
+        run_bounded_e2e_pipeline(
+            cfg,
+            works_connector=connector,
+            object_store=LocalObjectStore(
+                StorageConfig(backend="local", landing_path=landing)
+            ),
+            now=_clock(),
+        )
+    assert connector.fetch_calls == 0
+    # discover must also not have been needed — connector unused for fetch
+    assert connector.fetch_calls == 0
+
+
+def test_caller_supplied_publication_version(tmp_path: Path) -> None:
+    result = _run_ok(tmp_path, publication_version="pub-custom-v1")
+    assert result.success
+    assert result.publication_version == "pub-custom-v1"
+    pubs_stage = next(
+        s for s in result.stages if s.stage is StageName.CONSUMER_PUBLICATION
+    )
+    assert pubs_stage.message == "pub-custom-v1"
+    assert result.final_validation is not None
+    assert result.final_validation.publication_version == "pub-custom-v1"
+
+
+def test_step15_and_step16_static_validation_enforced(tmp_path: Path) -> None:
+    result = _run_ok(tmp_path)
+    assert result.success
+    analytical = next(s for s in result.stages if s.stage is StageName.ANALYTICAL_MODELS)
+    gold = next(s for s in result.stages if s.stage is StageName.STAGED_GOLD)
+    assert analytical.status is StageStatus.SUCCESS
+    assert gold.status is StageStatus.SUCCESS
+
+
+def test_step16_reuses_shared_gold_builder() -> None:
+    from research_platform.analytics.gold import validation as gold_validation
+    from research_platform.analytics.gold import semantic_build
+
+    src = gold_validation.validate_gold_semantics_with_duckdb.__code__.co_names
+    assert "build_all_gold_marts" in src
+    report = gold_validation.validate_gold_semantics_with_duckdb()
+    assert report.ok
+    assert semantic_build.build_all_gold_marts is not None
+
+
+def test_consumer_repository_public_fingerprint() -> None:
+    repo = build_reference_fixture()
+    snap = repo.snapshot()
+    assert snap.content_fingerprint() == repo.content_fingerprint()
+    assert "W001" in {w.work_id for w in snap.works}

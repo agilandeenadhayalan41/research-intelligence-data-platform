@@ -39,6 +39,7 @@ from research_platform.service.registry import (
 )
 from research_platform.service.repository import (
     ConsumerDataRepository,
+    ConsumerRepositorySnapshot,
     InMemoryConsumerRepository,
     build_reference_fixture,
 )
@@ -52,6 +53,7 @@ __all__ = [
     "CapabilityContract",
     "ConsistencySemantics",
     "ConsumerDataRepository",
+    "ConsumerRepositorySnapshot",
     "DataService",
     "FreshnessMetadata",
     "FreshnessStatus",

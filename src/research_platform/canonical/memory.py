@@ -93,6 +93,9 @@ class InMemoryCanonicalStore(CanonicalStore):
         self._work_mesh: dict[tuple[str, int], WorkMesh] = {}
         self._work_locations: dict[tuple[str, int], WorkLocation] = {}
         self._work_grants: dict[tuple[str, int], WorkGrant] = {}
+        # Unknown-work deletion ledger: work_id -> authoritative deleted_date.
+        # Not a fabricated bibliographic Work row; blocks stale ACTIVE resurrection.
+        self._deletion_barriers: dict[str, date] = {}
 
     def get_work(self, work_id: str) -> Work | None:
         with self._lock:
@@ -190,10 +193,21 @@ class InMemoryCanonicalStore(CanonicalStore):
                 ),
             )
 
+    def deletion_barriers(self) -> dict[str, date]:
+        """Public copy of unknown-work deletion barriers (work_id -> deleted_date)."""
+        with self._lock:
+            return dict(self._deletion_barriers)
+
     def upsert_work_bundle(self, bundle: CanonicalWorkBundle) -> CanonicalUpsertOutcome:
         with self._lock:
             existing = self._works.get(bundle.work.work_id)
             if existing is None:
+                barrier_block = _barrier_blocks_active_insert(
+                    self._deletion_barriers.get(bundle.work.work_id),
+                    bundle.work,
+                )
+                if barrier_block is not None:
+                    return barrier_block
                 self._apply_bundle(bundle, replace_relationships=True)
                 return CanonicalUpsertOutcome.INSERTED
 
@@ -232,6 +246,10 @@ class InMemoryCanonicalStore(CanonicalStore):
             existing = self._works.get(work_id)
             outcome = classify_deletion(existing, deleted_date=deleted_date)
             if outcome is DeletionOutcome.UNKNOWN_WORK:
+                # Retain authoritative deletion barrier without fabricating a Work.
+                prior = self._deletion_barriers.get(work_id)
+                if prior is None or deleted_date >= prior:
+                    self._deletion_barriers[work_id] = deleted_date
                 return outcome
             if outcome in {DeletionOutcome.ALREADY_DELETED, DeletionOutcome.STALE}:
                 return outcome
@@ -245,6 +263,8 @@ class InMemoryCanonicalStore(CanonicalStore):
                 processed_at=processed_at,
                 deleted_at=deleted_at,
             )
+            # Keep barrier aligned with known tombstone for consistent lookups.
+            self._deletion_barriers[work_id] = deleted_date
             return DeletionOutcome.DELETED
 
     def _apply_bundle(
@@ -365,5 +385,23 @@ def _deletion_blocks_active_upsert(
         return CanonicalUpsertOutcome.STALE
     raise RestoreRequiredError(
         f"work {existing.work_id} is DELETED; newer active ingestion requires "
+        "explicit restore reconciliation (RESTORE_REQUIRED)"
+    )
+
+
+def _barrier_blocks_active_insert(
+    barrier_date: date | None, incoming: Work
+) -> CanonicalUpsertOutcome | None:
+    """Block insert when an unknown-work deletion barrier precedes the observation."""
+    if barrier_date is None:
+        return None
+    if incoming.lineage.activity_state is CanonicalActivityState.DELETED:
+        return None
+    incoming_date = incoming.lineage.source_updated_date
+    if incoming_date is None or incoming_date <= barrier_date:
+        return CanonicalUpsertOutcome.STALE
+    raise RestoreRequiredError(
+        f"work {incoming.work_id} has unknown-work deletion barrier at "
+        f"{barrier_date.isoformat()}; newer active ingestion requires "
         "explicit restore reconciliation (RESTORE_REQUIRED)"
     )

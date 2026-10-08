@@ -28,6 +28,7 @@ from research_platform.analytics.gold.registry import (
     load_gold_registry,
     serialize_gold_registry,
 )
+from research_platform.analytics.gold.semantic_build import build_all_gold_marts
 from research_platform.benchmarks.registry import load_query_pattern_registry
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -321,47 +322,15 @@ def validate_gold_semantics_with_duckdb() -> SemanticValidationReport:
     conn = duckdb.connect(database=":memory:")
     try:
         _seed_gold_semantic_fixture(conn)
+        # Shared reusable builder (Step 16 + Step 19) — no second SQL dialect.
+        build_all_gold_marts(conn)
 
         # --- research_discovery ---
         discovery = conn.execute(
             """
-            WITH active_works AS (
-              SELECT * FROM works WHERE activity_state = 'ACTIVE'
-            ),
-            authors_agg AS (
-              SELECT work_id,
-                     list_sort(list_distinct(list(author_id))) AS author_ids
-              FROM work_authors
-              WHERE author_id IS NOT NULL
-                AND work_id IN (SELECT work_id FROM active_works)
-              GROUP BY work_id
-            ),
-            topics_agg AS (
-              SELECT work_id,
-                     list_sort(list_distinct(list(topic_id))) AS topic_ids
-              FROM work_topics
-              WHERE topic_id IS NOT NULL
-                AND work_id IN (SELECT work_id FROM active_works)
-              GROUP BY work_id
-            ),
-            institutions_agg AS (
-              SELECT work_id,
-                     list_sort(list_distinct(list(institution_id))) AS institution_ids
-              FROM work_author_institutions
-              WHERE institution_id IS NOT NULL
-                AND work_id IN (SELECT work_id FROM active_works)
-              GROUP BY work_id
-            )
-            SELECT
-              aw.work_id,
-              COALESCE(aa.author_ids, CAST([] AS VARCHAR[])) AS author_ids,
-              COALESCE(ta.topic_ids, CAST([] AS VARCHAR[])) AS topic_ids,
-              COALESCE(ia.institution_ids, CAST([] AS VARCHAR[])) AS institution_ids
-            FROM active_works aw
-            LEFT JOIN authors_agg aa ON aa.work_id = aw.work_id
-            LEFT JOIN topics_agg ta ON ta.work_id = aw.work_id
-            LEFT JOIN institutions_agg ia ON ia.work_id = aw.work_id
-            ORDER BY aw.work_id
+            SELECT work_id, author_ids, topic_ids, institution_ids
+            FROM gold_research_discovery
+            ORDER BY work_id
             """
         ).fetchall()
         results["research_discovery"] = discovery
@@ -401,7 +370,6 @@ def validate_gold_semantics_with_duckdb() -> SemanticValidationReport:
             """
         ).fetchone()[0]
         results["unsafe_w1_cartesian"] = unsafe
-        # authors(3) × topics(3) × institutions(3) × locations(3) = 81
         if unsafe <= 3:
             errors.append(f"fixture fan-out too weak for inflation test: {unsafe}")
         safe_rows = len([r for r in discovery if r[0] == "W1"])
@@ -412,80 +380,39 @@ def validate_gold_semantics_with_duckdb() -> SemanticValidationReport:
         # --- journal_author_stats ---
         journal = conn.execute(
             """
-            WITH source_works AS (
-              SELECT DISTINCT wl.source_id, wl.work_id
-              FROM work_locations wl
-              JOIN works w ON w.work_id = wl.work_id
-              WHERE w.activity_state = 'ACTIVE' AND wl.source_id IS NOT NULL
-            ),
-            work_counts AS (
-              SELECT source_id, COUNT(*) AS active_work_count
-              FROM source_works GROUP BY source_id
-            ),
-            author_counts AS (
-              SELECT sw.source_id, COUNT(DISTINCT wa.author_id) AS unique_author_count
-              FROM source_works sw
-              JOIN work_authors wa ON wa.work_id = sw.work_id
-              WHERE wa.author_id IS NOT NULL
-              GROUP BY sw.source_id
-            )
-            SELECT wc.source_id, COALESCE(ac.unique_author_count, 0), wc.active_work_count
-            FROM work_counts wc
-            LEFT JOIN author_counts ac ON ac.source_id = wc.source_id
-            ORDER BY wc.source_id
+            SELECT source_id, unique_author_count, active_work_count
+            FROM gold_journal_author_stats
+            ORDER BY source_id
             """
         ).fetchall()
         results["journal_author_stats"] = journal
         s1 = next(r for r in journal if r[0] == "S1")
-        # S1 ACTIVE works: W1, W4 (W2 deleted). Authors A1, A2. Multi-location no inflate.
         if s1[1] != 2 or s1[2] != 2:
             errors.append(f"S1 journal stats unexpected: {s1}")
 
         # --- publisher_author_stats ---
         pub_auth = conn.execute(
             """
-            WITH publisher_works AS (
-              SELECT work_id, primary_publisher_id AS publisher_id
-              FROM works
-              WHERE activity_state = 'ACTIVE' AND primary_publisher_id IS NOT NULL
-            ),
-            work_counts AS (
-              SELECT publisher_id, COUNT(*) AS active_work_count
-              FROM publisher_works GROUP BY publisher_id
-            ),
-            author_counts AS (
-              SELECT pw.publisher_id, COUNT(DISTINCT wa.author_id) AS unique_author_count
-              FROM publisher_works pw
-              JOIN work_authors wa ON wa.work_id = pw.work_id
-              WHERE wa.author_id IS NOT NULL
-              GROUP BY pw.publisher_id
-            )
-            SELECT wc.publisher_id, COALESCE(ac.unique_author_count, 0), wc.active_work_count
-            FROM work_counts wc
-            LEFT JOIN author_counts ac ON ac.publisher_id = wc.publisher_id
-            ORDER BY wc.publisher_id
+            SELECT publisher_id, unique_author_count, active_work_count
+            FROM gold_publisher_author_stats
+            ORDER BY publisher_id
             """
         ).fetchall()
         results["publisher_author_stats"] = pub_auth
         p1 = next(r for r in pub_auth if r[0] == "P1")
-        # P1: W1+W4 → authors A1,A2; works 2
         if p1 != ("P1", 2, 2):
             errors.append(f"P1 publisher_author_stats unexpected: {p1}")
 
         # --- publisher_topic_year_stats ---
         pty = conn.execute(
             """
-            SELECT primary_publisher_id AS publisher_id, topic_id, publication_year,
-                   COUNT(DISTINCT w.work_id)
-            FROM works w
-            JOIN work_topics wt ON wt.work_id = w.work_id
-            WHERE w.activity_state = 'ACTIVE' AND w.primary_publisher_id = 'P1'
-            GROUP BY 1, 2, 3
-            ORDER BY 2, 3
+            SELECT publisher_id, topic_id, publication_year, active_work_count
+            FROM gold_publisher_topic_year_stats
+            WHERE publisher_id = 'P1'
+            ORDER BY topic_id, publication_year
             """
         ).fetchall()
         results["publisher_topic_year_stats"] = pty
-        # W1(2020): T1,T2,T3; W4(2019): T1 — no author fan-out
         if ("P1", "T1", 2020, 1) not in pty or ("P1", "T1", 2019, 1) not in pty:
             errors.append(f"publisher_topic_year unexpected: {pty}")
         if any(r[3] > 1 and r[1] == "T2" for r in pty):
@@ -494,17 +421,9 @@ def validate_gold_semantics_with_duckdb() -> SemanticValidationReport:
         # --- publisher_topic_license_year ---
         ptl = conn.execute(
             """
-            WITH primary_license AS (
-              SELECT work_id, license AS primary_location_license
-              FROM work_locations WHERE is_primary = TRUE
-            )
-            SELECT w.primary_publisher_id, wt.topic_id, pl.primary_location_license,
-                   w.publication_year, COUNT(DISTINCT w.work_id)
-            FROM works w
-            JOIN work_topics wt ON wt.work_id = w.work_id
-            LEFT JOIN primary_license pl ON pl.work_id = w.work_id
-            WHERE w.activity_state = 'ACTIVE'
-            GROUP BY 1, 2, 3, 4
+            SELECT publisher_id, topic_id, primary_location_license,
+                   publication_year, active_work_count
+            FROM gold_publisher_topic_license_year_stats
             """
         ).fetchall()
         results["publisher_topic_license_year_stats"] = ptl
@@ -518,21 +437,12 @@ def validate_gold_semantics_with_duckdb() -> SemanticValidationReport:
         # --- institution_topic_stats ---
         it = conn.execute(
             """
-            WITH institution_works AS (
-              SELECT DISTINCT wai.institution_id, wai.work_id
-              FROM work_author_institutions wai
-              JOIN works w ON w.work_id = wai.work_id
-              WHERE w.activity_state = 'ACTIVE' AND wai.institution_id IS NOT NULL
-            )
-            SELECT iw.institution_id, wt.topic_id, COUNT(DISTINCT iw.work_id)
-            FROM institution_works iw
-            JOIN work_topics wt ON wt.work_id = iw.work_id
-            GROUP BY 1, 2
-            ORDER BY 1, 2
+            SELECT institution_id, topic_id, active_work_count
+            FROM gold_institution_topic_stats
+            ORDER BY institution_id, topic_id
             """
         ).fetchall()
         results["institution_topic_stats"] = it
-        # I1 × T1: W1 only (not multiplied by dual I1 authorships); W2 deleted
         i1_t1 = next((r for r in it if r[0] == "I1" and r[1] == "T1"), None)
         if i1_t1 != ("I1", "T1", 1):
             errors.append(f"I1/T1 must be 1 work after DISTINCT: {i1_t1}")
@@ -540,9 +450,8 @@ def validate_gold_semantics_with_duckdb() -> SemanticValidationReport:
         # --- publication_trends ---
         trends = conn.execute(
             """
-            SELECT publication_year, COUNT(*)
-            FROM works WHERE activity_state = 'ACTIVE'
-            GROUP BY publication_year
+            SELECT publication_year, active_work_count
+            FROM gold_publication_trends
             ORDER BY publication_year NULLS LAST
             """
         ).fetchall()
@@ -555,10 +464,9 @@ def validate_gold_semantics_with_duckdb() -> SemanticValidationReport:
         # --- open_access_trends ---
         oa = conn.execute(
             """
-            SELECT publication_year, oa_status, COUNT(*)
-            FROM works WHERE activity_state = 'ACTIVE'
-            GROUP BY 1, 2
-            ORDER BY 1 NULLS LAST, 2 NULLS LAST
+            SELECT publication_year, oa_status, active_work_count
+            FROM gold_open_access_trends
+            ORDER BY publication_year NULLS LAST, oa_status NULLS LAST
             """
         ).fetchall()
         results["open_access_trends"] = oa
@@ -570,13 +478,10 @@ def validate_gold_semantics_with_duckdb() -> SemanticValidationReport:
         # --- citation_edges ---
         cites = conn.execute(
             """
-            SELECT wr.work_id AS source_work_id, wr.reference_index,
-                   wr.referenced_work_id, wr.reference_status,
-                   tw.activity_state AS target_activity_state
-            FROM work_references wr
-            JOIN works sw ON sw.work_id = wr.work_id AND sw.activity_state = 'ACTIVE'
-            LEFT JOIN works tw ON tw.work_id = wr.referenced_work_id
-            ORDER BY 1, 2
+            SELECT source_work_id, reference_index, referenced_work_id,
+                   reference_status, target_activity_state
+            FROM gold_citation_edges
+            ORDER BY source_work_id, reference_index
             """
         ).fetchall()
         results["citation_edges"] = cites

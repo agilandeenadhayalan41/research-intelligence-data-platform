@@ -1,9 +1,20 @@
 # Bounded end-to-end pipeline (Step 19 / #27)
 
-**Status:** IMPLEMENTED (local `SEMANTIC_ONLY` composition).  
+**Status:** IMPLEMENTED (local `SEMANTIC_ONLY` composition; correctness hardening in flight).  
 Package: `research_platform.e2e` — bounded runner, publication store, CLI.  
 **Not:** BigQuery runtime, GCP deploy, Airflow/Composer (Step 20 / #25), or
 readiness (Step 21 / #28). Evidence label is always `SEMANTIC_ONLY`.
+
+### Unknown-work deletion barrier
+
+When a deletion arrives for a Work that is not yet in canonical storage, the
+in-memory store retains an authoritative `(work_id, deleted_date)` barrier
+(not a fabricated bibliographic Work). Later ACTIVE upserts with
+`source_updated_date <= deleted_date` are `STALE`; newer dates raise
+`RESTORE_REQUIRED`. Barriers participate in deletion-publish rollback.
+
+Postgres consults `MAX(deleted_date)` from `deletion_events` for the same
+insert-time check (parity with the in-memory barrier).
 
 **Prerequisite:** Steps 01–18 are complete. Authoritative contracts already exist
 for discovery/selection, immutable landing, canonicalization, deletions,
