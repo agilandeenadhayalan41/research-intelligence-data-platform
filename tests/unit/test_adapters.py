@@ -4,6 +4,7 @@ import socket
 import pytest
 
 from research_platform.config import PlatformConfig
+from research_platform.config.models import CloudConfig, StorageConfig
 from research_platform.provenance.models import IngestionProvenance
 from research_platform.sources.base import SourceConnector
 from research_platform.sources.openalex import OpenAlexConnector
@@ -14,6 +15,7 @@ from research_platform.warehouse.base import Warehouse
 from research_platform.warehouse.bigquery import BigQueryWarehouse
 from research_platform.warehouse.duckdb import DuckDBWarehouse
 from research_platform.warehouse.postgres import PostgreSQLWarehouse
+from tests.support.fake_gcs import FakeGCSClient
 
 
 @pytest.mark.parametrize("contract", [SourceConnector, ObjectStore, Warehouse])
@@ -48,15 +50,33 @@ def test_warehouse_skeletons_do_not_execute_queries(local_config: PlatformConfig
             adapter.query("SELECT :value", {"value": 1})
 
 
-def test_gcs_skeleton_does_not_read_or_write(
-    local_config: PlatformConfig, provenance: IngestionProvenance
+def test_gcs_adapter_is_concrete_with_injected_client(
+    provenance: IngestionProvenance,
 ) -> None:
-    adapter = GCSObjectStore(local_config.storage, local_config.cloud)
+    fake = FakeGCSClient()
+    adapter = GCSObjectStore(
+        StorageConfig(backend="gcs", bucket="synthetic-bucket"),
+        CloudConfig(project_id="synthetic-project"),
+        client=fake,
+    )
     assert isinstance(adapter, ObjectStore)
-    with pytest.raises(NotImplementedError, match="later phase"):
-        adapter.put_if_absent("synthetic/empty/source.bin", BytesIO(b""), provenance)
-    with pytest.raises(NotImplementedError, match="later phase"):
-        adapter.open("synthetic/empty/source.bin")
+    adapter.put_if_absent("synthetic/empty/source.bin", BytesIO(b""), provenance)
+    with adapter.open("synthetic/empty/source.bin") as handle:
+        assert handle.read() == b""
+
+
+def test_gcs_construction_without_client_is_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_connection(*args: object, **kwargs: object) -> None:
+        raise AssertionError("GCS construction must not access the network")
+
+    monkeypatch.setattr(socket, "create_connection", reject_connection)
+    adapter = GCSObjectStore(
+        StorageConfig(backend="gcs", bucket="synthetic-bucket"),
+        CloudConfig(project_id="synthetic-project"),
+    )
+    assert isinstance(adapter, ObjectStore)
 
 
 def test_local_object_store_is_concrete(local_config: PlatformConfig) -> None:

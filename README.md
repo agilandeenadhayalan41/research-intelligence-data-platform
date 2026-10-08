@@ -25,7 +25,7 @@ implemented.
 | --- | --- | --- |
 | 01 | Repository foundation | Python packaging, typed interfaces, structured logging, tests, CI, and optional local PostgreSQL tooling |
 | 02 | Configuration framework | Validated YAML, environment substitution, explicit environment selection, and strict sample limits |
-| 03 | Storage contracts | `ObjectStore` and immutable-write semantics; GCS remains a skeleton |
+| 03 | Storage contracts | `ObjectStore` and immutable-write semantics; `GCSObjectStore` adapter (#9) with offline fake-client tests |
 | 04 | Warehouse contracts | Parameterized query/PyArrow interface; DuckDB, BigQuery, and PostgreSQL adapters remain skeletons |
 | 05 | Bounded OpenAlex connector | Anonymous manifest discovery and separate caller-owned streaming retrieval |
 | 06 | Works manifest parser | Pure parsing, validated metadata, stable identities, and duplicate/conflict handling |
@@ -48,11 +48,14 @@ implemented.
 Constructing adapters or loading configuration does not connect to services.
 `LocalObjectStore` writes only under the configured local landing path. Default
 ingestion tests stay offline (fake connector + in-memory control/canonical).
-The GCS adapter remains a skeleton.
+`GCSObjectStore` is implemented behind the existing `ObjectStore` contract
+(create-only generation preconditions; default tests use an injected fake
+client — no live credentials/network). Live bucket validation is separately
+approved and is not part of default CI.
 
-**Still planned:** GCS landing, HTTP consumer deployment, Composer provisioning,
-and Dataform runtime. There is no implemented GCS/BigQuery deployment or
-production pipeline. Steps 15–18 define BigQuery/Gold/quality/Data Service
+**Still planned:** live GCS sandbox validation, BigQuery runtime (#10), HTTP
+consumer deployment, Composer provisioning, and Dataform runtime. There is no
+implemented BigQuery deployment or production pipeline. Steps 15–18 define BigQuery/Gold/quality/Data Service
 contracts only — nothing is deployed or MEASURED. Step 20 adds orchestration
 **contracts** only (no scheduler deploy). Step 18 adds no HTTP service and no
 Postgres serving.
@@ -74,13 +77,14 @@ gaps remain explicitly documented; this does not mean production-ready.
 LOCAL (evidence only) → GCP_SANDBOX → DEV → QA → PROD
 ```
 
-Today Sandbox/DEV/QA/PROD are all `NOT_READY` (GCS #9 / BigQuery #10 / IAM /
-Composer gaps). Do not equate YAML presence with readiness.
+Today Sandbox/DEV/QA/PROD are all `NOT_READY` (GCS live validation still open
+on #9, BigQuery #10, IAM / Composer gaps). GCS adapter evidence is
+`READY_TO_VALIDATE`, not `VERIFIED`. Do not equate YAML presence with readiness.
 
 Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
 as the open umbrella roadmap for deferred/runtime work. Do not automatically
-start deferred issues (#7, #8, #9, #10, #23) or claim production readiness.
+start deferred issues (#7, #8, #10, #23) or claim production readiness.
 
 ## Target architecture
 
@@ -90,7 +94,7 @@ already running:
 ```mermaid
 flowchart LR
     Sources["Public sources: OpenAlex first"] --> Connectors["Source-specific connectors"]
-    Connectors --> Raw["Immutable raw landing: local first / GCS later"]
+    Connectors --> Raw["Immutable raw landing: LocalObjectStore / GCSObjectStore"]
     Raw --> Canonical["Portable canonical entities and relationships"]
     Canonical --> BigQuery["BigQuery analytical layer on GCP"]
     Canonical --> DuckDB["DuckDB: local validation and prototypes"]
@@ -286,8 +290,9 @@ working directory. Python does not automatically load `.env`.
 
 The scaffold still includes `warehouse.transactional: postgres`; that setting
 does not implement PostgreSQL persistence or make operational serving mandatory.
-GCS and warehouse adapters remain skeletons; `ControlStore` is a fail-fast
-protocol only. Configuration alignment and runtime persistence require separately
+`GCSObjectStore` is available with an injectable client for offline tests;
+warehouse adapters remain skeletons. `ControlStore` is a fail-fast protocol
+only. Configuration alignment and runtime persistence require separately
 scoped work.
 
 The sandbox template references `GOOGLE_CLOUD_PROJECT`, `GCS_BUCKET`, and
@@ -342,7 +347,7 @@ src\research_platform\
   common\                     Structured JSON logging
   config\                     Validated models and explicit YAML loading
   sources\openalex\            Metadata, parser, selector, connector, profiler, connectivity/profile CLIs
-  storage\                    ObjectStore contract; LocalObjectStore; GCS skeleton
+  storage\                    ObjectStore contract; LocalObjectStore; GCSObjectStore
   control\                    Pipeline-control models, lifecycle, ControlStore protocol
   canonical\openalex\         Portable OpenAlex canonical models, schemas, mapping
   benchmarks\                 Query-pattern registry models, fan-out fixtures, FIXTURE_ONLY harness

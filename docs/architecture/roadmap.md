@@ -30,13 +30,13 @@ Explicit remaining gaps (separately scoped; do not start automatically):
 | --- | --- | --- |
 | 01 | Repository foundation | Complete |
 | 02 | Configuration framework | Complete |
-| 03 | Storage abstraction/contracts | Complete contract; GCS runtime separate (#9) |
+| 03 | Storage abstraction/contracts | Complete contract; GCSObjectStore adapter in #9 (live sandbox validation separate) |
 | 04 | Warehouse abstraction/contracts | Complete contract; DuckDB/BigQuery/PostgreSQL runtime adapters separate |
 | 05 | Bounded public OpenAlex connector | Complete |
 | 06 | OpenAlex Works manifest parser | Complete |
 | 07 | Bounded deterministic development sample selector | Complete |
 | 08 | Bounded OpenAlex source profiling ([details](openalex-source-profiling.md)) | Implemented; real payload profile pending public network access |
-| 09 | Immutable local raw landing ([details](immutable-local-landing.md)) | `LocalObjectStore` delivered; GCS deferred to #9 |
+| 09 | Immutable local raw landing ([details](immutable-local-landing.md)) | `LocalObjectStore` delivered; `GCSObjectStore` via #9 (offline tests; live bucket separate) |
 | 10 | Pipeline control and provenance contracts ([details](pipeline-control.md)) | Models, lifecycle, `ControlStore` protocol, DDL specs; local Postgres adapter in Step 12 |
 | 11 | Canonical OpenAlex logical model ([details](openalex-canonical-model.md)) | Normalized entities/relationships, PyArrow schemas, mapping |
 | 12 | One-file local Works ingestion ([details](local-works-ingestion.md)) | Claim → land → stream decode/map/upsert/provenance in one txn → SUCCESS; memory + Postgres backends |
@@ -54,7 +54,7 @@ Explicit remaining gaps (separately scoped; do not start automatically):
 
 | Gap | Scope | Notes |
 | --- | --- | --- |
-| #9 | GCS ObjectStore runtime | Blocks cloud landing readiness |
+| #9 | GCS ObjectStore runtime | Adapter implemented; keep OPEN until review/live-validation policy; not VERIFIED |
 | #10 | BigQuery Warehouse adapter | Blocks analytical cloud readiness |
 | — | Composer/Airflow deployment | Not authorized by Step 20/21 |
 | — | HTTP Data Service deployment | Domain contracts only today |

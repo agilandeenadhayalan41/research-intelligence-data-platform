@@ -1,8 +1,10 @@
 # Immutable local raw landing
 
-Step 09 implements `LocalObjectStore` and the OpenAlex raw key layout. The GCS
-adapter remains a fail-fast skeleton (`#9`). Canonical transforms and ingestion
-orchestration are later steps.
+Step 09 implements `LocalObjectStore` and the OpenAlex raw key layout.
+`GCSObjectStore` (#9) implements the same `ObjectStore` contract against GCS
+with create-only generation preconditions and offline fake-client tests. Live
+bucket validation is separately approved and is not part of default CI.
+Canonical transforms and ingestion orchestration are later steps.
 
 ## Preserve source bytes
 
@@ -134,9 +136,37 @@ deleted. The handle is never writable.
 | `ChecksumMismatchError` | Streamed bytes ≠ provenance SHA-256 |
 | `IncompleteObjectError` | Partial or inconsistent committed state |
 
-## Future GCS semantic equivalence
+## GCS semantic equivalence (#9)
 
-`GCSObjectStore` (#9) must match this contract: immutable create, identical
-replay, conflict, checksum verification, paired content/provenance publication,
-and caller-owned read streams. Local tests under `tests/contract/` define the
-reusable behavior; this PR does not implement GCS.
+`GCSObjectStore` matches this contract:
+
+| Concern | GCS approach |
+| --- | --- |
+| Immutable create | `upload_from_file(..., if_generation_match=0)` |
+| Content + provenance coherence | Raw bytes as object body; `IngestionProvenance` in custom metadata `rp_provenance` |
+| Checksum | SHA-256 over streamed source bytes before successful create |
+| Identical replay | Precondition loss → reload metadata + content digest; equal provenance ⇒ no-op |
+| Conflict | Precondition loss with differing sha/provenance ⇒ `ObjectConflictError` |
+| Reads | Caller-owned read-only stream after integrity checks |
+
+Shared behavioral coverage lives in `tests/contract/test_object_store.py`
+(parametrized for `LocalObjectStore` and `GCSObjectStore` + fake client).
+Provider precondition argument assertions live in
+`tests/unit/test_gcs_object_store.py`.
+
+### Optional live sandbox smoke (manual only)
+
+Not run by `make test`, GitHub Actions, or default development. Requires a
+separately approved project/bucket and ADC (Workload Identity / user ADC).
+Does **not** authorize this repository to create buckets, projects, or IAM.
+
+Suggested manual checks (operator-owned):
+
+1. Construct `GCSObjectStore` with `backend=gcs` config and no injected client.
+2. `put_if_absent` new key → succeeds (generation precondition create).
+3. Identical replay → no-op success.
+4. Conflicting bytes/provenance → `ObjectConflictError`.
+5. `open` returns original bytes; caller closes the stream.
+
+Until that evidence exists, readiness remains `READY_TO_VALIDATE`, not
+`VERIFIED`.
