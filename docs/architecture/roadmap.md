@@ -15,10 +15,13 @@ Step 20 / #25 orchestration contracts are complete (logical DAG + physical
 ExecutionUnits; no Airflow/Composer/Dataform/GCP deploy). Step 21 / #28
 environment readiness assessment/contracts are complete (no cloud provisioning).
 
+GCS (#9 / PR #84) and BigQuery (#10 / PR #85) **adapters** are complete offline
+(`READY_TO_VALIDATE`). Live cloud validation is **not yet done**.
+
 Explicit remaining gaps (separately scoped; do not start automatically):
 
-- #9 GCS runtime
-- #10 BigQuery runtime adapter (offline implementation; live sandbox separate)
+- Live GCS sandbox smoke (ADC + approved bucket) — does not reopen #9
+- Live BigQuery sandbox smoke (ADC + approved dataset) — does not reopen #10
 - Composer/Airflow deployment
 - HTTP Data Service deployment
 - cloud IAM/WIF/secrets
