@@ -31,6 +31,7 @@ def publish_claimed_deletions_memory(
     assert_claim_owned(existing, claim_token=request.claim_token, now=request.now)
 
     works_before = copy.deepcopy(canonical._works)  # noqa: SLF001
+    barriers_before = dict(canonical._deletion_barriers)  # noqa: SLF001
     provenance_before = list(control._provenance)  # noqa: SLF001
     events_before = list(getattr(control, "_deletion_events", []))
     if not hasattr(control, "_deletion_events"):
@@ -88,6 +89,7 @@ def publish_claimed_deletions_memory(
         return DeletionPublishResult(source_file=succeeded, counters=counters)
     except Exception:
         canonical._works = works_before  # noqa: SLF001
+        canonical._deletion_barriers = barriers_before  # noqa: SLF001
         control._provenance = provenance_before  # noqa: SLF001
         control._deletion_events = events_before  # noqa: SLF001
         raise

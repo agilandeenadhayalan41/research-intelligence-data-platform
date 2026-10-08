@@ -121,9 +121,18 @@ class PostgresCanonicalStore(CanonicalStore):
 def upsert_work_bundle(
     connection: psycopg.Connection, bundle: CanonicalWorkBundle
 ) -> CanonicalUpsertOutcome:
-    """Upsert one bundle using the caller's open transaction."""
+    """Upsert one bundle using the caller's open transaction.
+
+    Consults ``deletion_events`` when no Work row exists so unknown-work
+    deletions (UNKNOWN_WORK) still block stale ACTIVE resurrection — parity
+    with the in-memory deletion barrier ledger.
+    """
     existing = _load_work(connection, bundle.work.work_id)
     if existing is None:
+        barrier = _latest_deletion_barrier(connection, bundle.work.work_id)
+        barrier_block = _barrier_blocks_active_insert(barrier, bundle.work)
+        if barrier_block is not None:
+            return barrier_block
         _apply_bundle(connection, bundle, replace_relationships=True)
         return CanonicalUpsertOutcome.INSERTED
     blocked = _deletion_blocks_active_upsert(existing, bundle.work)
@@ -193,6 +202,40 @@ def _deletion_blocks_active_upsert(
         return CanonicalUpsertOutcome.STALE
     raise RestoreRequiredError(
         f"work {existing.work_id} is DELETED; newer active ingestion requires "
+        "explicit restore reconciliation (RESTORE_REQUIRED)"
+    )
+
+
+def _latest_deletion_barrier(
+    connection: psycopg.Connection, work_id: str
+) -> date | None:
+    """Authoritative deleted_date from deletion_events when no Work row exists."""
+    with connection.cursor() as cur:
+        cur.execute(
+            """
+            SELECT MAX(deleted_date) FROM deletion_events WHERE work_id = %s
+            """,
+            (work_id,),
+        )
+        row = cur.fetchone()
+    if row is None or row[0] is None:
+        return None
+    return row[0]
+
+
+def _barrier_blocks_active_insert(
+    barrier_date: date | None, incoming: Work
+) -> CanonicalUpsertOutcome | None:
+    if barrier_date is None:
+        return None
+    if incoming.lineage.activity_state is CanonicalActivityState.DELETED:
+        return None
+    incoming_date = incoming.lineage.source_updated_date
+    if incoming_date is None or incoming_date <= barrier_date:
+        return CanonicalUpsertOutcome.STALE
+    raise RestoreRequiredError(
+        f"work {incoming.work_id} has unknown-work deletion barrier at "
+        f"{barrier_date.isoformat()}; newer active ingestion requires "
         "explicit restore reconciliation (RESTORE_REQUIRED)"
     )
 

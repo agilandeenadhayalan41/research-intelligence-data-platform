@@ -74,6 +74,11 @@ class InMemoryPublicationStore:
         with self._lock:
             return self._staged.get(publication_version)
 
+    def restore_current(self, snapshot: PublicationSnapshot | None) -> None:
+        """Fail-closed rollback: restore prior current (or clear if none)."""
+        with self._lock:
+            self._current = snapshot
+
     def simulate_activation_interrupt_once(self) -> None:
         """Test helper: next activate() raises; current remains unchanged."""
         with self._lock:

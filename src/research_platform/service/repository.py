@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from research_platform.service.contracts import (
@@ -25,6 +28,30 @@ from research_platform.service.models import (
     WorkMetadataRecord,
 )
 from research_platform.service.pagination import decode_cursor, encode_cursor, page_slice
+
+
+@dataclass(frozen=True)
+class ConsumerRepositorySnapshot:
+    """Immutable public view of consumer repository content for fingerprinting."""
+
+    works: tuple[WorkMetadataRecord, ...]
+    deleted_work_ids: frozenset[str]
+    journal_metrics: tuple[JournalMetricsRecord, ...]
+    publisher_summaries: tuple[PublisherSummaryRecord, ...]
+    publisher_topic_metrics: tuple[PublisherTopicMetricRecord, ...]
+    freshness: FreshnessMetadata
+    published: bool
+
+    def content_fingerprint(self) -> str:
+        payload = {
+            "works": [w.model_dump(mode="json") for w in self.works],
+            "deleted_work_ids": sorted(self.deleted_work_ids),
+            "journals": [j.model_dump(mode="json") for j in self.journal_metrics],
+            "publishers": [p.model_dump(mode="json") for p in self.publisher_summaries],
+            "topics": [t.model_dump(mode="json") for t in self.publisher_topic_metrics],
+        }
+        raw = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()
 
 
 @runtime_checkable
@@ -89,6 +116,23 @@ class InMemoryConsumerRepository:
     @property
     def is_published(self) -> bool:
         return self._published
+
+    def snapshot(self) -> ConsumerRepositorySnapshot:
+        """Public immutable snapshot — prefer this over private field access."""
+        return ConsumerRepositorySnapshot(
+            works=self._works,
+            deleted_work_ids=self._deleted_work_ids,
+            journal_metrics=tuple(self._journal[k] for k in sorted(self._journal)),
+            publisher_summaries=tuple(
+                self._publishers[k] for k in sorted(self._publishers)
+            ),
+            publisher_topic_metrics=self._publisher_topics,
+            freshness=self._freshness,
+            published=self._published,
+        )
+
+    def content_fingerprint(self) -> str:
+        return self.snapshot().content_fingerprint()
 
     def get_work_metadata(
         self, request: WorkMetadataRequest

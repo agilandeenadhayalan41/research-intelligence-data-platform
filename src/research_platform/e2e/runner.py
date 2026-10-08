@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, BinaryIO, Protocol
-from uuid import UUID, uuid4
+from uuid import uuid4
 
+from research_platform.analytics.bigquery.validation import validate_static_contracts
+from research_platform.analytics.gold.validation import validate_static_gold_contracts
 from research_platform.canonical.memory import InMemoryCanonicalStore
 from research_platform.canonical.openalex.models import CanonicalActivityState
 from research_platform.config.loader import load_config
@@ -31,6 +31,7 @@ from research_platform.e2e.models import (
     STAGE_ORDER,
     EndToEndBounds,
     EndToEndResult,
+    EndToEndRunContext,
     FinalValidationReport,
     StageName,
     StageResult,
@@ -85,6 +86,7 @@ def run_bounded_e2e_pipeline(
     canonical_store: InMemoryCanonicalStore | None = None,
     object_store: ObjectStore | None = None,
     publication_store: PublicationStore | None = None,
+    publication_version: str | None = None,
     now: Callable[[], datetime] | None = None,
     worker_id: str = "e2e-worker",
     lease_ttl: timedelta = timedelta(minutes=15),
@@ -99,7 +101,8 @@ def run_bounded_e2e_pipeline(
     clock = now or (lambda: datetime.now(tz=UTC))
     config = load_config(Path(config_path))
     e2e_bounds = bounds or EndToEndBounds()
-    _assert_config_within_bounds(config, e2e_bounds)
+    # Fail closed before any discovery/fetch.
+    _assert_local_e2e_config(config, e2e_bounds)
 
     control = control_store or InMemoryControlStore()
     canonical = canonical_store or InMemoryCanonicalStore()
@@ -121,12 +124,19 @@ def run_bounded_e2e_pipeline(
             }
         )
     )
+    pub_version = _resolve_publication_version(publication_version, run.run_id)
+    run_context = EndToEndRunContext(
+        run_id=run.run_id,
+        started_at=started,
+        bounds=e2e_bounds,
+        publication_version=pub_version,
+    )
     stages: list[StageResult] = []
     pre_serving = None
     pre_visible = None
     final_validation = None
-    publication_version: str | None = None
     works_stats: FileIngestStats | None = None
+    works_skipped: str | None = None
     conn = None
 
     def _append(stage: StageName, status: StageStatus, message: str = "", **details: Any) -> None:
@@ -152,19 +162,33 @@ def run_bounded_e2e_pipeline(
         _append(
             StageName.DISCOVER,
             StageStatus.SUCCESS,
-            f"discovered={len(getattr(selection, 'selected', ()) or ())}",
+            f"discovered={len(selected)}",
+            publication_version=run_context.publication_version,
         )
 
-        # SELECT
+        # SELECT — fail closed on over-bound selection (no silent slice)
         if not selected:
             _append(StageName.SELECT, StageStatus.FAILED, "no eligible works asset")
             _block_remaining_from(StageName.INGEST, "select failed")
             return _finish_failed(
                 control, run, stages, clock, "no eligible works asset",
-                pre_serving, pre_visible, final_validation, publication_version,
+                pre_serving, pre_visible, final_validation,
+                run_context.publication_version,
             )
         if len(selected) > e2e_bounds.max_files:
-            selected = selected[: e2e_bounds.max_files]
+            _append(
+                StageName.SELECT,
+                StageStatus.FAILED,
+                "selected assets exceed max_files bound",
+                selected_count=len(selected),
+                max_files=e2e_bounds.max_files,
+            )
+            _block_remaining_from(StageName.INGEST, "selection bound exceeded")
+            return _finish_failed(
+                control, run, stages, clock, "selection bound exceeded",
+                pre_serving, pre_visible, final_validation,
+                run_context.publication_version,
+            )
         asset = selected[0]
         if not isinstance(asset, OpenAlexAssetMetadata):
             raise ValueError("selected asset must be OpenAlexAssetMetadata")
@@ -180,18 +204,20 @@ def run_bounded_e2e_pipeline(
             _block_remaining_from(StageName.INGEST, "oversized asset")
             return _finish_failed(
                 control, run, stages, clock, "oversized asset",
-                pre_serving, pre_visible, final_validation, publication_version,
+                pre_serving, pre_visible, final_validation,
+                run_context.publication_version,
             )
         _append(
             StageName.SELECT,
             StageStatus.SUCCESS,
             asset.asset_id,
             asset_id=asset.asset_id,
+            publication_version=run_context.publication_version,
         )
 
-        # INGEST + IMMUTABLE_LANDING + CANONICALIZE (single Stage-12 reusable call)
+        # INGEST + IMMUTABLE_LANDING + CANONICALIZE
         try:
-            source_file, works_stats, skipped = ingest_works_asset(
+            source_file, works_stats, works_skipped = ingest_works_asset(
                 asset=asset,
                 run=run,
                 config=config,
@@ -212,10 +238,11 @@ def run_bounded_e2e_pipeline(
             _block_remaining_from(StageName.APPLY_DELETIONS, msg)
             return _finish_failed(
                 control, run, stages, clock, msg,
-                pre_serving, pre_visible, final_validation, publication_version,
+                pre_serving, pre_visible, final_validation,
+                run_context.publication_version,
             )
 
-        if skipped == "ALREADY_SUCCESS":
+        if works_skipped == "ALREADY_SUCCESS":
             _append(StageName.INGEST, StageStatus.SUCCESS, "replay ALREADY_SUCCESS")
             _append(
                 StageName.IMMUTABLE_LANDING,
@@ -263,7 +290,8 @@ def run_bounded_e2e_pipeline(
                 _block_remaining_from(StageName.ANALYTICAL_MODELS, "oversized deletion")
                 return _finish_failed(
                     control, run, stages, clock, "oversized deletion",
-                    pre_serving, pre_visible, final_validation, publication_version,
+                    pre_serving, pre_visible, final_validation,
+                    run_context.publication_version,
                 )
             try:
                 del_file, _del_stats, del_skipped = ingest_deletion_asset(
@@ -291,10 +319,25 @@ def run_bounded_e2e_pipeline(
                 _block_remaining_from(StageName.ANALYTICAL_MODELS, msg)
                 return _finish_failed(
                     control, run, stages, clock, msg,
-                    pre_serving, pre_visible, final_validation, publication_version,
+                    pre_serving, pre_visible, final_validation,
+                    run_context.publication_version,
                 )
 
-        # ANALYTICAL_MODELS
+        # ANALYTICAL_MODELS — enforce Step-15 static contracts
+        static_bq = validate_static_contracts()
+        if not static_bq.ok:
+            _append(
+                StageName.ANALYTICAL_MODELS,
+                StageStatus.FAILED,
+                "Step-15 static contracts failed",
+                errors=list(static_bq.errors[:5]),
+            )
+            _block_remaining_from(StageName.PRE_SERVING_QUALITY, "analytical contracts")
+            return _finish_failed(
+                control, run, stages, clock, "Step-15 static contracts failed",
+                pre_serving, pre_visible, final_validation,
+                run_context.publication_version,
+            )
         snapshot = canonical.snapshot()
         conn = open_analytical_connection()
         counts = project_canonical_to_duckdb(conn, snapshot)
@@ -306,13 +349,15 @@ def run_bounded_e2e_pipeline(
         )
 
         # PRE_SERVING_QUALITY
-        expectation = _expectation_from_stats(works_stats, snapshot_work_count=len(snapshot.works))
+        expectation = _expectation_from_stats(
+            works_stats, replay=(works_skipped == "ALREADY_SUCCESS")
+        )
         if force_pre_serving_fail:
             expectation = ReconciliationExpectation(
                 source_records_seen=10,
                 source_records_decoded=10,
                 records_mapped_successfully=1,
-                records_rejected=0,  # imbalance → FAIL
+                records_rejected=0,
                 unique_work_ids_evaluated=1,
                 inserted=1,
                 updated=0,
@@ -336,11 +381,26 @@ def run_bounded_e2e_pipeline(
             _block_remaining_from(StageName.STAGED_GOLD, "quality blocked")
             return _finish_failed(
                 control, run, stages, clock, "PRE_SERVING_BUILD failed",
-                pre_serving, pre_visible, final_validation, publication_version,
+                pre_serving, pre_visible, final_validation,
+                run_context.publication_version,
             )
         _append(StageName.PRE_SERVING_QUALITY, StageStatus.SUCCESS, "publication_allowed")
 
-        # STAGED_GOLD
+        # STAGED_GOLD — enforce Step-16 static contracts + shared builder
+        static_gold = validate_static_gold_contracts()
+        if not static_gold.ok:
+            _append(
+                StageName.STAGED_GOLD,
+                StageStatus.FAILED,
+                "Step-16 static gold contracts failed",
+                errors=list(static_gold.errors[:5]),
+            )
+            _block_remaining_from(StageName.PRE_VISIBLE_QUALITY, "gold contracts")
+            return _finish_failed(
+                control, run, stages, clock, "Step-16 static gold contracts failed",
+                pre_serving, pre_visible, final_validation,
+                run_context.publication_version,
+            )
         gold_meta = build_staged_gold(conn)
         _append(
             StageName.STAGED_GOLD,
@@ -351,7 +411,6 @@ def run_bounded_e2e_pipeline(
 
         # PRE_VISIBLE_QUALITY
         if force_pre_visible_fail:
-            # Inject a deleted work into contributions to fail the gate.
             deleted = next(
                 (
                     w.work_id
@@ -390,7 +449,8 @@ def run_bounded_e2e_pipeline(
             _block_remaining_from(StageName.CONSUMER_PUBLICATION, "quality blocked")
             return _finish_failed(
                 control, run, stages, clock, "PRE_VISIBLE_PUBLICATION failed",
-                pre_serving, pre_visible, final_validation, publication_version,
+                pre_serving, pre_visible, final_validation,
+                run_context.publication_version,
             )
         _append(StageName.PRE_VISIBLE_QUALITY, StageStatus.SUCCESS, "publication_allowed")
 
@@ -399,47 +459,50 @@ def run_bounded_e2e_pipeline(
             w.work_id
             for w in snapshot.works
             if w.lineage.activity_state is CanonicalActivityState.DELETED
-        )
+        ) | frozenset(canonical.deletion_barriers())
         repo = consumer_repository_from_gold(
             conn,
             run_id=str(run.run_id),
             deleted_work_ids=deleted_ids,
             published=True,
         )
-        fingerprint = _content_fingerprint(repo)
-        publication_version = f"pub-{run.run_id}"
+        fingerprint = repo.content_fingerprint()
         snap = PublicationSnapshot(
-            publication_version=publication_version,
+            publication_version=run_context.publication_version or pub_version,
             run_id=str(run.run_id),
             repository=repo,
             content_fingerprint=fingerprint,
         )
+        previous_current = publications.current()
         try:
             publications.stage(snap)
-            publications.activate(publication_version)
+            publications.activate(snap.publication_version)
         except Exception as exc:
             msg = safe_exception_message(exc)
             _append(StageName.CONSUMER_PUBLICATION, StageStatus.FAILED, msg)
             _block_remaining_from(StageName.FINAL_VALIDATION, msg)
             return _finish_failed(
                 control, run, stages, clock, msg,
-                pre_serving, pre_visible, final_validation, publication_version,
+                pre_serving, pre_visible, final_validation,
+                snap.publication_version,
             )
         _append(
             StageName.CONSUMER_PUBLICATION,
             StageStatus.SUCCESS,
-            publication_version,
+            snap.publication_version,
         )
 
-        # FINAL_VALIDATION
+        # FINAL_VALIDATION — fail-closed: restore prior current on failure
         current = publications.current()
         final_validation = _run_final_validation(
             current,
             expected_run_id=str(run.run_id),
-            expected_version=publication_version,
+            expected_version=snap.publication_version,
             force_fail=force_final_validation_fail,
         )
         if not final_validation.ok:
+            if hasattr(publications, "restore_current"):
+                publications.restore_current(previous_current)  # type: ignore[attr-defined]
             _append(
                 StageName.FINAL_VALIDATION,
                 StageStatus.FAILED,
@@ -447,7 +510,8 @@ def run_bounded_e2e_pipeline(
             )
             return _finish_failed(
                 control, run, stages, clock, "final validation failed",
-                pre_serving, pre_visible, final_validation, publication_version,
+                pre_serving, pre_visible, final_validation,
+                snap.publication_version,
             )
         _append(StageName.FINAL_VALIDATION, StageStatus.SUCCESS, "ok")
 
@@ -459,7 +523,7 @@ def run_bounded_e2e_pipeline(
         return EndToEndResult(
             run=finished,
             stages=tuple(stages),
-            publication_version=publication_version,
+            publication_version=snap.publication_version,
             pre_serving_report=pre_serving,
             pre_visible_report=pre_visible,
             final_validation=final_validation,
@@ -471,7 +535,8 @@ def run_bounded_e2e_pipeline(
         _block_remaining_from(StageName.SELECT, msg)
         return _finish_failed(
             control, run, stages, clock, msg,
-            pre_serving, pre_visible, final_validation, publication_version,
+            pre_serving, pre_visible, final_validation,
+            run_context.publication_version,
         )
     finally:
         if conn is not None:
@@ -510,7 +575,26 @@ def _finish_failed(
     )
 
 
-def _assert_config_within_bounds(config: PlatformConfig, bounds: EndToEndBounds) -> None:
+def _resolve_publication_version(supplied: str | None, run_id: object) -> str:
+    if supplied is None:
+        return f"pub-{run_id}"
+    value = supplied.strip()
+    if not value:
+        raise ValueError("publication_version must be non-empty")
+    return value
+
+
+def _assert_local_e2e_config(config: PlatformConfig, bounds: EndToEndBounds) -> None:
+    if config.environment != "local":
+        raise ValueError("Step-19 requires environment=local")
+    if config.storage.backend != "local":
+        raise ValueError("Step-19 requires storage.backend=local")
+    if config.sample_selection.max_files != 1:
+        raise ValueError("Step-19 requires sample_selection.max_files=1")
+    if config.sample_selection.max_file_size_bytes > 25_000_000:
+        raise ValueError(
+            "Step-19 requires sample_selection.max_file_size_bytes <= 25000000"
+        )
     if config.sample_selection.max_files > bounds.max_files:
         raise ValueError("config max_files exceeds EndToEndBounds")
     if config.sample_selection.max_file_size_bytes > bounds.max_file_size_bytes:
@@ -520,20 +604,24 @@ def _assert_config_within_bounds(config: PlatformConfig, bounds: EndToEndBounds)
 def _expectation_from_stats(
     stats: FileIngestStats | None,
     *,
-    snapshot_work_count: int,
+    replay: bool,
 ) -> ReconciliationExpectation:
-    if stats is None:
-        # Replay / empty publish — balanced zeros relative to current store.
-        n = snapshot_work_count
+    """Build current-run reconciliation counters.
+
+    Replay (ALREADY_SUCCESS): all current-run counters are ZERO.
+    Fresh processing: decode counts follow record_provenance_count; publication
+    decisions sum independently. Duplicate observations are not "rejected".
+    """
+    if replay or stats is None:
         return ReconciliationExpectation(
-            source_records_seen=n,
-            source_records_decoded=n,
-            records_mapped_successfully=n,
+            source_records_seen=0,
+            source_records_decoded=0,
+            records_mapped_successfully=0,
             records_rejected=0,
-            unique_work_ids_evaluated=n,
+            unique_work_ids_evaluated=0,
             inserted=0,
             updated=0,
-            identical=n,
+            identical=0,
             stale=0,
             conflict=0,
             restore_required=0,
@@ -547,8 +635,8 @@ def _expectation_from_stats(
     return ReconciliationExpectation(
         source_records_seen=seen,
         source_records_decoded=seen,
-        records_mapped_successfully=unique,
-        records_rejected=max(0, seen - unique),
+        records_mapped_successfully=seen,
+        records_rejected=0,
         unique_work_ids_evaluated=unique,
         inserted=inserted,
         updated=updated,
@@ -557,25 +645,6 @@ def _expectation_from_stats(
         conflict=0,
         restore_required=0,
     )
-
-
-def _content_fingerprint(repo: Any) -> str:
-    works = getattr(repo, "_works", ())
-    journals = getattr(repo, "_journal", {})
-    publishers = getattr(repo, "_publishers", {})
-    topics = getattr(repo, "_publisher_topics", ())
-    payload = {
-        "works": [w.model_dump(mode="json") for w in works],
-        "journals": {
-            k: v.model_dump(mode="json") for k, v in sorted(journals.items())
-        },
-        "publishers": {
-            k: v.model_dump(mode="json") for k, v in sorted(publishers.items())
-        },
-        "topics": [t.model_dump(mode="json") for t in topics],
-    }
-    raw = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
 
 
 def _run_final_validation(
@@ -598,7 +667,10 @@ def _run_final_validation(
     if page.freshness.as_of_run_id != expected_run_id:
         errors.append("freshness.as_of_run_id mismatch")
     active_ids = {w.work_id for w in page.data.items}
-    for wid in current.repository._deleted_work_ids:  # noqa: SLF001
+
+    # Prefer public repository snapshot over private fields.
+    snap = current.repository.snapshot()
+    for wid in snap.deleted_work_ids:
         if wid in active_ids:
             errors.append(f"deleted work {wid} exposed in discovery")
         try:
@@ -608,7 +680,6 @@ def _run_final_validation(
             if exc.error.code is not ServiceErrorCode.NOT_FOUND:
                 errors.append(f"deleted work {wid} unexpected error {exc.error.code}")
 
-    # Pagination contract smoke
     if page.data.page.has_more and not page.data.page.next_cursor:
         errors.append("has_more without next_cursor")
 
