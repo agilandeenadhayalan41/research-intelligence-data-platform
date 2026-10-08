@@ -1,6 +1,6 @@
 PYTHON ?= python
 
-.PHONY: install test test-unit test-postgres-ingestion check build postgres-up postgres-down
+.PHONY: install test test-unit test-orchestration test-postgres-ingestion check build postgres-up postgres-down
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"
@@ -10,6 +10,9 @@ test:
 
 test-unit:
 	$(PYTHON) -m pytest tests/unit -m "not postgres"
+
+test-orchestration:
+	$(PYTHON) -m pytest tests/unit/test_orchestration_contracts.py -m "not postgres"
 
 test-postgres-ingestion:
 	$(PYTHON) -m pip install -e ".[dev,postgres]"

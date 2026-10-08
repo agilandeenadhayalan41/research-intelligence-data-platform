@@ -13,8 +13,10 @@ access, proprietary data, or cloud credentials are needed for the default tests.
 
 **Steps 01–19 are complete.** Step 19 / #27 delivered the bounded end-to-end
 pipeline (`research_platform.e2e`, local `SEMANTIC_ONLY` only — no BigQuery,
-GCP, or Airflow deployment). **Step 20 / #25 is next.** The full cloud/Airflow
-pipeline is not implemented.
+GCP, or Airflow deployment). **Step 20 / #25 is ACTIVE** (orchestration
+contracts + local dry-run validation in `research_platform.orchestration`; no
+Airflow/Composer/Dataform/GCP deploy). Step 21 / #28 remains planned. The full
+cloud/Airflow pipeline is not implemented.
 
 | Step | Delivered capability | Implementation boundary |
 | --- | --- | --- |
@@ -37,35 +39,39 @@ pipeline is not implemented.
 | 17 | Data quality gates and metrics | HARD_GATE vs INFORMATIONAL_METRIC, canonical/relationship/reconciliation/Gold exclusion gates, DuckDB `SEMANTIC_ONLY` runner; no silent repair, no GCP deploy ([#24](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/24)) |
 | 18 | Data Service domain layer | Storage-independent capabilities, capability registry, typed request/response contracts, cursor pagination, freshness/`PUBLISHED_SNAPSHOT`, in-memory `SEMANTIC_ONLY` repository; no HTTP deploy, no raw SQL, no Postgres/AlloyDB serving ([#26](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/26)) |
 | 19 | Bounded end-to-end pipeline | One outer `PipelineRun`, reusable Step-12/13 stages, DuckDB `SEMANTIC_ONLY` analytical/Gold, real Step-17 gates, atomic local publication, Data Service final validation; no BigQuery/Airflow/GCP ([#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27)) |
+| 20 | Orchestration contracts (ACTIVE) | Thin DAG graph, TaskMessage/XCom contract, retries, backfill bounds, publication concurrency scope (`TEMP_TABLES` recommended), dry-run plan renderer; no Airflow/Composer/Dataform/GCP deploy ([#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25)) |
 
 Constructing adapters or loading configuration does not connect to services.
 `LocalObjectStore` writes only under the configured local landing path. Default
 ingestion tests stay offline (fake connector + in-memory control/canonical).
 The GCS adapter remains a skeleton.
 
-**Still planned:** GCS landing, HTTP consumer deployment, and orchestration.
-There is no implemented GCS/BigQuery deployment or production pipeline.
-Steps 15–18 define BigQuery/Gold/quality/Data Service contracts only — nothing
-is deployed or MEASURED. Step 18 adds no HTTP service and no Postgres serving.
+**Still planned:** GCS landing, HTTP consumer deployment, Composer provisioning,
+and Dataform runtime. There is no implemented GCS/BigQuery deployment or
+production pipeline. Steps 15–18 define BigQuery/Gold/quality/Data Service
+contracts only — nothing is deployed or MEASURED. Step 20 adds orchestration
+**contracts** only (no scheduler deploy). Step 18 adds no HTTP service and no
+Postgres serving.
 
 ### Next scoped work
 
 **Steps 01–19 ✅ complete.**
 
-**Step 19 / [#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27)**
-(complete, closed): bounded end-to-end pipeline (`research_platform.e2e`),
-local `SEMANTIC_ONLY` only. See
-[End-to-end pipeline](docs/architecture/end-to-end-pipeline.md).
+**Step 20 / [#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25)**
+(**ACTIVE**, pending review/merge): orchestration contracts
+(`research_platform.orchestration`) — thin DAG, safe TaskMessage/XCom, retries,
+backfill bounds, analytical publication concurrency scope, CI-aligned contract
+tests. No Airflow/Composer/Dataform/GCP deploy. See
+[Orchestration](docs/architecture/orchestration.md).
 
 ```text
-discover → select → ingest → immutable landing → canonicalize →
-changes/deletions → analytical models → data-quality gate →
-Gold outputs → consumer publication → final validation
+DISCOVER → REGISTER → INGEST → CANONICALIZE → APPLY_DELETIONS →
+ANALYTICAL_PUBLICATION → PRE_SERVING_QUALITY → STAGE_GOLD →
+PRE_VISIBLE_QUALITY → PUBLISH_SUCCESS → FINAL_VALIDATION
 ```
 
-**Next — Step 20 / [#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25):**
-Airflow/Composer/CI-CD/Dataform alignment. Do not start #25 from this
-housekeeping change.
+**After Step 20 merge — Step 21 / [#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28):**
+environment readiness. Do not start #28 from this PR.
 
 Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
@@ -220,6 +226,7 @@ make build
 | `make install` | Install the package in editable mode with development dependencies |
 | `make test` | Run default offline unit/integration tests (`-m "not postgres"`) |
 | `make test-unit` | Run only unit tests (also excludes postgres) |
+| `make test-orchestration` | Focused Step 20 orchestration contract tests (also covered by `make test`) |
 | `make test-postgres-ingestion` | Separately invoked local PostgreSQL Steps 12–13 transaction tests |
 | `make check` | Compile Python sources/tests and check installed dependency consistency |
 | `make build` | Build a wheel into the ignored `dist` directory without building dependency wheels |
@@ -312,6 +319,7 @@ tracked YAML or logs.
 | [BigQuery analytical models](docs/architecture/bigquery-analytical-models.md) | Step 15 BQ DDL/SQL contracts, partition/cluster, MERGE, SEMANTIC_ONLY limits |
 | [Gold analytical marts](docs/architecture/gold-analytical-marts.md) | Step 16 Gold grains, fan-out safety, materialization honesty, SEMANTIC_ONLY limits |
 | [Data quality](docs/architecture/data-quality.md) | Step 17 HARD_GATE/metric registry, publication blocking, SEMANTIC_ONLY limits |
+| [Orchestration](docs/architecture/orchestration.md) | Step 20 thin DAG, TaskMessage/XCom, retries, publication scope, Airflow mapping (no deploy) |
 | [Public data sources](docs/architecture/public-data-sources.md) | Source priorities and source-specific normalization |
 | [OpenAlex contract](docs/architecture/openalex-manifest-contract.md) | Implemented metadata, parser, selector, connector, and public-access evidence |
 | [OpenAlex source profiling](docs/architecture/openalex-source-profiling.md) | Bounded profiler, evidence classes, verified representations, and format decision |
@@ -336,6 +344,8 @@ src\research_platform\
   analytics\bigquery\         Step 15 BigQuery table/query contracts + offline validation
   analytics\gold\             Step 16 Gold mart contracts + SEMANTIC_ONLY validation
   quality\                    Step 17 data-quality gates, metrics, SEMANTIC_ONLY runner
+  e2e\                        Step 19 bounded SEMANTIC_ONLY composition runner
+  orchestration\              Step 20 thin DAG / TaskMessage / retry / publication-scope contracts
   warehouse\                  Warehouse contract; DuckDB/BigQuery/PostgreSQL skeletons
   provenance\                 Immutable retrieval-provenance model
   ingestion\ serving\         Reserved runtime areas
