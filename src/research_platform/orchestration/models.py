@@ -15,7 +15,7 @@ from pydantic import Field, field_validator, model_validator
 from research_platform.service.models import SettingsModel
 
 
-ORCHESTRATION_CONTRACT_VERSION = "orchestration-contract-v1"
+ORCHESTRATION_CONTRACT_VERSION = "orchestration-contract-v1.1"
 PIPELINE_NAME = "openalex-works-orchestration"
 EVIDENCE_LABEL = "CONTRACT_ONLY"
 
@@ -26,6 +26,25 @@ MAX_RETRY_ATTEMPTS = 5
 MAX_BACKFILL_FILES_PER_RUN = 10_000
 MAX_BACKFILL_FILE_SIZE_BYTES = 5_000_000_000
 MAX_BACKFILL_RANGE_DAYS = 366
+
+# TaskMessage / XCom size bounds (fail closed; never truncate).
+MAX_PUBLICATION_VERSION_LEN = 128
+MAX_SOURCE_LEN = 64
+MAX_ENVIRONMENT_LEN = 64
+MAX_ASSET_ID_LEN = 256
+MAX_SOURCE_FILE_ID_LEN = 256
+MAX_OBJECT_KEY_REF_LEN = 1024
+MAX_QUALITY_REPORT_REF_LEN = 512
+MAX_PUBLICATION_SCOPE_REF_LEN = 128
+MAX_XCOM_JSON_BYTES = 8_192
+
+# OrchestrationEvent bounds (log-safe).
+MAX_RECOVERY_ACTION_LEN = 512
+MAX_EVENT_DETAILS_KEYS = 16
+MAX_SAFE_STRUCTURE_DEPTH = 3
+MAX_SAFE_STRUCTURE_NODES = 64
+MAX_EVENT_DETAILS_JSON_BYTES = 4_096
+MAX_EVENT_JSON_BYTES = 8_192
 
 
 class TaskId(StrEnum):
@@ -57,6 +76,20 @@ TASK_INVENTORY: tuple[TaskId, ...] = (
     TaskId.PUBLISH_SUCCESS,
     TaskId.FINAL_VALIDATION,
 )
+
+
+class ExecutionUnit(StrEnum):
+    """Atomic physical boundaries a scheduler may invoke once per unit."""
+
+    DISCOVERY_UNIT = "DISCOVERY_UNIT"
+    WORKS_INGEST_UNIT = "WORKS_INGEST_UNIT"
+    DELETION_UNIT = "DELETION_UNIT"
+    ANALYTICAL_PUBLICATION_UNIT = "ANALYTICAL_PUBLICATION_UNIT"
+    PRE_SERVING_QUALITY_UNIT = "PRE_SERVING_QUALITY_UNIT"
+    GOLD_UNIT = "GOLD_UNIT"
+    PRE_VISIBLE_QUALITY_UNIT = "PRE_VISIBLE_QUALITY_UNIT"
+    CONSUMER_PUBLICATION_UNIT = "CONSUMER_PUBLICATION_UNIT"
+    FINAL_VALIDATION_UNIT = "FINAL_VALIDATION_UNIT"
 
 
 class SchedulingClass(StrEnum):
@@ -147,10 +180,16 @@ class RetryPolicy(SettingsModel):
 
 
 class TaskSpec(SettingsModel):
-    """Thin task definition — identity, deps, retry, capability reference."""
+    """Logical task definition — may share a physical ExecutionUnit.
+
+    ``logical_only=True`` means this TaskId is a checkpoint/phase inside an
+    atomic execution unit and must not be mapped to a separate Python invoke.
+    """
 
     task_id: TaskId
     depends_on: tuple[TaskId, ...] = ()
+    execution_unit: ExecutionUnit
+    logical_only: bool = False
     retry_policy: RetryPolicy
     capability_ref: str
     description: str = ""
@@ -161,16 +200,22 @@ class TaskMessage(SettingsModel):
     """Safe bounded XCom-style task message (identifiers/metadata only)."""
 
     run_id: UUID
-    publication_version: str = Field(min_length=1)
-    source: str = Field(min_length=1)
+    publication_version: str = Field(
+        min_length=1, max_length=MAX_PUBLICATION_VERSION_LEN
+    )
+    source: str = Field(min_length=1, max_length=MAX_SOURCE_LEN)
     task_id: TaskId
     attempt: int = Field(strict=True, ge=1)
-    environment: str = Field(min_length=1)
-    asset_id: str | None = None
-    source_file_id: str | None = None
-    object_key_ref: str | None = None
-    quality_report_ref: str | None = None
-    publication_scope_ref: str | None = None
+    environment: str = Field(min_length=1, max_length=MAX_ENVIRONMENT_LEN)
+    asset_id: str | None = Field(default=None, max_length=MAX_ASSET_ID_LEN)
+    source_file_id: str | None = Field(default=None, max_length=MAX_SOURCE_FILE_ID_LEN)
+    object_key_ref: str | None = Field(default=None, max_length=MAX_OBJECT_KEY_REF_LEN)
+    quality_report_ref: str | None = Field(
+        default=None, max_length=MAX_QUALITY_REPORT_REF_LEN
+    )
+    publication_scope_ref: str | None = Field(
+        default=None, max_length=MAX_PUBLICATION_SCOPE_REF_LEN
+    )
     scheduling_class: SchedulingClass = SchedulingClass.MANUAL
 
     @field_validator(
@@ -285,7 +330,23 @@ class OrchestrationEvent(SettingsModel):
     task_id: TaskId | None = None
     attempt: int | None = Field(default=None, strict=True, ge=1)
     occurred_at: datetime
-    publication_version: str | None = None
+    publication_version: str | None = Field(
+        default=None, max_length=MAX_PUBLICATION_VERSION_LEN
+    )
     safe_error_category: FailureCategory | None = None
-    recovery_action: str | None = None
+    recovery_action: str | None = Field(
+        default=None, max_length=MAX_RECOVERY_ACTION_LEN
+    )
     details: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("publication_version", "recovery_action", mode="before")
+    @classmethod
+    def strip_optional_strings(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                raise ValueError("must be non-empty when provided")
+            return stripped
+        return value
