@@ -89,10 +89,10 @@ equate YAML presence or adapter code with production readiness.
 
 Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
-as the open umbrella roadmap for deferred/runtime work. Do not automatically
-start deferred issues (#7, #8, #23) or claim production readiness.
-#9 is complete (adapter); close it as READY_TO_VALIDATE. Live smoke tests are
-separately scoped.
+as the open umbrella for deferred/runtime work and live-validation tracking.
+**#9** (GCS) and **#10** (BigQuery) adapter implementations are complete
+(`READY_TO_VALIDATE`) and should be closed; live sandbox smoke is separately
+scoped. Do not automatically start (#7, #8, #23) or claim production readiness.
 
 ## Target architecture
 
