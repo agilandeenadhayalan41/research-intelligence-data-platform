@@ -168,11 +168,18 @@ def can_promote(
     *,
     registry: tuple[ReadinessEntry, ...] | None = None,
 ) -> PromotionDecision:
-    """Promotion requires adjacent cloud order + non-blocking mandatory domains on target.
+    """Promotion requires adjacent cloud order and verified source evidence.
 
-    LOCAL cannot promote into the cloud ladder. Skipping GCP_SANDBOX→DEV→QA→PROD
-    is rejected. Missing mandatory evidence on the **target** blocks promotion.
-    There is no ready=True override.
+    Rules:
+    - LOCAL is evidence/reference only (never a cloud promotion rung).
+    - Order must be adjacent: GCP_SANDBOX → DEV → QA → PROD.
+    - **Source** must be ``READY`` (all mandatory domains ``VERIFIED``).
+      ``READY_TO_VALIDATE`` is insufficient as a promotion source.
+    - **Target** may be ``READY_TO_VALIDATE`` or ``READY`` (deployment into
+      the target can produce the next runtime evidence).
+    - Missing mandatory evidence on the target blocks promotion.
+    - ``OPERATIONAL_STORE_OPTIONAL`` never blocks.
+    - No ``ready=True`` override.
     """
     src = (
         from_environment
@@ -211,34 +218,37 @@ def can_promote(
             reasons=tuple(reasons),
         )
 
+    source = evaluate_environment_readiness(src, registry=reg)
     target = evaluate_environment_readiness(dst, registry=reg)
     blocking = target.mandatory_blocking_domains
+
+    if source.overall_status is not EnvironmentOverallStatus.READY:
+        reasons.append(
+            "source overall_status must be READY (all mandatory domains VERIFIED); "
+            f"got {source.overall_status.value}"
+        )
     if blocking:
         reasons.append(
             "target environment has mandatory domain gaps: "
             + ", ".join(d.value for d in blocking)
         )
-    if target.overall_status is EnvironmentOverallStatus.NOT_READY:
-        reasons.append(f"target overall_status={target.overall_status.value}")
-
-    # Source must also not be NOT_READY for a healthy promotion story — but today
-    # every cloud env is NOT_READY, so adjacency+target gaps already fail closed.
-    source = evaluate_environment_readiness(src, registry=reg)
-    if source.overall_status is EnvironmentOverallStatus.NOT_READY:
-        reasons.append(f"source overall_status={source.overall_status.value}")
+    if target.overall_status not in {
+        EnvironmentOverallStatus.READY_TO_VALIDATE,
+        EnvironmentOverallStatus.READY,
+    }:
+        reasons.append(
+            "target overall_status must be READY_TO_VALIDATE or READY; "
+            f"got {target.overall_status.value}"
+        )
 
     allowed = (
-        not blocking
+        source.overall_status is EnvironmentOverallStatus.READY
         and target.overall_status
         in {
             EnvironmentOverallStatus.READY_TO_VALIDATE,
             EnvironmentOverallStatus.READY,
         }
-        and source.overall_status
-        in {
-            EnvironmentOverallStatus.READY_TO_VALIDATE,
-            EnvironmentOverallStatus.READY,
-        }
+        and not blocking
     )
     if allowed:
         reasons = ("promotion gates satisfied by readiness registry evidence",)

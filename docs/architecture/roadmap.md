@@ -2,12 +2,27 @@
 
 This roadmap preserves completed work and sequences implementation from bounded
 source profiling through consumer delivery. It does not authorize work beyond an
-explicitly scoped task. Steps 01–20 are complete. Step 19 / #27 bounded E2E
-pipeline is complete (local `SEMANTIC_ONLY`). Step 20 / #25 orchestration
-contracts are complete (logical DAG + physical ExecutionUnits; no
-Airflow/Composer/Dataform/GCP deploy). Step 21 / #28 is **ACTIVE**
-(environment readiness contracts; no cloud provisioning). GCS landing (#9),
-BigQuery runtime (#10), and later deploy work remain planned gaps.
+explicitly scoped task.
+
+**Steps 01–21 are complete.** Completion of the roadmap means the planned
+contracts, local validation, orchestration contracts, and readiness assessment
+are complete — **not** that GCP deployment is complete. Cloud runtime and
+deployment gaps remain explicitly documented; this does not mean
+production-ready.
+
+Step 19 / #27 bounded E2E pipeline is complete (local `SEMANTIC_ONLY`).
+Step 20 / #25 orchestration contracts are complete (logical DAG + physical
+ExecutionUnits; no Airflow/Composer/Dataform/GCP deploy). Step 21 / #28
+environment readiness assessment/contracts are complete (no cloud provisioning).
+
+Explicit remaining gaps (separately scoped; do not start automatically):
+
+- #9 GCS runtime
+- #10 BigQuery runtime
+- Composer/Airflow deployment
+- HTTP Data Service deployment
+- cloud IAM/WIF/secrets
+- monitoring/cost/network validation
 
 ## Completed foundation
 
@@ -33,12 +48,19 @@ BigQuery runtime (#10), and later deploy work remain planned gaps.
 | 18 | Data Service domain layer ([details](data-service.md)) | Storage-independent capabilities, registry, typed contracts, cursor pagination, freshness/`PUBLISHED_SNAPSHOT`, in-memory `SEMANTIC_ONLY` repo; no HTTP/raw SQL/Postgres serving ([#26](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/26)) |
 | 19 | Bounded end-to-end pipeline ([details](end-to-end-pipeline.md)) | Complete — one outer `PipelineRun`, reusable Step-12/13 stages, DuckDB `SEMANTIC_ONLY` analytical/Gold, Step-17 gates, atomic local publication, Data Service final validation; no BigQuery/Airflow ([#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27)) |
 | 20 | Orchestration contracts ([details](orchestration.md)) | Complete — thin DAG + physical ExecutionUnits (`WORKS_INGEST_UNIT` = one `ingest_works_asset`), bounded TaskMessage/XCom, recursive safe metadata, retries, publication concurrency scope; no Airflow/Composer/Dataform/GCP deploy ([#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25)) |
+| 21 | Environment readiness ([details](environment-readiness.md)) | Complete — readiness assessment/contracts only; Sandbox→DEV→QA→PROD matrix, evidence levels, promotion gates; no cloud provisioning ([#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28)) |
 
-## Active / planned steps
+## Deferred / runtime gaps (not automatic next work)
 
-| Step | Work | Status |
+| Gap | Scope | Notes |
 | --- | --- | --- |
-| 21 | Environment readiness: Sandbox→DEV→QA→PROD matrix, evidence levels, promotion gates, IAM/WIF/secrets/GCS/BigQuery/orchestration gaps; docs/contracts only — no cloud provisioning ([details](environment-readiness.md)) | **ACTIVE** ([#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28)) |
+| #9 | GCS ObjectStore runtime | Blocks cloud landing readiness |
+| #10 | BigQuery Warehouse adapter | Blocks analytical cloud readiness |
+| — | Composer/Airflow deployment | Not authorized by Step 20/21 |
+| — | HTTP Data Service deployment | Domain contracts only today |
+| — | Cloud IAM / WIF / secrets | Documented; not provisioned |
+| — | Monitoring / cost / network validation | Documented; not verified |
+| #7 / #8 / #23 | Optional adapters / operational store | Separately scoped; do not auto-start |
 
 ## Source extension
 

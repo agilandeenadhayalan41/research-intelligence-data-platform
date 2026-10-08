@@ -1,8 +1,8 @@
 # Environment readiness (Step 21 / #28)
 
-**Status:** ACTIVE / in review — documentation and machine-validatable contracts only.  
+**Status:** COMPLETE — readiness assessment/contracts only.  
 Package: `research_platform.readiness`  
-Issue: [#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28)  
+Issue: [#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28) (CLOSED)  
 Umbrella: [#2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2) (remains OPEN)
 
 ### Explicit non-claims
@@ -199,14 +199,22 @@ Promotion order (adjacent only):
 GCP_SANDBOX -> DEV -> QA -> PROD
 ```
 
+`can_promote(from, to)` requires:
+
+- adjacent order: `GCP_SANDBOX → DEV → QA → PROD`
+- **source** `overall_status == READY` (all mandatory domains `VERIFIED`)
+- **target** `overall_status` in `{READY_TO_VALIDATE, READY}`
+
 `can_promote(from, to)` fails closed when:
 
 - order is skipped or reversed
 - LOCAL is used as a cloud rung
+- source is only `READY_TO_VALIDATE` (insufficient promotion evidence)
 - target mandatory domains are `BLOCKED` / `CLOUD_UNVERIFIED` / `CONTRACT_DEFINED` / `DEMONSTRATED_LOCAL`
 - overall target status is `NOT_READY`
 
 There is **no** manual `ready=True` override.
+`OPERATIONAL_STORE_OPTIONAL` never blocks promotion.
 
 PROD remains NOT READY while mandatory cloud evidence is missing.
 
