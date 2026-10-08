@@ -13,9 +13,11 @@ Dialect contract (not portable to DuckDB or BigQuery):
 - Named placeholders are psycopg pyformat: ``%(name)s``.
 - Values are passed to the driver as a parameter mapping. They are never
   interpolated into SQL.
-- The session is ``autocommit`` with ``default_transaction_read_only=on`` so a
-  completed statement does not leave an idle or aborted transaction, and
-  data-changing statements fail in the server rather than through a SQL parser.
+- The session is ``autocommit`` with ``default_transaction_read_only=on`` so
+  ordinary statements do not leave a transaction open, and data-changing
+  statements fail in the server rather than through a SQL parser. Caller SQL
+  such as ``BEGIN`` or ``COPY ... TO STDOUT`` can still leave the session not
+  idle; such a connection is discarded after the query.
 - ``TimeZone=UTC`` is set so ``timestamptz`` instants are returned in UTC.
   ``timestamp`` without time zone stays a naive datetime.
 

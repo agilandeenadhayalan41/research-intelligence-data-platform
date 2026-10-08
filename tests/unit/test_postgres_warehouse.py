@@ -680,6 +680,51 @@ def test_failed_query_leaving_session_idle_keeps_connection(
     assert idle.close_calls == 0
 
 
+class _FailingCloseCursor(_Cursor):
+    def close(self) -> None:
+        super().close()
+        raise RuntimeError("cursor close failed for postgresql://unit")
+
+
+class _FailingCursorCloseConnection(_StatusConnection):
+    def cursor(self) -> _Cursor:
+        self.cursor_calls += 1
+        return _FailingCloseCursor(self)
+
+
+def test_cursor_close_failure_is_logged_as_cursor_and_keeps_connection(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://unit")
+    opens: list[str] = []
+    connection = _FailingCursorCloseConnection(status_after="IDLE")
+    warehouse, _ = _warehouse(connection, opens=opens)
+    with caplog.at_level(logging.INFO, logger="research_platform.warehouse.postgres"):
+        table = warehouse.query("SELECT 1 AS value")
+    assert table.column("value")[0].as_py() == 1
+    messages = [record.getMessage() for record in caplog.records]
+    assert "postgres cursor close failed" in messages
+    assert "postgres connection close failed" not in messages
+    assert not any("postgresql://unit" in message for message in messages)
+    assert connection.close_calls == 0
+    assert opens == ["postgresql://unit"]
+
+
+@pytest.mark.parametrize("status", ["ACTIVE", "INERROR"])
+def test_interrupt_mid_query_still_discards_unusable_connection(
+    monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://unit")
+    stuck = _StatusConnection(status_after=status)
+    stuck.execute_error = KeyboardInterrupt()
+    warehouse, opens, _fresh = _reconnecting_warehouse(stuck)
+    with pytest.raises(KeyboardInterrupt):
+        warehouse.query("SELECT pg_sleep(60)")
+    assert stuck.close_calls == 1
+    assert warehouse.query("SELECT 2 AS value").column("value")[0].as_py() == 2
+    assert len(opens) == 2
+
+
 def test_discarded_connection_close_failure_is_logged_as_connection(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -172,6 +172,14 @@ def test_local_postgres_aborted_caller_transaction_does_not_wedge_the_adapter() 
         with pytest.raises(QueryExecutionError, match="query execution failed"):
             warehouse.query("SELECT 1/0 AS value")
         assert warehouse.query("SELECT 1 AS value").column("value")[0].as_py() == 1
+
+        # One call that both opens the transaction and aborts it leaves the
+        # cached session INERROR; it must be discarded, not reused.
+        before = _pid(warehouse)
+        with pytest.raises(QueryExecutionError, match="query execution failed"):
+            warehouse.query("BEGIN; SELECT 1/0 AS value")
+        assert warehouse.query("SELECT 1 AS value").column("value")[0].as_py() == 1
+        assert _pid(warehouse) != before
         assert warehouse.query("SHOW transaction_read_only").column(0)[0].as_py() == "on"
 
 
