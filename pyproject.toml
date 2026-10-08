@@ -12,6 +12,7 @@ dependencies = [
     "pydantic==2.13.5",
     "PyYAML==6.0.3",
     "pyarrow==25.0.1",
+    "google-cloud-storage==3.16.0",
 ]
 
 [project.optional-dependencies]

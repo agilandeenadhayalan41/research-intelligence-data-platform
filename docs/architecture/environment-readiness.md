@@ -63,7 +63,7 @@ Additional labels: `LOCAL_TESTED`, `SEMANTIC_ONLY`, `PLACEHOLDER_CONFIG`,
 | Domain | LOCAL | GCP_SANDBOX | DEV | QA | PROD |
 |---|---|---|---|---|---|
 | CONFIGURATION | DEMONSTRATED_LOCAL | CONTRACT_DEFINED (yaml shape) | PLACEHOLDER | PLACEHOLDER | BLOCKED / NOT READY |
-| GCS_RAW_LANDING | LocalObjectStore demonstrated; GCS #9 absent | **BLOCKED** | BLOCKED | BLOCKED | BLOCKED |
+| GCS_RAW_LANDING | LocalObjectStore + GCSObjectStore (fake tests); no live bucket | READY_TO_VALIDATE (#9 adapter) | READY_TO_VALIDATE | READY_TO_VALIDATE | BLOCKED (PROD) |
 | BIGQUERY_ANALYTICAL | CONTRACT + SEMANTIC_ONLY | CLOUD_UNVERIFIED (#10) | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
 | PUBLICATION_CONCURRENCY | CONTRACT (TEMP_TABLES) | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
 | ORCHESTRATION | CONTRACT_ONLY (Step 20) | CLOUD_UNVERIFIED (no Composer) | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
@@ -122,11 +122,15 @@ No IAM bindings, WIF pools, or Secret Manager resources are created here.
 |---|---|
 | `ObjectStore` contract | exists |
 | `LocalObjectStore` | demonstrated |
-| GCS backend | fail-fast skeleton / deferred **#9** |
+| `GCSObjectStore` adapter | implemented (#9) — create-only `if_generation_match=0`, fake-client contract tests |
+| Live ADC / real bucket | **not** executed in default CI |
 
-Therefore `GCS_RAW_LANDING` is **not READY**. Future validation must cover
-immutable writes, checksum/provenance, preconditions, retries, encryption,
-retention, environment separation, and access logging — in a later scoped issue.
+Therefore `GCS_RAW_LANDING` is `READY_TO_VALIDATE` for Sandbox/DEV/QA (adapter
+ready for separately approved sandbox smoke), **not** `VERIFIED`, and PROD
+remains BLOCKED. Do not mark any environment READY solely because the adapter
+exists. Future live validation must cover immutable writes, checksum/provenance,
+preconditions, retries, encryption, retention, environment separation, and
+access logging — under a separately approved sandbox issue.
 
 ---
 
@@ -248,7 +252,7 @@ No cloud calls. Results derive from the static readiness registry.
 
 ## Known gaps (blocking cloud readiness today)
 
-1. GCS runtime (#9) not implemented  
+1. GCS live sandbox validation (adapter implemented in #9; no ADC/bucket VERIFIED evidence)  
 2. BigQuery runtime adapter (#10) not implemented  
 3. No cloud IAM / WIF / secrets wiring  
 4. No Composer/Airflow deployment  

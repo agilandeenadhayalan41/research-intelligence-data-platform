@@ -76,10 +76,11 @@ def _local_entries() -> tuple[ReadinessEntry, ...]:
             ReadinessDomain.GCS_RAW_LANDING,
             env,
             EvidenceLevel.DEMONSTRATED_LOCAL,
-            "LocalObjectStore immutable landing demonstrated; GCS runtime deferred (#9)",
-            gaps=("GCS backend is fail-fast skeleton",),
-            next_action="Implement GCS ObjectStore (#9) before any cloud landing claim",
-            labels=(EvidenceLabel.LOCAL_TESTED, EvidenceLabel.NOT_IMPLEMENTED),
+            "LocalObjectStore + GCSObjectStore (fake-client contract tests) demonstrated; "
+            "no live GCS bucket evidence (#9)",
+            gaps=("No ADC/live-bucket sandbox execution evidence",),
+            next_action="Run separately approved sandbox smoke against a real bucket before VERIFIED",
+            labels=(EvidenceLabel.LOCAL_TESTED, EvidenceLabel.CONTRACT_DEFINED),
             blocking=False,
         ),
         _entry(
@@ -333,11 +334,15 @@ def _cloud_placeholder_matrix(
             (EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.CLOUD_UNVERIFIED),
         ),
         ReadinessDomain.GCS_RAW_LANDING: (
-            EvidenceLevel.BLOCKED,
-            "ObjectStore contract + LocalObjectStore exist; GCS backend is deferred skeleton (#9)",
-            ("GCS runtime NOT_IMPLEMENTED", "Immutable GCS write/precondition behavior unverified"),
-            "Implement and validate GCS ObjectStore (#9) before claiming cloud landing readiness",
-            (EvidenceLabel.NOT_IMPLEMENTED, EvidenceLabel.CLOUD_UNVERIFIED),
+            EvidenceLevel.READY_TO_VALIDATE,
+            "GCSObjectStore adapter implemented (#9) with create-only if_generation_match=0; "
+            "offline fake-client contract tests only — not live-bucket VERIFIED",
+            (
+                "No approved sandbox ADC/bucket execution evidence",
+                "Immutable GCS write/precondition behavior unverified in cloud",
+            ),
+            "Run separately approved sandbox smoke (ADC + real bucket) before any VERIFIED claim",
+            (EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.CLOUD_UNVERIFIED),
         ),
         ReadinessDomain.BIGQUERY_ANALYTICAL: (
             EvidenceLevel.CLOUD_UNVERIFIED,
