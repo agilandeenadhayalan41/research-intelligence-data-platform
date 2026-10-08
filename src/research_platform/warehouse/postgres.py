@@ -443,8 +443,10 @@ def _numeric_type(
 
 
 def _numeric_spec_from_values(values: Sequence[object]) -> tuple[int, int]:
+    # Integer digits and scale are maximised independently: a column holding
+    # 12345678.0 and 0.12345 needs 8 integer digits and scale 5, i.e. (13, 5).
     max_scale = 0
-    max_digits = 1
+    max_integer_digits = 0
     saw_value = False
     for value in values:
         if value is None:
@@ -470,8 +472,8 @@ def _numeric_spec_from_values(values: Sequence[object]) -> tuple[int, int]:
         scale = -exponent if exponent < 0 else 0
         digit_count = len(digits) + (exponent if exponent > 0 else 0)
         max_scale = max(max_scale, scale)
-        max_digits = max(max_digits, digit_count)
+        max_integer_digits = max(max_integer_digits, digit_count - scale)
     if not saw_value:
         return _EMPTY_UNBOUNDED_NUMERIC
-    precision = max(max_digits, max_scale, 1)
+    precision = max(max_integer_digits + max_scale, 1)
     return precision, max_scale
