@@ -279,8 +279,9 @@ or public-source downloads. Durable Steps 12–13 PostgreSQL tests require
 `POSTGRES_DSN` and `make test-postgres-ingestion` (skipped when unavailable).
 
 The [Tests workflow](.github/workflows/tests.yml) runs install, check, test, and
-wheel packaging on pushes and pull requests, using Python 3.12 on `ubuntu-latest`
-with read-only repository permissions. Required-check enforcement is a separate
+wheel packaging on pushes and pull requests, using Python 3.12 and 3.14 on
+`ubuntu-latest` with read-only repository permissions. It also checks that the
+optional `postgres` extra resolves to binary wheels on each Python version. Required-check enforcement is a separate
 GitHub repository setting, not established by the workflow file.
 
 ## Configuration and environments
