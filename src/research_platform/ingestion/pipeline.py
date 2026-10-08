@@ -209,7 +209,7 @@ def run_openalex_works_local_ingest(
             if asset.content_format != "jsonl":
                 raise IngestionFormatError("selected asset must be jsonl")
 
-            result = _ingest_one_asset(
+            result = ingest_works_asset(
                 asset=asset,
                 run=run,
                 config=config,
@@ -264,7 +264,7 @@ def run_openalex_works_local_ingest(
             connection.close()
 
 
-def _ingest_one_asset(
+def ingest_works_asset(
     *,
     asset: OpenAlexAssetMetadata,
     run: PipelineRun,
@@ -273,13 +273,23 @@ def _ingest_one_asset(
     canonical: CanonicalStore,
     objects: ObjectStore,
     connector: OpenAlexConnector,
-    worker_id: str,
-    lease_ttl: timedelta,
-    clock: Callable[[], datetime],
-    decode_limits: JsonlDecodeLimits,
-    backend: PersistenceBackend,
-    postgres_connection: Any | None,
+    worker_id: str = DEFAULT_WORKER_ID,
+    lease_ttl: timedelta = DEFAULT_LEASE,
+    clock: Callable[[], datetime] | None = None,
+    decode_limits: JsonlDecodeLimits | None = None,
+    backend: PersistenceBackend = "memory",
+    postgres_connection: Any | None = None,
 ) -> tuple[SourceFileControl, FileIngestStats | None, str | None]:
+    """Reusable Stage: land + canonicalize one Works asset under an existing run.
+
+    Does not create or finish ``PipelineRun``. Callers (Step 12 wrapper or
+    Step 19 outer runner) own run lifecycle. Uses ``run.run_id`` for control,
+    landing provenance, and record lineage.
+    """
+    if clock is None:
+        clock = lambda: datetime.now(tz=UTC)  # noqa: E731
+    if decode_limits is None:
+        decode_limits = JsonlDecodeLimits()
     discovered_at = clock()
     incoming = SourceFileControl.model_validate(
         {

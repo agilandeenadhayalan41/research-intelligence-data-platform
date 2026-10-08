@@ -1,8 +1,9 @@
 # Bounded end-to-end pipeline (Step 19 / #27)
 
-**Status:** PLANNED (documentation only).  
-**Not:** IMPLEMENTED. No orchestration runner, no cloud deploy, no Airflow/Composer
-wiring (Step 20 / #25), no readiness package (Step 21 / #28).
+**Status:** IMPLEMENTED (local `SEMANTIC_ONLY` composition).  
+Package: `research_platform.e2e` — bounded runner, publication store, CLI.  
+**Not:** BigQuery runtime, GCP deploy, Airflow/Composer (Step 20 / #25), or
+readiness (Step 21 / #28). Evidence label is always `SEMANTIC_ONLY`.
 
 **Prerequisite:** Steps 01–18 are complete. Authoritative contracts already exist
 for discovery/selection, immutable landing, canonicalization, deletions,

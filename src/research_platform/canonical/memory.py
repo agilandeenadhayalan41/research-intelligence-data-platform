@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass
 from datetime import date, datetime
 from uuid import UUID
 
@@ -47,6 +48,27 @@ from research_platform.canonical.store import (
 )
 
 _Shared = Author | Institution | Source | Publisher | Topic | Funder
+
+
+@dataclass(frozen=True)
+class CanonicalSnapshot:
+    """Immutable public snapshot of all canonical tables (Step 19)."""
+
+    works: tuple[Work, ...]
+    authors: tuple[Author, ...]
+    institutions: tuple[Institution, ...]
+    sources: tuple[Source, ...]
+    publishers: tuple[Publisher, ...]
+    topics: tuple[Topic, ...]
+    funders: tuple[Funder, ...]
+    work_authors: tuple[WorkAuthor, ...]
+    work_author_institutions: tuple[WorkAuthorInstitution, ...]
+    work_topics: tuple[WorkTopic, ...]
+    work_keywords: tuple[WorkKeyword, ...]
+    work_references: tuple[WorkReference, ...]
+    work_mesh: tuple[WorkMesh, ...]
+    work_locations: tuple[WorkLocation, ...]
+    work_grants: tuple[WorkGrant, ...]
 
 
 class InMemoryCanonicalStore(CanonicalStore):
@@ -98,6 +120,75 @@ class InMemoryCanonicalStore(CanonicalStore):
                 "work_locations": len(self._work_locations),
                 "work_grants": len(self._work_grants),
             }
+
+    def snapshot(self) -> CanonicalSnapshot:
+        """Return an immutable copy of all canonical tables for analytical build."""
+        with self._lock:
+            return CanonicalSnapshot(
+                works=tuple(sorted(self._works.values(), key=lambda w: w.work_id)),
+                authors=tuple(sorted(self._authors.values(), key=lambda a: a.author_id)),
+                institutions=tuple(
+                    sorted(self._institutions.values(), key=lambda i: i.institution_id)
+                ),
+                sources=tuple(sorted(self._sources.values(), key=lambda s: s.source_id)),
+                publishers=tuple(
+                    sorted(self._publishers.values(), key=lambda p: p.publisher_id)
+                ),
+                topics=tuple(sorted(self._topics.values(), key=lambda t: t.topic_id)),
+                funders=tuple(sorted(self._funders.values(), key=lambda f: f.funder_id)),
+                work_authors=tuple(
+                    sorted(
+                        self._work_authors.values(),
+                        key=lambda r: (r.work_id, r.authorship_index),
+                    )
+                ),
+                work_author_institutions=tuple(
+                    sorted(
+                        self._work_author_institutions.values(),
+                        key=lambda r: (
+                            r.work_id,
+                            r.authorship_index,
+                            r.institution_index,
+                        ),
+                    )
+                ),
+                work_topics=tuple(
+                    sorted(
+                        self._work_topics.values(),
+                        key=lambda r: (r.work_id, r.topic_id),
+                    )
+                ),
+                work_keywords=tuple(
+                    sorted(
+                        self._work_keywords.values(),
+                        key=lambda r: (r.work_id, r.keyword_id),
+                    )
+                ),
+                work_references=tuple(
+                    sorted(
+                        self._work_references.values(),
+                        key=lambda r: (r.work_id, r.reference_index),
+                    )
+                ),
+                work_mesh=tuple(
+                    sorted(
+                        self._work_mesh.values(),
+                        key=lambda r: (r.work_id, r.mesh_index),
+                    )
+                ),
+                work_locations=tuple(
+                    sorted(
+                        self._work_locations.values(),
+                        key=lambda r: (r.work_id, r.location_index),
+                    )
+                ),
+                work_grants=tuple(
+                    sorted(
+                        self._work_grants.values(),
+                        key=lambda r: (r.work_id, r.grant_index),
+                    )
+                ),
+            )
 
     def upsert_work_bundle(self, bundle: CanonicalWorkBundle) -> CanonicalUpsertOutcome:
         with self._lock:
