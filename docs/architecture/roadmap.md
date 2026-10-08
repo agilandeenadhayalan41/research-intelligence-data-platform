@@ -18,7 +18,7 @@ environment readiness assessment/contracts are complete (no cloud provisioning).
 Explicit remaining gaps (separately scoped; do not start automatically):
 
 - #9 GCS runtime
-- #10 BigQuery runtime
+- #10 BigQuery runtime adapter (offline implementation; live sandbox separate)
 - Composer/Airflow deployment
 - HTTP Data Service deployment
 - cloud IAM/WIF/secrets
@@ -31,7 +31,7 @@ Explicit remaining gaps (separately scoped; do not start automatically):
 | 01 | Repository foundation | Complete |
 | 02 | Configuration framework | Complete |
 | 03 | Storage abstraction/contracts | Complete contract; GCSObjectStore adapter in #9 (live sandbox validation separate) |
-| 04 | Warehouse abstraction/contracts | Complete contract; DuckDB/BigQuery/PostgreSQL runtime adapters separate |
+| 04 | Warehouse abstraction/contracts | Complete contract; BigQueryWarehouse via #10 (offline); DuckDB/PostgreSQL adapters separate |
 | 05 | Bounded public OpenAlex connector | Complete |
 | 06 | OpenAlex Works manifest parser | Complete |
 | 07 | Bounded deterministic development sample selector | Complete |
@@ -55,7 +55,7 @@ Explicit remaining gaps (separately scoped; do not start automatically):
 | Gap | Scope | Notes |
 | --- | --- | --- |
 | #9 | GCS ObjectStore runtime | Adapter implemented; keep OPEN until review/live-validation policy; not VERIFIED |
-| #10 | BigQuery Warehouse adapter | Blocks analytical cloud readiness |
+| #10 | BigQuery Warehouse adapter | Adapter implemented offline; keep OPEN until review; not VERIFIED live |
 | — | Composer/Airflow deployment | Not authorized by Step 20/21 |
 | — | HTTP Data Service deployment | Domain contracts only today |
 | — | Cloud IAM / WIF / secrets | Documented; not provisioned |
