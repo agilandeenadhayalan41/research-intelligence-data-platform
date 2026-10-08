@@ -4,7 +4,7 @@ import socket
 import pytest
 
 from research_platform.config import PlatformConfig
-from research_platform.config.models import CloudConfig, StorageConfig
+from research_platform.config.models import CloudConfig, StorageConfig, WarehouseConfig
 from research_platform.provenance.models import IngestionProvenance
 from research_platform.sources.base import SourceConnector
 from research_platform.sources.openalex import OpenAlexConnector
@@ -42,12 +42,25 @@ def test_warehouse_skeletons_do_not_execute_queries(local_config: PlatformConfig
     adapters = [
         PostgreSQLWarehouse(local_config.warehouse),
         DuckDBWarehouse(local_config.warehouse),
-        BigQueryWarehouse(local_config.warehouse, local_config.cloud),
     ]
     for adapter in adapters:
         assert isinstance(adapter, Warehouse)
         with pytest.raises(NotImplementedError, match="later phase"):
             adapter.query("SELECT :value", {"value": 1})
+
+
+def test_bigquery_warehouse_is_concrete_with_injected_client() -> None:
+    from tests.support.fake_bigquery import FakeBigQueryClient
+
+    fake = FakeBigQueryClient()
+    adapter = BigQueryWarehouse(
+        WarehouseConfig(analytical="bigquery", bigquery_dataset="synthetic_dataset"),
+        CloudConfig(project_id="synthetic-project"),
+        client=fake,
+    )
+    assert isinstance(adapter, Warehouse)
+    table = adapter.query("SELECT 1 AS value")
+    assert table.num_rows == 1
 
 
 def test_gcs_adapter_is_concrete_with_injected_client(

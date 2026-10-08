@@ -87,9 +87,10 @@ def _local_entries() -> tuple[ReadinessEntry, ...]:
             ReadinessDomain.BIGQUERY_ANALYTICAL,
             env,
             EvidenceLevel.CONTRACT_DEFINED,
-            "Step 15–16 BigQuery SQL/contracts + DuckDB SEMANTIC_ONLY validation",
-            gaps=("No BigQuery runtime adapter (#10)", "No paid/MEASURED BQ execution"),
-            next_action="Implement BigQuery warehouse adapter (#10) and sandbox execution evidence",
+            "Step 15–16 BigQuery SQL/contracts + DuckDB SEMANTIC_ONLY; "
+            "BigQueryWarehouse adapter offline-tested (#10); no live job evidence",
+            gaps=("No paid/MEASURED BigQuery execution evidence",),
+            next_action="Run separately approved sandbox smoke before VERIFIED",
             labels=(EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.SEMANTIC_ONLY),
             blocking=False,
         ),
@@ -345,14 +346,15 @@ def _cloud_placeholder_matrix(
             (EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.CLOUD_UNVERIFIED),
         ),
         ReadinessDomain.BIGQUERY_ANALYTICAL: (
-            EvidenceLevel.CLOUD_UNVERIFIED,
-            "Step 15 BigQuery SQL/contracts exist; no warehouse adapter deployment/execution evidence (#10)",
+            EvidenceLevel.READY_TO_VALIDATE,
+            "BigQueryWarehouse adapter implemented (#10) with dry-run + maximum_bytes_billed; "
+            "offline fake-client tests only — not live-job VERIFIED",
             (
-                "No dataset creation",
+                "No approved sandbox ADC/dataset execution evidence",
                 "No MERGE/partition/cluster MEASURED evidence",
-                "No maximum_bytes_billed exercise",
+                "No live maximum_bytes_billed enforcement evidence",
             ),
-            "Implement BigQuery adapter (#10); validate contracts in sandbox without claiming PROD ready",
+            "Run separately approved sandbox smoke (ADC + real dataset) before any VERIFIED claim",
             (EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.CLOUD_UNVERIFIED),
         ),
         ReadinessDomain.PUBLICATION_CONCURRENCY: (

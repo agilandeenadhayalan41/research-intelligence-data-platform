@@ -53,12 +53,17 @@ ingestion tests stay offline (fake connector + in-memory control/canonical).
 client — no live credentials/network). Live bucket validation is separately
 approved and is not part of default CI.
 
-**Still planned:** live GCS sandbox validation, BigQuery runtime (#10), HTTP
+`BigQueryWarehouse` is implemented behind the existing `Warehouse` contract
+(dry-run + `maximum_bytes_billed`; default tests use an injected fake client —
+no live credentials/network/paid queries). Live dataset validation is
+separately approved and is not part of default CI.
+
+**Still planned:** separately scoped live GCS/BigQuery sandbox smoke, HTTP
 consumer deployment, Composer provisioning, and Dataform runtime. There is no
-implemented BigQuery deployment or production pipeline. Steps 15–18 define BigQuery/Gold/quality/Data Service
-contracts only — nothing is deployed or MEASURED. Step 20 adds orchestration
-**contracts** only (no scheduler deploy). Step 18 adds no HTTP service and no
-Postgres serving.
+deployed BigQuery dataset/table estate or production pipeline. Steps 15–18
+define BigQuery/Gold/quality/Data Service contracts; runtime adapters are
+offline-tested only. Step 20 adds orchestration **contracts** only (no
+scheduler deploy). Step 18 adds no HTTP service and no Postgres serving.
 
 ### Roadmap completion status
 
@@ -77,14 +82,17 @@ gaps remain explicitly documented; this does not mean production-ready.
 LOCAL (evidence only) → GCP_SANDBOX → DEV → QA → PROD
 ```
 
-Today Sandbox/DEV/QA/PROD are all `NOT_READY` (GCS live validation still open
-on #9, BigQuery #10, IAM / Composer gaps). GCS adapter evidence is
-`READY_TO_VALIDATE`, not `VERIFIED`. Do not equate YAML presence with readiness.
+Today Sandbox/DEV/QA/PROD are all `NOT_READY`. GCS (#9) and BigQuery (#10)
+adapters are `READY_TO_VALIDATE` (implemented + offline tested), **not**
+`VERIFIED` in a live sandbox. IAM / Composer / HTTP deploy gaps remain. Do not
+equate YAML presence or adapter code with production readiness.
 
 Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
 as the open umbrella roadmap for deferred/runtime work. Do not automatically
-start deferred issues (#7, #8, #10, #23) or claim production readiness.
+start deferred issues (#7, #8, #23) or claim production readiness.
+#9 is complete (adapter); close it as READY_TO_VALIDATE. Live smoke tests are
+separately scoped.
 
 ## Target architecture
 
@@ -290,10 +298,10 @@ working directory. Python does not automatically load `.env`.
 
 The scaffold still includes `warehouse.transactional: postgres`; that setting
 does not implement PostgreSQL persistence or make operational serving mandatory.
-`GCSObjectStore` is available with an injectable client for offline tests;
-warehouse adapters remain skeletons. `ControlStore` is a fail-fast protocol
-only. Configuration alignment and runtime persistence require separately
-scoped work.
+`GCSObjectStore` and `BigQueryWarehouse` are available with injectable clients
+for offline tests; DuckDB/PostgreSQL warehouse adapters remain skeletons.
+`ControlStore` is a fail-fast protocol only. Configuration alignment and
+runtime persistence require separately scoped work.
 
 The sandbox template references `GOOGLE_CLOUD_PROJECT`, `GCS_BUCKET`, and
 `BIGQUERY_DATASET`. Future cloud adapters must obtain credentials through approved
@@ -357,7 +365,7 @@ src\research_platform\
   e2e\                        Step 19 bounded SEMANTIC_ONLY composition runner
   orchestration\              Step 20 thin DAG / TaskMessage / retry / publication-scope contracts
   readiness\                  Step 21 environment readiness registry + promotion gates
-  warehouse\                  Warehouse contract; DuckDB/BigQuery/PostgreSQL skeletons
+  warehouse\                  Warehouse contract; BigQueryWarehouse; DuckDB/PostgreSQL skeletons
   provenance\                 Immutable retrieval-provenance model
   ingestion\ serving\         Reserved runtime areas
 tests\                        Offline unit/integration tests and synthetic fixtures

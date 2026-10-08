@@ -9,9 +9,19 @@ cost-safety rules, and local DuckDB semantic checks.
 | Status | What |
 | --- | --- |
 | **DEFINED IN STEP 15** | Table DDL contracts, query SQL files, pattern mappings, grains, partition/cluster decisions, MERGE/refresh design, cost rules, DuckDB `SEMANTIC_ONLY` fixtures, static offline checks |
-| **NOT YET DEPLOYED / MEASURED** | GCP datasets/tables, paid BigQuery jobs, partition pruning proof, clustering effectiveness, real cost/latency, Gold marts (Step 16 / #55) |
+| **NOT YET DEPLOYED / MEASURED** | GCP datasets/tables, paid BigQuery jobs, partition pruning proof, clustering effectiveness, real cost/latency |
+| **RUNTIME ADAPTER (#10)** | `BigQueryWarehouse` — dry-run + `maximum_bytes_billed`, typed `@params`, Arrow results; offline fake-client tests only |
 
-No cloud deployment, service accounts, Terraform, or paid queries are included.
+No cloud deployment, service accounts, Terraform, or paid queries are included
+in default CI. DuckDB `SEMANTIC_ONLY` is **not** a BigQuery dialect or cost
+validator.
+
+### Optional live sandbox smoke (manual only)
+
+Not run by `make test`, GitHub Actions, or default development. Requires a
+separately approved project/dataset and ADC. Suggested checks: dry-run budget
+rejection, bounded execute, parameter binding, empty/null Arrow results. Until
+that evidence exists, readiness remains `READY_TO_VALIDATE`, not `VERIFIED`.
 
 ## Separation of validation kinds
 

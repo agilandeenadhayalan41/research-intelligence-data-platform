@@ -64,7 +64,7 @@ Additional labels: `LOCAL_TESTED`, `SEMANTIC_ONLY`, `PLACEHOLDER_CONFIG`,
 |---|---|---|---|---|---|
 | CONFIGURATION | DEMONSTRATED_LOCAL | CONTRACT_DEFINED (yaml shape) | PLACEHOLDER | PLACEHOLDER | BLOCKED / NOT READY |
 | GCS_RAW_LANDING | LocalObjectStore + GCSObjectStore (fake tests); no live bucket | READY_TO_VALIDATE (#9 adapter) | READY_TO_VALIDATE | READY_TO_VALIDATE | BLOCKED (PROD) |
-| BIGQUERY_ANALYTICAL | CONTRACT + SEMANTIC_ONLY | CLOUD_UNVERIFIED (#10) | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
+| BIGQUERY_ANALYTICAL | CONTRACT + SEMANTIC_ONLY + offline adapter (#10) | READY_TO_VALIDATE (#10 adapter) | READY_TO_VALIDATE | READY_TO_VALIDATE | BLOCKED (PROD) |
 | PUBLICATION_CONCURRENCY | CONTRACT (TEMP_TABLES) | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
 | ORCHESTRATION | CONTRACT_ONLY (Step 20) | CLOUD_UNVERIFIED (no Composer) | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
 | DATA_QUALITY | DEMONSTRATED_LOCAL / SEMANTIC_ONLY | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
@@ -139,12 +139,13 @@ access logging — under a separately approved sandbox issue.
 | Fact | Status |
 |---|---|
 | Step 15–16 SQL/contracts | CONTRACT_DEFINED |
-| DuckDB SEMANTIC_ONLY | local evidence only |
-| Warehouse adapter / deploy | deferred **#10** |
+| DuckDB SEMANTIC_ONLY | local evidence only (not a BigQuery dialect/cost proof) |
+| `BigQueryWarehouse` adapter | implemented (#10) — dry-run + `maximum_bytes_billed`, fake-client tests |
+| Live ADC / real dataset jobs | **not** executed in default CI |
 
-Status remains `CONTRACT_DEFINED` / `CLOUD_UNVERIFIED` until real execution
-evidence exists (datasets, schema deploy, MERGE, partition/cluster,
-`maximum_bytes_billed`, concurrency strategy, DQ/Gold, latency/cost).
+Sandbox/DEV/QA `BIGQUERY_ANALYTICAL` is `READY_TO_VALIDATE` (adapter ready for
+separately approved sandbox smoke), **not** `VERIFIED`. PROD remains BLOCKED.
+Do not mark any environment READY solely because the adapter exists.
 
 **Do not run paid queries from this readiness step.**
 
@@ -252,8 +253,8 @@ No cloud calls. Results derive from the static readiness registry.
 
 ## Known gaps (blocking cloud readiness today)
 
-1. GCS live sandbox validation (adapter implemented in #9; no ADC/bucket VERIFIED evidence)  
-2. BigQuery runtime adapter (#10) not implemented  
+1. GCS live sandbox validation (adapter complete in #9; no ADC/bucket VERIFIED evidence)  
+2. BigQuery live sandbox validation (adapter complete in #10; no ADC/dataset VERIFIED evidence)  
 3. No cloud IAM / WIF / secrets wiring  
 4. No Composer/Airflow deployment  
 5. No HTTP Data Service deploy  

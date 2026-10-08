@@ -136,7 +136,10 @@ def test_sandbox_reports_cloud_gaps() -> None:
         EvidenceLevel.VERIFIED
     )
     assert by_domain[ReadinessDomain.BIGQUERY_ANALYTICAL].evidence_level is (
-        EvidenceLevel.CLOUD_UNVERIFIED
+        EvidenceLevel.READY_TO_VALIDATE
+    )
+    assert by_domain[ReadinessDomain.BIGQUERY_ANALYTICAL].evidence_level is not (
+        EvidenceLevel.VERIFIED
     )
     assert by_domain[ReadinessDomain.ORCHESTRATION].evidence_level is (
         EvidenceLevel.CLOUD_UNVERIFIED
@@ -179,7 +182,11 @@ def test_gcs_and_bigquery_runtime_gaps_surfaced() -> None:
             EvidenceLevel.CLOUD_UNVERIFIED,
             EvidenceLevel.BLOCKED,
             EvidenceLevel.CONTRACT_DEFINED,
+            EvidenceLevel.READY_TO_VALIDATE,
         }
+        assert by_domain[ReadinessDomain.BIGQUERY_ANALYTICAL].evidence_level is not (
+            EvidenceLevel.VERIFIED
+        )
         assert "#10" in by_domain[ReadinessDomain.BIGQUERY_ANALYTICAL].evidence or any(
             "#10" in g for g in by_domain[ReadinessDomain.BIGQUERY_ANALYTICAL].gaps
         )
@@ -228,9 +235,10 @@ def test_mandatory_domain_gap_blocks_promotion() -> None:
     decision = can_promote(EnvironmentName.GCP_SANDBOX, EnvironmentName.DEV)
     assert decision.allowed is False
     assert decision.blocking_domains
-    # GCS adapter is READY_TO_VALIDATE; other mandatory cloud gaps still block.
+    # GCS/BQ adapters are READY_TO_VALIDATE; other mandatory cloud gaps still block.
     assert ReadinessDomain.GCS_RAW_LANDING not in decision.blocking_domains
-    assert ReadinessDomain.BIGQUERY_ANALYTICAL in decision.blocking_domains
+    assert ReadinessDomain.BIGQUERY_ANALYTICAL not in decision.blocking_domains
+    assert ReadinessDomain.ORCHESTRATION in decision.blocking_domains
 
 
 def test_promotion_order_cannot_be_skipped() -> None:
