@@ -135,6 +135,22 @@ def test_local_postgres_query_adapter() -> None:
         setup.close()
 
 
+def test_local_postgres_lost_session_fails_safely_then_reconnects() -> None:
+    with PostgreSQLWarehouse(WarehouseConfig(postgres_dsn_env="POSTGRES_DSN")) as warehouse:
+        first_pid = warehouse.query("SELECT pg_backend_pid() AS pid").column("pid")[0].as_py()
+        with psycopg.connect(DSN, autocommit=True) as admin:
+            admin.execute("SELECT pg_terminate_backend(%s)", (first_pid,))
+
+        with pytest.raises(QueryExecutionError, match="connection failed") as raised:
+            warehouse.query("SELECT 1 AS value")
+        assert raised.value.__cause__ is None
+        assert DSN not in str(raised.value)
+
+        second_pid = warehouse.query("SELECT pg_backend_pid() AS pid").column("pid")[0].as_py()
+        assert second_pid != first_pid
+        assert warehouse.query("SHOW transaction_read_only").column(0)[0].as_py() == "on"
+
+
 def test_local_postgres_unbounded_numeric_with_mixed_scales() -> None:
     with PostgreSQLWarehouse(WarehouseConfig(postgres_dsn_env="POSTGRES_DSN")) as warehouse:
         mixed = warehouse.query(

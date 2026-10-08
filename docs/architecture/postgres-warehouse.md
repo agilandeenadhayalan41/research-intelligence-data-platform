@@ -34,6 +34,11 @@ The adapter owns that connection and reuses it for later queries. `close()`
 and the context manager close it. A closed adapter does not reconnect; further
 `query` calls raise `WarehouseError`.
 
+If the session is lost (server restart, terminated backend, network drop), the
+query that hits it fails with `QueryExecutionError` (`PostgreSQL connection
+failed`) and is not retried. The dead connection is discarded, and the next
+`query` opens a new one.
+
 The session uses `autocommit=True` and
 `default_transaction_read_only=on`. Ordinary selects do not leave an idle
 transaction. A failed statement does not leave an aborted transaction, so a

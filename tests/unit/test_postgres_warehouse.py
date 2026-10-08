@@ -449,6 +449,113 @@ def test_recovered_query_after_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(connection.closed_cursors) == 2
 
 
+class _ClosedConnectionError(Exception):
+    """Stands in for ``psycopg.OperationalError`` after a lost session."""
+
+
+class _LosingCursor(_Cursor):
+    connection: _LosingConnection
+
+    def execute(
+        self, query: str, params: Mapping[str, object] | None = None
+    ) -> None:
+        if self.connection.fail_at == "execute":
+            self.connection.lose()
+        super().execute(query, params)
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        if self.connection.fail_at == "fetchall":
+            self.connection.lose()
+        return super().fetchall()
+
+
+class _LosingConnection(_Connection):
+    """Marks itself closed when the chosen step fails, like a lost session."""
+
+    def __init__(self, fail_at: str) -> None:
+        super().__init__()
+        self.fail_at = fail_at
+        self.description = (_Column("value", 23),)
+        self.rows = [(1,)]
+
+    def lose(self) -> None:
+        self.closed = True
+        raise _ClosedConnectionError("server closed the connection unexpectedly")
+
+    def cursor(self) -> _Cursor:
+        if self.fail_at == "cursor":
+            self.lose()
+        self.cursor_calls += 1
+        return _LosingCursor(self)
+
+
+@pytest.mark.parametrize("fail_at", ["cursor", "execute", "fetchall"])
+def test_lost_session_maps_safely_and_next_query_reconnects(
+    monkeypatch: pytest.MonkeyPatch, fail_at: str
+) -> None:
+    monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://unit")
+    lost = _LosingConnection(fail_at)
+    fresh = _Connection()
+    fresh.description = (_Column("value", 23),)
+    fresh.rows = [(2,)]
+    connections = [lost, fresh]
+    opens: list[str] = []
+
+    def connect(dsn: str) -> _Connection:
+        opens.append(dsn)
+        return connections.pop(0)
+
+    warehouse = PostgreSQLWarehouse(_config(), connect=connect)
+    with pytest.raises(QueryExecutionError, match="connection failed") as raised:
+        warehouse.query("SELECT 1 AS value")
+    assert raised.value.__cause__ is None
+    assert raised.value.__suppress_context__
+    assert "unexpectedly" not in str(raised.value)
+
+    table = warehouse.query("SELECT 2 AS value")
+    assert table.column("value")[0].as_py() == 2
+    assert opens == ["postgresql://unit", "postgresql://unit"]
+    warehouse.close()
+    assert fresh.closed
+
+
+def test_query_error_on_open_connection_keeps_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://unit")
+    opens: list[str] = []
+    warehouse, connection = _warehouse(opens=opens)
+    connection.execute_error = RuntimeError("relation does not exist")
+    with pytest.raises(QueryExecutionError, match="query execution failed"):
+        warehouse.query("SELECT * FROM missing")
+    connection.execute_error = None
+    connection.description = (_Column("value", 23),)
+    connection.rows = [(3,)]
+    warehouse.query("SELECT 3 AS value")
+    assert opens == ["postgresql://unit"]
+    assert not connection.closed
+
+
+def test_lost_session_after_close_still_does_not_reconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://unit")
+    opens: list[str] = []
+    lost = _LosingConnection("execute")
+
+    def connect(dsn: str) -> _Connection:
+        opens.append(dsn)
+        return lost
+
+    warehouse = PostgreSQLWarehouse(_config(), connect=connect)
+    with pytest.raises(QueryExecutionError, match="connection failed"):
+        warehouse.query("SELECT 1 AS value")
+    warehouse.close()
+    with pytest.raises(WarehouseError, match="closed"):
+        warehouse.query("SELECT 1 AS value")
+    assert opens == ["postgresql://unit"]
+
+
 def test_connection_failure_hides_dsn(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://user:password@db.example/app")
 
