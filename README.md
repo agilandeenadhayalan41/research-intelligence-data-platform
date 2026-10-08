@@ -26,7 +26,7 @@ implemented.
 | 01 | Repository foundation | Python packaging, typed interfaces, structured logging, tests, CI, and optional local PostgreSQL tooling |
 | 02 | Configuration framework | Validated YAML, environment substitution, explicit environment selection, and strict sample limits |
 | 03 | Storage contracts | `ObjectStore` and immutable-write semantics; `GCSObjectStore` adapter (#9) with offline fake-client tests |
-| 04 | Warehouse contracts | Parameterized query/PyArrow interface; DuckDB, BigQuery, and PostgreSQL adapters remain skeletons |
+| 04 | Warehouse contracts | Parameterized query/PyArrow interface; `DuckDBWarehouse` local queries (#8); `BigQueryWarehouse` offline (#10); PostgreSQL adapter remains a skeleton |
 | 05 | Bounded OpenAlex connector | Anonymous manifest discovery and separate caller-owned streaming retrieval |
 | 06 | Works manifest parser | Pure parsing, validated metadata, stable identities, and duplicate/conflict handling |
 | 07 | Development sample selector | Deterministic, metadata-only selection with file-count and byte-size bounds |
@@ -57,6 +57,13 @@ approved and is not part of default CI.
 (dry-run + `maximum_bytes_billed`; default tests use an injected fake client —
 no live credentials/network/paid queries). Live dataset validation is
 separately approved and is not part of default CI.
+
+`DuckDBWarehouse` implements local `Warehouse.query` for `:memory:` or an
+explicit DuckDB file path. Construction does not open a connection or create a
+file. Named values are driver-bound (`$name`; supplied `:name` placeholders are
+rewritten to `$name` outside quotes and comments). Local DuckDB queries do not
+prove BigQuery dialect, BigQuery cost, cloud readiness, or production readiness.
+`PostgreSQLWarehouse` remains a deferred skeleton.
 
 **Still planned:** separately scoped live GCS/BigQuery sandbox smoke, HTTP
 consumer deployment, Composer provisioning, and Dataform runtime. There is no
@@ -299,7 +306,8 @@ working directory. Python does not automatically load `.env`.
 The scaffold still includes `warehouse.transactional: postgres`; that setting
 does not implement PostgreSQL persistence or make operational serving mandatory.
 `GCSObjectStore` and `BigQueryWarehouse` are available with injectable clients
-for offline tests; DuckDB/PostgreSQL warehouse adapters remain skeletons.
+for offline tests. `DuckDBWarehouse` executes local queries only.
+`PostgreSQLWarehouse` remains a skeleton.
 `ControlStore` is a fail-fast protocol only. Configuration alignment and
 runtime persistence require separately scoped work.
 
@@ -365,7 +373,7 @@ src\research_platform\
   e2e\                        Step 19 bounded SEMANTIC_ONLY composition runner
   orchestration\              Step 20 thin DAG / TaskMessage / retry / publication-scope contracts
   readiness\                  Step 21 environment readiness registry + promotion gates
-  warehouse\                  Warehouse contract; BigQueryWarehouse; DuckDB/PostgreSQL skeletons
+  warehouse\                  Warehouse contract; BigQueryWarehouse; DuckDBWarehouse; PostgreSQL skeleton
   provenance\                 Immutable retrieval-provenance model
   ingestion\ serving\         Reserved runtime areas
 tests\                        Offline unit/integration tests and synthetic fixtures
