@@ -34,7 +34,7 @@ Explicit remaining gaps (separately scoped; do not start automatically):
 | 01 | Repository foundation | Complete |
 | 02 | Configuration framework | Complete |
 | 03 | Storage abstraction/contracts | Complete contract; GCSObjectStore adapter in #9 (live sandbox validation separate) |
-| 04 | Warehouse abstraction/contracts | Complete contract; BigQueryWarehouse via #10 (offline); DuckDB/PostgreSQL adapters separate |
+| 04 | Warehouse abstraction/contracts | Complete contract; BigQueryWarehouse via #10 (offline); PostgreSQLWarehouse query via #7 (offline); DuckDB adapter separate |
 | 05 | Bounded public OpenAlex connector | Complete |
 | 06 | OpenAlex Works manifest parser | Complete |
 | 07 | Bounded deterministic development sample selector | Complete |
@@ -63,7 +63,7 @@ Explicit remaining gaps (separately scoped; do not start automatically):
 | — | HTTP Data Service deployment | Domain contracts only today |
 | — | Cloud IAM / WIF / secrets | Documented; not provisioned |
 | — | Monitoring / cost / network validation | Documented; not verified |
-| #7 / #8 / #23 | Optional adapters / operational store | Separately scoped; do not auto-start |
+| #8 / #23 | DuckDB query adapter / operational serving projection | Separately scoped; do not auto-start. #7 does not approve #23 |
 
 ## Source extension
 

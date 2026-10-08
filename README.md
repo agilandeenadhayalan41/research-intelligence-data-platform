@@ -26,7 +26,7 @@ implemented.
 | 01 | Repository foundation | Python packaging, typed interfaces, structured logging, tests, CI, and optional local PostgreSQL tooling |
 | 02 | Configuration framework | Validated YAML, environment substitution, explicit environment selection, and strict sample limits |
 | 03 | Storage contracts | `ObjectStore` and immutable-write semantics; `GCSObjectStore` adapter (#9) with offline fake-client tests |
-| 04 | Warehouse contracts | Parameterized query/PyArrow interface; DuckDB, BigQuery, and PostgreSQL adapters remain skeletons |
+| 04 | Warehouse contracts | Parameterized query/PyArrow interface; `BigQueryWarehouse` (#10) and `PostgreSQLWarehouse` (#7) implement `query`; DuckDB adapter remains a skeleton |
 | 05 | Bounded OpenAlex connector | Anonymous manifest discovery and separate caller-owned streaming retrieval |
 | 06 | Works manifest parser | Pure parsing, validated metadata, stable identities, and duplicate/conflict handling |
 | 07 | Development sample selector | Deterministic, metadata-only selection with file-count and byte-size bounds |
@@ -57,6 +57,14 @@ approved and is not part of default CI.
 (dry-run + `maximum_bytes_billed`; default tests use an injected fake client —
 no live credentials/network/paid queries). Live dataset validation is
 separately approved and is not part of default CI.
+
+`PostgreSQLWarehouse` implements the same read `Warehouse.query` contract for
+PostgreSQL (`%(name)s` placeholders, lazy DSN lookup, PyArrow results). Default
+tests inject a fake connection. `make test-postgres-warehouse` is the separate
+local PostgreSQL check and runs only when `POSTGRES_DSN` is set. The adapter
+is not the BigQuery analytical engine and does not implement issue #23
+(PostgreSQL/AlloyDB serving). See
+[PostgreSQL Warehouse](docs/architecture/postgres-warehouse.md).
 
 **Still planned:** separately scoped live GCS/BigQuery sandbox smoke, HTTP
 consumer deployment, Composer provisioning, and Dataform runtime. There is no
@@ -244,6 +252,7 @@ make build
 | `make test-unit` | Run only unit tests (also excludes postgres) |
 | `make test-orchestration` | Focused Step 20 orchestration contract tests (also covered by `make test`) |
 | `make test-postgres-ingestion` | Separately invoked local PostgreSQL Steps 12–13 transaction tests |
+| `make test-postgres-warehouse` | Separately invoked local PostgreSQL `Warehouse.query` tests (#7) |
 | `make check` | Compile Python sources/tests and check installed dependency consistency |
 | `make build` | Build a wheel into the ignored `dist` directory without building dependency wheels |
 | `make postgres-up` / `make postgres-down` | Explicitly start/stop the optional local Compose service |
@@ -299,7 +308,10 @@ working directory. Python does not automatically load `.env`.
 The scaffold still includes `warehouse.transactional: postgres`; that setting
 does not implement PostgreSQL persistence or make operational serving mandatory.
 `GCSObjectStore` and `BigQueryWarehouse` are available with injectable clients
-for offline tests; DuckDB/PostgreSQL warehouse adapters remain skeletons.
+for offline tests. `PostgreSQLWarehouse` implements read `Warehouse.query`
+(offline by default; local PostgreSQL integration is separate). The DuckDB
+warehouse adapter remains a skeleton. Issue #23 serving projections are not
+implemented.
 `ControlStore` is a fail-fast protocol only. Configuration alignment and
 runtime persistence require separately scoped work.
 
@@ -343,6 +355,7 @@ tracked YAML or logs.
 | [OpenAlex source profiling](docs/architecture/openalex-source-profiling.md) | Bounded profiler, evidence classes, verified representations, and format decision |
 | [Immutable local landing](docs/architecture/immutable-local-landing.md) | Raw key layout, atomic publish, replay/conflict, open integrity |
 | [Pipeline control](docs/architecture/pipeline-control.md) | Control models, lifecycle, claims, idempotency, ControlStore boundary |
+| [PostgreSQL Warehouse](docs/architecture/postgres-warehouse.md) | #7 read-query adapter, placeholders, Arrow types, lazy DSN, #23 boundary |
 | [OpenAlex canonical model](docs/architecture/openalex-canonical-model.md) | Normalized entities/relationships, IDs, mapping, PyArrow contracts |
 | [OpenAlex deletions](docs/architecture/openalex-deletions.md) | Tombstones, precedence/restore, deletion lineage, transaction boundary |
 | [21-step roadmap](docs/architecture/roadmap.md) | Completed stages and separately scoped future work |
@@ -365,7 +378,7 @@ src\research_platform\
   e2e\                        Step 19 bounded SEMANTIC_ONLY composition runner
   orchestration\              Step 20 thin DAG / TaskMessage / retry / publication-scope contracts
   readiness\                  Step 21 environment readiness registry + promotion gates
-  warehouse\                  Warehouse contract; BigQueryWarehouse; DuckDB/PostgreSQL skeletons
+  warehouse\                  Warehouse contract; BigQueryWarehouse; PostgreSQLWarehouse query; DuckDB skeleton
   provenance\                 Immutable retrieval-provenance model
   ingestion\ serving\         Reserved runtime areas
 tests\                        Offline unit/integration tests and synthetic fixtures

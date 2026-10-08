@@ -9,8 +9,8 @@ GCS landing, Airflow, or multi-file orchestration.
 Steps **05–11** are required, plus an **explicit local `ControlStore` +
 canonical write implementation** behind the Step 10 write boundary.
 
-- Issue **#7** (`Warehouse.query` / PostgreSQL query adapter) is **not** a
-  mandatory ingestion dependency.
+- Issue **#7** (`PostgreSQLWarehouse.query`) is a read-query adapter. It is
+  **not** the ingestion write path and it is **not** approval for issue #23.
 - `Warehouse.query` remains **read-only**.
 - Local PostgreSQL may back durable control/canonical writes when explicitly
   selected (`--backend postgres`). That does **not** make PostgreSQL the
