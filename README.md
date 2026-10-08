@@ -12,8 +12,9 @@ access, proprietary data, or cloud credentials are needed for the default tests.
 ## Current status
 
 **Steps 01–18 are complete through the storage-independent Data Service domain
-layer. Step 19 / #27 (bounded end-to-end pipeline) is next.
-The full end-to-end / cloud pipeline is not implemented.**
+layer. Step 19 / #27 (bounded end-to-end pipeline) is implemented pending
+review/merge (`research_platform.e2e`, SEMANTIC_ONLY). Step 20 / #25 remains
+untouched. The full cloud/Airflow pipeline is not implemented.**
 
 | Step | Delivered capability | Implementation boundary |
 | --- | --- | --- |
@@ -35,6 +36,7 @@ The full end-to-end / cloud pipeline is not implemented.**
 | 16 | Gold analytical marts | Consumer Gold marts, grains, fan-out-safe SQL, ACTIVE/citation/license semantics, evidence-honest materialization candidates, DuckDB `SEMANTIC_ONLY`; no GCP deploy ([#55](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/55)) |
 | 17 | Data quality gates and metrics | HARD_GATE vs INFORMATIONAL_METRIC, canonical/relationship/reconciliation/Gold exclusion gates, DuckDB `SEMANTIC_ONLY` runner; no silent repair, no GCP deploy ([#24](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/24)) |
 | 18 | Data Service domain layer | Storage-independent capabilities, capability registry, typed request/response contracts, cursor pagination, freshness/`PUBLISHED_SNAPSHOT`, in-memory `SEMANTIC_ONLY` repository; no HTTP deploy, no raw SQL, no Postgres/AlloyDB serving ([#26](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/26)) |
+| 19 | Bounded end-to-end pipeline | One outer `PipelineRun`, reusable Step-12/13 stages, DuckDB `SEMANTIC_ONLY` analytical/Gold, real Step-17 gates, atomic local publication, Data Service final validation; no BigQuery/Airflow/GCP ([#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27)) — pending review/merge |
 
 Constructing adapters or loading configuration does not connect to services.
 `LocalObjectStore` writes only under the configured local landing path. Default
@@ -50,37 +52,19 @@ is deployed or MEASURED. Step 18 adds no HTTP service and no Postgres serving.
 
 **Steps 01–18 ✅ complete.**
 
-**Step 19 / [#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27):**
-bounded end-to-end pipeline. See
+**Step 19 / [#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27)**
+(this PR, pending review/merge): bounded end-to-end pipeline
+(`research_platform.e2e`). See
 [End-to-end pipeline](docs/architecture/end-to-end-pipeline.md).
 
 ```text
-discover
-  ↓
-select
-  ↓
-ingest
-  ↓
-immutable landing
-  ↓
-canonicalize
-  ↓
-changes/deletions
-  ↓
-analytical models
-  ↓
-data-quality gate
-  ↓
-Gold outputs
-  ↓
-consumer publication
-  ↓
-final validation
+discover → select → ingest → immutable landing → canonicalize →
+changes/deletions → analytical models → data-quality gate →
+Gold outputs → consumer publication → final validation
 ```
 
-Step 18 / [#26](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/26)
-Data Service domain layer is complete; see
-[Data Service](docs/architecture/data-service.md).
+**After merge — Step 20 / [#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25):**
+Airflow/Composer evaluation. Do not start #25 from this PR.
 
 Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)

@@ -171,7 +171,7 @@ def run_openalex_deletions_local_ingest(
             )
         )
         try:
-            result = _ingest_one_deletion_asset(
+            result = ingest_deletion_asset(
                 asset=deletion_asset,
                 run=run,
                 config=config,
@@ -226,7 +226,7 @@ def run_openalex_deletions_local_ingest(
             connection.close()
 
 
-def _ingest_one_deletion_asset(
+def ingest_deletion_asset(
     *,
     asset: OpenAlexDeletionAssetMetadata,
     run: PipelineRun,
@@ -235,13 +235,21 @@ def _ingest_one_deletion_asset(
     canonical: CanonicalStore,
     objects: ObjectStore,
     connector: _Fetchable,
-    worker_id: str,
-    lease_ttl: timedelta,
-    clock: Callable[[], datetime],
-    decode_limits: CsvDeletionDecodeLimits,
-    backend: PersistenceBackend,
-    postgres_connection: Any | None,
+    worker_id: str = DEFAULT_WORKER_ID,
+    lease_ttl: timedelta = DEFAULT_LEASE,
+    clock: Callable[[], datetime] | None = None,
+    decode_limits: CsvDeletionDecodeLimits | None = None,
+    backend: PersistenceBackend = "memory",
+    postgres_connection: Any | None = None,
 ) -> tuple[SourceFileControl, DeletionIngestStats | None, str | None]:
+    """Reusable Stage: land + apply one deletion asset under an existing run.
+
+    Does not create or finish ``PipelineRun``. Callers own run lifecycle.
+    """
+    if clock is None:
+        clock = lambda: datetime.now(tz=UTC)  # noqa: E731
+    if decode_limits is None:
+        decode_limits = CsvDeletionDecodeLimits()
     discovered_at = clock()
     incoming = SourceFileControl.model_validate(
         {
