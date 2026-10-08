@@ -20,7 +20,7 @@ test-postgres-ingestion:
 
 test-postgres-warehouse:
 	$(PYTHON) -m pip install -e ".[dev,postgres]"
-	$(PYTHON) -m pytest tests/integration/test_postgres_warehouse.py -m postgres
+	$(PYTHON) -m pytest tests/integration/test_postgres_warehouse_integration.py -m postgres
 
 check:
 	$(PYTHON) -m compileall -q src tests
