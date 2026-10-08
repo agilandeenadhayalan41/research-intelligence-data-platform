@@ -41,10 +41,22 @@ failed`) and is not retried. The dead connection is discarded, and the next
 
 The session uses `autocommit=True` and
 `default_transaction_read_only=on`. Ordinary selects do not leave an idle
-transaction. A failed statement does not leave an aborted transaction, so a
-later query can reuse the connection. Data-changing SQL fails in PostgreSQL
-instead of being detected by a SQL parser. `TimeZone=UTC` applies to
-`timestamptz` display; `timestamp` without time zone is not rewritten.
+transaction, and a failed autocommit statement (including a
+`statement_timeout` cancel) leaves the session idle, so the next query reuses
+the connection. Data-changing SQL fails in PostgreSQL instead of being detected
+by a SQL parser. `TimeZone=UTC` applies to `timestamptz` display; `timestamp`
+without time zone is not rewritten.
+
+Caller SQL is not parsed, so it can still leave a live session unusable:
+`BEGIN` (alone or in a multi-statement string) opens a transaction, an error
+inside it aborts that transaction, and `COPY … TO STDOUT` cannot be read
+through `query` and leaves a copy in progress. After any query, a connection
+that is not idle outside a transaction is closed (which rolls back any open
+transaction) and the next `query` opens a new session. A reconnect starts a
+fresh server session: only the adapter's `autocommit`, read-only and
+`TimeZone=UTC` options are reapplied, and settings the caller changed with
+`SET` or `set_config` are not kept. Do not rely on session state across
+`query` calls.
 
 This differs from ingestion `connect_postgres`, which keeps `autocommit=False`
 for explicit write transactions. Warehouse queries do not use that helper.

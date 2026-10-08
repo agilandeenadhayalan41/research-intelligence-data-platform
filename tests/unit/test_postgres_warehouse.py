@@ -556,6 +556,191 @@ def test_lost_session_after_close_still_does_not_reconnect(
     assert opens == ["postgresql://unit"]
 
 
+class _Status:
+    """Stands in for ``psycopg.pq.TransactionStatus`` (only ``name`` is read)."""
+
+    def __init__(self, name: str | None) -> None:
+        if name is not None:
+            self.name = name
+
+
+class _Info:
+    def __init__(self) -> None:
+        self.transaction_status: _Status = _Status("IDLE")
+
+
+class _StatusCursor(_Cursor):
+    connection: _StatusConnection
+
+    def execute(
+        self, query: str, params: Mapping[str, object] | None = None
+    ) -> None:
+        self.connection.info.transaction_status = _Status(self.connection.status_after)
+        super().execute(query, params)
+
+
+class _StatusConnection(_Connection):
+    """Reports a psycopg-style transaction status after each execute."""
+
+    def __init__(self, status_after: str | None = "IDLE") -> None:
+        super().__init__()
+        self.info = _Info()
+        self.status_after = status_after
+        self.close_calls = 0
+        self.close_error: BaseException | None = None
+        self.description = (_Column("value", 23),)
+        self.rows = [(1,)]
+
+    def cursor(self) -> _Cursor:
+        self.cursor_calls += 1
+        return _StatusCursor(self)
+
+    def close(self) -> None:
+        self.close_calls += 1
+        super().close()
+        if self.close_error is not None:
+            raise self.close_error
+
+
+def _reconnecting_warehouse(
+    first: _Connection,
+) -> tuple[PostgreSQLWarehouse, list[str], _Connection]:
+    fresh = _Connection()
+    fresh.description = (_Column("value", 23),)
+    fresh.rows = [(2,)]
+    connections = [first, fresh]
+    opens: list[str] = []
+
+    def connect(dsn: str) -> _Connection:
+        opens.append(dsn)
+        return connections.pop(0)
+
+    return PostgreSQLWarehouse(_config(), connect=connect), opens, fresh
+
+
+@pytest.mark.parametrize("status", ["ACTIVE", "INERROR", "INTRANS", "UNKNOWN", None])
+def test_failed_query_leaving_session_not_idle_reconnects(
+    monkeypatch: pytest.MonkeyPatch, status: str | None
+) -> None:
+    monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://unit")
+    stuck = _StatusConnection(status_after=status)
+    stuck.execute_error = RuntimeError("COPY cannot be used with this method")
+    warehouse, opens, _fresh = _reconnecting_warehouse(stuck)
+    with pytest.raises(QueryExecutionError, match="query execution failed") as raised:
+        warehouse.query("COPY (SELECT 1) TO STDOUT")
+    assert raised.value.__cause__ is None
+    assert "COPY cannot" not in str(raised.value)
+    assert stuck.close_calls == 1
+
+    table = warehouse.query("SELECT 2 AS value")
+    assert table.column("value")[0].as_py() == 2
+    assert len(opens) == 2
+
+
+def test_successful_query_leaving_transaction_open_is_not_reused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://unit")
+    in_transaction = _StatusConnection(status_after="INTRANS")
+    warehouse, opens, _fresh = _reconnecting_warehouse(in_transaction)
+    table = warehouse.query("SELECT 1 AS value; BEGIN")
+    assert table.column("value")[0].as_py() == 1
+    assert in_transaction.close_calls == 1
+    assert warehouse.query("SELECT 2 AS value").column("value")[0].as_py() == 2
+    assert len(opens) == 2
+
+
+def test_non_result_statement_leaving_transaction_open_reconnects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://unit")
+    began = _StatusConnection(status_after="INTRANS")
+    began.description = None
+    warehouse, opens, _fresh = _reconnecting_warehouse(began)
+    with pytest.raises(QueryExecutionError, match="did not produce a result set"):
+        warehouse.query("BEGIN")
+    assert began.close_calls == 1
+    assert warehouse.query("SELECT 2 AS value").column("value")[0].as_py() == 2
+    assert len(opens) == 2
+
+
+def test_failed_query_leaving_session_idle_keeps_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://unit")
+    opens: list[str] = []
+    idle = _StatusConnection(status_after="IDLE")
+    warehouse, _ = _warehouse(idle, opens=opens)
+    idle.execute_error = RuntimeError("canceling statement due to statement timeout")
+    with pytest.raises(QueryExecutionError, match="query execution failed"):
+        warehouse.query("SELECT pg_sleep(10)")
+    idle.execute_error = None
+    assert warehouse.query("SELECT 1 AS value").column("value")[0].as_py() == 1
+    assert opens == ["postgresql://unit"]
+    assert idle.close_calls == 0
+
+
+class _FailingCloseCursor(_Cursor):
+    def close(self) -> None:
+        super().close()
+        raise RuntimeError("cursor close failed for postgresql://unit")
+
+
+class _FailingCursorCloseConnection(_StatusConnection):
+    def cursor(self) -> _Cursor:
+        self.cursor_calls += 1
+        return _FailingCloseCursor(self)
+
+
+def test_cursor_close_failure_is_logged_as_cursor_and_keeps_connection(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://unit")
+    opens: list[str] = []
+    connection = _FailingCursorCloseConnection(status_after="IDLE")
+    warehouse, _ = _warehouse(connection, opens=opens)
+    with caplog.at_level(logging.INFO, logger="research_platform.warehouse.postgres"):
+        table = warehouse.query("SELECT 1 AS value")
+    assert table.column("value")[0].as_py() == 1
+    messages = [record.getMessage() for record in caplog.records]
+    assert "postgres cursor close failed" in messages
+    assert "postgres connection close failed" not in messages
+    assert not any("postgresql://unit" in message for message in messages)
+    assert connection.close_calls == 0
+    assert opens == ["postgresql://unit"]
+
+
+@pytest.mark.parametrize("status", ["ACTIVE", "INERROR"])
+def test_interrupt_mid_query_still_discards_unusable_connection(
+    monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://unit")
+    stuck = _StatusConnection(status_after=status)
+    stuck.execute_error = KeyboardInterrupt()
+    warehouse, opens, _fresh = _reconnecting_warehouse(stuck)
+    with pytest.raises(KeyboardInterrupt):
+        warehouse.query("SELECT pg_sleep(60)")
+    assert stuck.close_calls == 1
+    assert warehouse.query("SELECT 2 AS value").column("value")[0].as_py() == 2
+    assert len(opens) == 2
+
+
+def test_discarded_connection_close_failure_is_logged_as_connection(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://unit")
+    stuck = _StatusConnection(status_after="INERROR")
+    stuck.execute_error = RuntimeError("current transaction is aborted")
+    stuck.close_error = RuntimeError("close failed for postgresql://unit")
+    warehouse, _opens, _fresh = _reconnecting_warehouse(stuck)
+    with caplog.at_level(logging.INFO, logger="research_platform.warehouse.postgres"):
+        with pytest.raises(QueryExecutionError, match="query execution failed"):
+            warehouse.query("SELECT 1/0")
+    messages = [record.getMessage() for record in caplog.records]
+    assert "postgres connection close failed" in messages
+    assert not any("postgresql://unit" in message for message in messages)
+
+
 def test_connection_failure_hides_dsn(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://user:password@db.example/app")
 
