@@ -29,8 +29,8 @@ for discovery/selection, immutable landing, canonicalization, deletions,
 analytical/Gold models, data-quality gates, and the storage-independent
 Data Service. Step 19 wires those stages into one bounded OpenAlex Works path.
 
-Issue: [#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27)  
-Umbrella: [#2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2) (remains OPEN)
+Issue: [#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27) (CLOSED — complete)  
+Umbrella: [#2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2) (remains OPEN; Step 20 / #25 next)
 
 ---
 
