@@ -42,7 +42,10 @@ from research_platform.e2e.publication import (
     PublicationSnapshot,
     PublicationStore,
 )
-from research_platform.e2e.summaries import safe_exception_message
+from research_platform.e2e.summaries import (
+    recovery_action_for_stages,
+    safe_exception_message,
+)
 from research_platform.ingestion.deletion_pipeline import ingest_deletion_asset
 from research_platform.ingestion.pipeline import FileIngestStats, ingest_works_asset
 from research_platform.quality.models import (
@@ -93,6 +96,7 @@ def run_bounded_e2e_pipeline(
     force_pre_serving_fail: bool = False,
     force_pre_visible_fail: bool = False,
     force_final_validation_fail: bool = False,
+    force_final_validation_raise: bool = False,
 ) -> EndToEndResult:
     """Execute the full Step-19 stage sequence under one outer PipelineRun.
 
@@ -467,7 +471,7 @@ def run_bounded_e2e_pipeline(
             published=True,
         )
         fingerprint = repo.content_fingerprint()
-        snap = PublicationSnapshot(
+        candidate = PublicationSnapshot(
             publication_version=run_context.publication_version or pub_version,
             run_id=str(run.run_id),
             repository=repo,
@@ -475,8 +479,10 @@ def run_bounded_e2e_pipeline(
         )
         previous_current = publications.current()
         try:
-            publications.stage(snap)
-            publications.activate(snap.publication_version)
+            # Use the authoritative snapshot returned by stage() so same-version
+            # + same-content idempotency retains original provenance/freshness.
+            staged = publications.stage(candidate)
+            activated = publications.activate(staged.publication_version)
         except Exception as exc:
             msg = safe_exception_message(exc)
             _append(StageName.CONSUMER_PUBLICATION, StageStatus.FAILED, msg)
@@ -484,34 +490,45 @@ def run_bounded_e2e_pipeline(
             return _finish_failed(
                 control, run, stages, clock, msg,
                 pre_serving, pre_visible, final_validation,
-                snap.publication_version,
+                candidate.publication_version,
             )
         _append(
             StageName.CONSUMER_PUBLICATION,
             StageStatus.SUCCESS,
-            snap.publication_version,
+            activated.publication_version,
         )
 
-        # FINAL_VALIDATION — fail-closed: restore prior current on failure
-        current = publications.current()
-        final_validation = _run_final_validation(
-            current,
-            expected_run_id=str(run.run_id),
-            expected_version=snap.publication_version,
-            force_fail=force_final_validation_fail,
-        )
-        if not final_validation.ok:
-            if hasattr(publications, "restore_current"):
-                publications.restore_current(previous_current)  # type: ignore[attr-defined]
-            _append(
-                StageName.FINAL_VALIDATION,
-                StageStatus.FAILED,
-                "; ".join(final_validation.errors),
+        # FINAL_VALIDATION — fail-closed on ok=False OR unexpected exception.
+        try:
+            if force_final_validation_raise:
+                raise RuntimeError("simulated final validation exception")
+            current = publications.current()
+            final_validation = _run_final_validation(
+                current,
+                expected_run_id=activated.run_id,
+                expected_version=activated.publication_version,
+                force_fail=force_final_validation_fail,
             )
+            if not final_validation.ok:
+                publications.restore_current(previous_current)
+                _append(
+                    StageName.FINAL_VALIDATION,
+                    StageStatus.FAILED,
+                    "; ".join(final_validation.errors),
+                )
+                return _finish_failed(
+                    control, run, stages, clock, "final validation failed",
+                    pre_serving, pre_visible, final_validation,
+                    activated.publication_version,
+                )
+        except Exception as exc:
+            publications.restore_current(previous_current)
+            msg = safe_exception_message(exc)
+            _append(StageName.FINAL_VALIDATION, StageStatus.FAILED, msg)
             return _finish_failed(
-                control, run, stages, clock, "final validation failed",
+                control, run, stages, clock, msg,
                 pre_serving, pre_visible, final_validation,
-                snap.publication_version,
+                activated.publication_version,
             )
         _append(StageName.FINAL_VALIDATION, StageStatus.SUCCESS, "ok")
 
@@ -523,7 +540,7 @@ def run_bounded_e2e_pipeline(
         return EndToEndResult(
             run=finished,
             stages=tuple(stages),
-            publication_version=snap.publication_version,
+            publication_version=activated.publication_version,
             pre_serving_report=pre_serving,
             pre_visible_report=pre_visible,
             final_validation=final_validation,
@@ -572,6 +589,7 @@ def _finish_failed(
         pre_visible_report=pre_visible,
         final_validation=final_validation,
         safe_error=message,
+        recovery_action=recovery_action_for_stages(stages),
     )
 
 

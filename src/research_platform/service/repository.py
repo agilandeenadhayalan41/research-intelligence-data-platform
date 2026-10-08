@@ -43,12 +43,26 @@ class ConsumerRepositorySnapshot:
     published: bool
 
     def content_fingerprint(self) -> str:
+        # Sort collections so identical content yields a stable fingerprint
+        # regardless of Gold/DuckDB row order (required for publication idempotency).
+        works = sorted(self.works, key=lambda w: w.work_id)
+        journals = sorted(self.journal_metrics, key=lambda j: j.source_id)
+        publishers = sorted(self.publisher_summaries, key=lambda p: p.publisher_id)
+        topics = sorted(
+            self.publisher_topic_metrics,
+            key=lambda t: (
+                t.publisher_id,
+                t.topic_id,
+                t.publication_year is None,
+                t.publication_year if t.publication_year is not None else 0,
+            ),
+        )
         payload = {
-            "works": [w.model_dump(mode="json") for w in self.works],
+            "works": [w.model_dump(mode="json") for w in works],
             "deleted_work_ids": sorted(self.deleted_work_ids),
-            "journals": [j.model_dump(mode="json") for j in self.journal_metrics],
-            "publishers": [p.model_dump(mode="json") for p in self.publisher_summaries],
-            "topics": [t.model_dump(mode="json") for t in self.publisher_topic_metrics],
+            "journals": [j.model_dump(mode="json") for j in journals],
+            "publishers": [p.model_dump(mode="json") for p in publishers],
+            "topics": [t.model_dump(mode="json") for t in topics],
         }
         raw = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
         return hashlib.sha256(raw).hexdigest()

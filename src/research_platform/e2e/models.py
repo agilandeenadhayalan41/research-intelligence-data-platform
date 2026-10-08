@@ -62,10 +62,10 @@ class StageStatus(StrEnum):
 
 
 class EndToEndBounds(SettingsModel):
-    """Strict sample bounds — no silent clamping, no unlimited."""
+    """Strict sample bounds — no silent clamping, no unlimited, no coercion."""
 
-    max_files: int = Field(default=DEFAULT_MAX_FILES)
-    max_file_size_bytes: int = Field(default=DEFAULT_MAX_FILE_SIZE_BYTES)
+    max_files: int = Field(default=DEFAULT_MAX_FILES, strict=True)
+    max_file_size_bytes: int = Field(default=DEFAULT_MAX_FILE_SIZE_BYTES, strict=True)
 
     @field_validator("max_files", "max_file_size_bytes", mode="before")
     @classmethod
@@ -89,6 +89,28 @@ class EndToEndBounds(SettingsModel):
                 f"max_file_size_bytes must be <= {DEFAULT_MAX_FILE_SIZE_BYTES}"
             )
         return self
+
+
+class RecoveryAction(StrEnum):
+    """Safe, typed recovery guidance for Step-19 failure summaries."""
+
+    CORRECT_BOUNDS_AND_RERUN = "correct bounds/config and rerun"
+    RETRY_SAME_IMMUTABLE_ASSET = (
+        "correct source/landing failure and retry same immutable asset"
+    )
+    RESOLVE_CANONICAL_BEFORE_RETRY = (
+        "resolve canonical conflict/restore decision before retry"
+    )
+    INSPECT_QUALITY_DO_NOT_PUBLISH = (
+        "inspect aggregate quality diagnostics; do not publish candidate"
+    )
+    RETRY_ACTIVATE_STAGED_VERSION = (
+        "retry/activate the same staged publication_version after validation"
+    )
+    PREVIOUS_RESTORED_INSPECT_VALIDATION = (
+        "previous publication restored; inspect validation before retry"
+    )
+    INSPECT_FAILURE_AND_RERUN = "inspect failure and rerun"
 
 
 class StageResult(SettingsModel):
@@ -115,6 +137,7 @@ class EndToEndResult(SettingsModel):
     pre_visible_report: QualityReport | None = None
     final_validation: FinalValidationReport | None = None
     safe_error: str | None = None
+    recovery_action: str | None = None
 
     @property
     def success(self) -> bool:

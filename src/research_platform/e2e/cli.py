@@ -8,8 +8,9 @@ import sys
 from pathlib import Path
 
 from research_platform.e2e.bounds import parse_bounds
+from research_platform.e2e.models import RecoveryAction
 from research_platform.e2e.runner import run_bounded_e2e_pipeline
-from research_platform.e2e.summaries import safe_result_summary
+from research_platform.e2e.summaries import safe_exception_message, safe_result_summary
 from research_platform.sources.openalex.connector import OpenAlexConnector
 
 
@@ -62,7 +63,11 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(
             json.dumps(
-                {"success": False, "safe_error": type(exc).__name__},
+                {
+                    "success": False,
+                    "safe_error": safe_exception_message(exc),
+                    "recovery_action": RecoveryAction.CORRECT_BOUNDS_AND_RERUN.value,
+                },
                 sort_keys=True,
             )
         )

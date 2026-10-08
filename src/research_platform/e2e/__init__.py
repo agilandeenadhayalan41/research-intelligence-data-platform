@@ -12,6 +12,7 @@ from research_platform.e2e.models import (
     EndToEndResult,
     EndToEndRunContext,
     FinalValidationReport,
+    RecoveryAction,
     StageName,
     StageResult,
     StageStatus,
@@ -23,7 +24,7 @@ from research_platform.e2e.publication import (
     PublicationStore,
 )
 from research_platform.e2e.runner import run_bounded_e2e_pipeline
-from research_platform.e2e.summaries import safe_result_summary
+from research_platform.e2e.summaries import recovery_action_for_stages, safe_result_summary
 
 __all__ = [
     "PIPELINE_NAME",
@@ -36,10 +37,12 @@ __all__ = [
     "PublicationConflictError",
     "PublicationSnapshot",
     "PublicationStore",
+    "RecoveryAction",
     "StageName",
     "StageResult",
     "StageStatus",
     "parse_bounds",
+    "recovery_action_for_stages",
     "run_bounded_e2e_pipeline",
     "safe_result_summary",
 ]

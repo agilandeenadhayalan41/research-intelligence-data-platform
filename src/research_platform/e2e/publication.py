@@ -33,6 +33,10 @@ class PublicationStore(Protocol):
 
     def get_staged(self, publication_version: str) -> PublicationSnapshot | None: ...
 
+    def restore_current(self, snapshot: PublicationSnapshot | None) -> None:
+        """Fail-closed visibility rollback after activation / final-validation failure."""
+        ...
+
 
 class InMemoryPublicationStore:
     """Local publication store with atomic activation semantics."""
