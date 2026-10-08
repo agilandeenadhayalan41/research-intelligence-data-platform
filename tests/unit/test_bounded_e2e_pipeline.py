@@ -24,12 +24,14 @@ from research_platform.e2e import (
     InMemoryPublicationStore,
     PublicationConflictError,
     PublicationSnapshot,
+    RecoveryAction,
     StageName,
     StageStatus,
     parse_bounds,
     run_bounded_e2e_pipeline,
     safe_result_summary,
 )
+from research_platform.e2e.publication import PublicationStore
 from research_platform.e2e.cli import main as e2e_main
 from research_platform.ingestion import ingest_works_asset, run_openalex_works_local_ingest
 from research_platform.service.contracts import WorkMetadataRequest
@@ -267,11 +269,15 @@ def test_strict_bounds_defaults() -> None:
         {"max_files": -1},
         {"max_files": True},
         {"max_files": 2},
+        {"max_files": "1"},
+        {"max_files": 1.0},
         {"max_file_size_bytes": None},
         {"max_file_size_bytes": 0},
         {"max_file_size_bytes": -1},
         {"max_file_size_bytes": False},
         {"max_file_size_bytes": 25_000_001},
+        {"max_file_size_bytes": "25000000"},
+        {"max_file_size_bytes": 25_000_000.0},
     ],
 )
 def test_strict_bounds_rejected(kwargs: dict) -> None:
@@ -1128,3 +1134,179 @@ def test_consumer_repository_public_fingerprint() -> None:
     snap = repo.snapshot()
     assert snap.content_fingerprint() == repo.content_fingerprint()
     assert "W001" in {w.work_id for w in snap.works}
+
+
+# ---------------------------------------------------------------------------
+# Final Step-19 closure hardening
+# ---------------------------------------------------------------------------
+
+
+def test_publication_store_protocol_requires_restore_current() -> None:
+    assert "restore_current" in PublicationStore.__protocol_attrs__
+
+
+def test_final_validation_exception_restores_old_current(tmp_path: Path) -> None:
+    pubs = InMemoryPublicationStore()
+    first = _run_ok(tmp_path / "a", publication_store=pubs)
+    assert first.success
+    old = pubs.current()
+    assert old is not None
+    second = _run_ok(
+        tmp_path / "b",
+        publication_store=pubs,
+        force_final_validation_raise=True,
+        control=InMemoryControlStore(),
+        canonical=InMemoryCanonicalStore(),
+        asset=_asset(uri_suffix="part_raise.gz"),
+    )
+    assert not second.success
+    assert second.run.status is PipelineRunStatus.FAILED
+    assert pubs.current() is old
+    final = next(s for s in second.stages if s.stage is StageName.FINAL_VALIDATION)
+    assert final.status is StageStatus.FAILED
+    # Never expose raw exception text.
+    assert "simulated" not in (second.safe_error or "").lower()
+    assert "simulated" not in final.message.lower()
+    summary = safe_result_summary(second)
+    assert summary["recovery_action"]
+    assert "previous publication restored" in summary["recovery_action"]
+
+
+def test_final_validation_exception_clears_first_publication(tmp_path: Path) -> None:
+    pubs = InMemoryPublicationStore()
+    result = _run_ok(
+        tmp_path,
+        publication_store=pubs,
+        force_final_validation_raise=True,
+    )
+    assert not result.success
+    assert result.run.status is PipelineRunStatus.FAILED
+    assert pubs.current() is None
+    assert result.recovery_action == (
+        RecoveryAction.PREVIOUS_RESTORED_INSPECT_VALIDATION.value
+    )
+
+
+def test_same_version_same_content_pipeline_idempotent(tmp_path: Path) -> None:
+    pubs = InMemoryPublicationStore()
+    control = InMemoryControlStore()
+    canonical = InMemoryCanonicalStore()
+    asset = _asset(uri_suffix="part_idem.gz")
+    records = [
+        _work("W1"),
+        _work("W2", title="Two", topic="T2", author="A2"),
+    ]
+    # Same config/landing so landing claim + object identity are shared.
+    landing = tmp_path / "landing"
+    cfg = _write_config(tmp_path / "cfg", landing)
+    payload = _gz_jsonl(records)
+    connector = FakeConnector(assets=[asset], payloads={asset.file_uri: payload})
+    store = LocalObjectStore(StorageConfig(backend="local", landing_path=landing))
+    first = run_bounded_e2e_pipeline(
+        cfg,
+        works_connector=connector,
+        control_store=control,
+        canonical_store=canonical,
+        object_store=store,
+        publication_store=pubs,
+        publication_version="v1",
+        now=_clock(),
+    )
+    assert first.success
+    original = pubs.current()
+    assert original is not None
+    original_run_id = original.run_id
+    original_fp = original.content_fingerprint
+
+    second = run_bounded_e2e_pipeline(
+        cfg,
+        works_connector=FakeConnector(
+            assets=[asset], payloads={asset.file_uri: payload}
+        ),
+        control_store=control,
+        canonical_store=canonical,
+        object_store=store,
+        publication_store=pubs,
+        publication_version="v1",
+        now=_clock(_ts(hour=2)),
+    )
+    assert second.success
+    current = pubs.current()
+    assert current is not None
+    assert current.run_id == original_run_id
+    assert current.content_fingerprint == original_fp
+    assert current is original
+    assert second.final_validation is not None
+    assert second.final_validation.as_of_run_id == original_run_id
+    # One logical staged candidate; original provenance not re-stamped.
+    assert pubs.get_staged("v1") is original
+    # DataService remains valid against the original published snapshot.
+    svc = DataService(current.repository)
+    from research_platform.service.contracts import (
+        PageRequest,
+        ResearchDiscoveryRequest,
+    )
+
+    page = svc.search_research(ResearchDiscoveryRequest(page=PageRequest(limit=50)))
+    assert page.freshness.as_of_run_id == original_run_id
+    assert {w.work_id for w in page.data.items} == {"W1", "W2"}
+
+
+def test_same_version_different_content_pipeline_conflict(tmp_path: Path) -> None:
+    pubs = InMemoryPublicationStore()
+    first = _run_ok(
+        tmp_path / "a",
+        publication_store=pubs,
+        publication_version="v1",
+        records=[_work("W1")],
+    )
+    assert first.success
+    old = pubs.current()
+    assert old is not None
+    second = _run_ok(
+        tmp_path / "b",
+        publication_store=pubs,
+        publication_version="v1",
+        records=[_work("W9", title="Different")],
+        control=InMemoryControlStore(),
+        canonical=InMemoryCanonicalStore(),
+        asset=_asset(uri_suffix="part_conflict.gz"),
+    )
+    assert not second.success
+    assert pubs.current() is old
+    pub_stage = next(
+        s for s in second.stages if s.stage is StageName.CONSUMER_PUBLICATION
+    )
+    assert pub_stage.status is StageStatus.FAILED
+    assert second.recovery_action == RecoveryAction.RETRY_ACTIVATE_STAGED_VERSION.value
+
+
+def test_failed_summary_includes_recovery_guidance(tmp_path: Path) -> None:
+    pubs = InMemoryPublicationStore()
+    result = _run_ok(
+        tmp_path, force_final_validation_fail=True, publication_store=pubs
+    )
+    assert not result.success
+    assert result.recovery_action
+    assert result.recovery_action == (
+        RecoveryAction.PREVIOUS_RESTORED_INSPECT_VALIDATION.value
+    )
+    summary = safe_result_summary(result)
+    assert summary["recovery_action"]
+    assert summary["recovery_action"] == result.recovery_action
+    blob = json.dumps(summary).lower()
+    assert "dsn" not in blob
+    assert "password" not in blob
+    assert "select " not in blob
+
+
+def test_cli_failure_includes_recovery_guidance(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = e2e_main(["--config", "/no/such.yaml", "--max-files", "0"])
+    assert code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["success"] is False
+    assert payload["recovery_action"]
+    assert payload["recovery_action"] == RecoveryAction.CORRECT_BOUNDS_AND_RERUN.value
+    assert "Traceback" not in payload.get("safe_error", "")

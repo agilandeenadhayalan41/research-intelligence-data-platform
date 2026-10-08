@@ -1,9 +1,17 @@
 # Bounded end-to-end pipeline (Step 19 / #27)
 
-**Status:** IMPLEMENTED (local `SEMANTIC_ONLY` composition; correctness hardening in flight).  
-Package: `research_platform.e2e` — bounded runner, publication store, CLI.  
+**Status:** IMPLEMENTED (local `SEMANTIC_ONLY` composition).  
+Package: `research_platform.e2e` — bounded runner, publication store, CLI,
+safe failure summaries with recovery guidance.  
 **Not:** BigQuery runtime, GCP deploy, Airflow/Composer (Step 20 / #25), or
 readiness (Step 21 / #28). Evidence label is always `SEMANTIC_ONLY`.
+
+### Implementation status
+
+The Step-19 runner is implemented and exercised under `make test` as a local
+DuckDB `SEMANTIC_ONLY` path. It composes reusable Steps 12–18 stages under one
+outer `PipelineRun`. It does **not** claim MEASURED BigQuery evidence or deploy
+cloud resources.
 
 ### Unknown-work deletion barrier
 
@@ -78,6 +86,9 @@ final validation
 | consumer publication | Make quality-approved published view visible to Data Service | 17, 18 |
 | final validation | Post-publication checks that consumer-visible state is coherent | 17, 18 |
 
+All stages share one outer Step-19 `PipelineRun` (`run_id`) and an explicit
+`publication_version` chosen at run start (default `pub-{run_id}`).
+
 ---
 
 ## Quality / publication boundary
@@ -98,20 +109,51 @@ consumer publication (Data Service reads PUBLISHED_SNAPSHOT only)
 final validation
 ```
 
+Two quality gates are required before activation:
+
+1. **PRE_SERVING_BUILD** — after analytical projection, before Gold staging  
+2. **PRE_VISIBLE_PUBLICATION** — after staged Gold, before consumer activation  
+
+Activation is atomic via `PublicationStore.activate()`. Final validation runs
+after activation and is fail-closed:
+
+- `ok=False` **or** unexpected exception → restore previous current publication  
+  (or clear current when there was no previous publication)  
+- PipelineRun finishes `FAILED`; the failed candidate is never left consumer-visible  
+
+Same `publication_version` + same content fingerprint is pipeline-idempotent:
+`stage()` returns the existing candidate; activation/validation use that
+snapshot’s original provenance/freshness (not re-stamped). Same version +
+different content raises `PublicationConflictError` and leaves old current
+unchanged.
+
 The Data Service (Step 18) does **not** orchestrate these stages. It consumes
 only the currently visible quality-approved published snapshot.
 
 ---
 
-## Bounds and guardrails (planned)
+## Bounds and guardrails
 
-- Default `MAX_FILES=1` (or equivalent strict sample bound)
+- Strict `EndToEndBounds`: `max_files` and `max_file_size_bytes` are strict
+  integers (no string/float coercion); defaults `1` / `25_000_000`
+- Config validated before discovery: `environment=local`, `storage.backend=local`,
+  and sample selection within bounds
+- Over-bound connector selection fails closed (no silent slice); fetch never runs
 - Offline/synthetic fixtures preferred for CI; no implied paid BigQuery runs
 - No unrestricted raw SQL product endpoint
 - No silent data repair inside quality gates
+- Safe structured failure summaries include typed `recovery_action` guidance
+  (no DSN, SQL, credentials, payload content, private paths, or raw exception text)
 - No automatic start of Step 20 (Airflow/Composer) or Step 21 (readiness)
 - PostgreSQL/AlloyDB operational projection remains conditional (#23), not required for Step 19
-- GCS runtime (#9) and BigQuery runtime adapter (#10) remain separately scoped unless explicitly included by #27 acceptance
+- GCS runtime (#9) and BigQuery runtime adapter (#10) remain separately scoped
+
+### SEMANTIC_ONLY limitation
+
+Local evidence builds DuckDB analytical/Gold marts and validates Data Service
+contracts against an in-memory published snapshot. It does **not** execute or
+measure BigQuery/GCP workloads. Do not treat green Step-19 CI as MEASURED
+warehouse readiness.
 
 ---
 
@@ -132,10 +174,10 @@ only the currently visible quality-approved published snapshot.
 
 ## Out of scope for this document
 
-This file records the Step 19 target flow only. It does **not**:
+This file describes the implemented local Step-19 path. It does **not**:
 
-- implement the pipeline runner
 - deploy GCP resources
 - add Airflow/Composer DAGs
 - expand the Data Service HTTP surface
+- claim BigQuery MEASURED evidence
 - close umbrella #2
