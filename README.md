@@ -26,7 +26,7 @@ implemented.
 | 01 | Repository foundation | Python packaging, typed interfaces, structured logging, tests, CI, and optional local PostgreSQL tooling |
 | 02 | Configuration framework | Validated YAML, environment substitution, explicit environment selection, and strict sample limits |
 | 03 | Storage contracts | `ObjectStore` and immutable-write semantics; `GCSObjectStore` adapter (#9) with offline fake-client tests |
-| 04 | Warehouse contracts | Parameterized query/PyArrow interface; `DuckDBWarehouse` local queries (#8); `BigQueryWarehouse` offline (#10); PostgreSQL adapter remains a skeleton |
+| 04 | Warehouse contracts | Parameterized query/PyArrow interface; `DuckDBWarehouse` local queries (#8); `BigQueryWarehouse` offline (#10); `PostgreSQLWarehouse` query (#7) |
 | 05 | Bounded OpenAlex connector | Anonymous manifest discovery and separate caller-owned streaming retrieval |
 | 06 | Works manifest parser | Pure parsing, validated metadata, stable identities, and duplicate/conflict handling |
 | 07 | Development sample selector | Deterministic, metadata-only selection with file-count and byte-size bounds |
@@ -63,7 +63,14 @@ explicit DuckDB file path. Construction does not open a connection or create a
 file. Named values are driver-bound (`$name`; supplied `:name` placeholders are
 rewritten to `$name` outside quotes and comments). Local DuckDB queries do not
 prove BigQuery dialect, BigQuery cost, cloud readiness, or production readiness.
-`PostgreSQLWarehouse` remains a deferred skeleton.
+
+`PostgreSQLWarehouse` implements the same read `Warehouse.query` contract for
+PostgreSQL (`%(name)s` placeholders, lazy DSN lookup, PyArrow results). Default
+tests inject a fake connection. `make test-postgres-warehouse` is the separate
+local PostgreSQL check and runs only when `POSTGRES_DSN` is set. The adapter
+is not the BigQuery analytical engine and does not implement issue #23
+(PostgreSQL/AlloyDB serving). See
+[PostgreSQL Warehouse](docs/architecture/postgres-warehouse.md).
 
 **Still planned:** separately scoped live GCS/BigQuery sandbox smoke, HTTP
 consumer deployment, Composer provisioning, and Dataform runtime. There is no
@@ -99,7 +106,9 @@ Keep
 as the open umbrella for deferred/runtime work and live-validation tracking.
 **#9** (GCS) and **#10** (BigQuery) adapter implementations are complete
 (`READY_TO_VALIDATE`) and should be closed; live sandbox smoke is separately
-scoped. Do not automatically start (#7, #8, #23) or claim production readiness.
+scoped. **#7** (PostgreSQL) and **#8** (DuckDB) query adapters are implemented;
+neither is cloud or production evidence. Do not automatically start #23 or
+claim production readiness.
 
 ## Target architecture
 
@@ -251,6 +260,7 @@ make build
 | `make test-unit` | Run only unit tests (also excludes postgres) |
 | `make test-orchestration` | Focused Step 20 orchestration contract tests (also covered by `make test`) |
 | `make test-postgres-ingestion` | Separately invoked local PostgreSQL Steps 12–13 transaction tests |
+| `make test-postgres-warehouse` | Separately invoked local PostgreSQL `Warehouse.query` tests (#7) |
 | `make check` | Compile Python sources/tests and check installed dependency consistency |
 | `make build` | Build a wheel into the ignored `dist` directory without building dependency wheels |
 | `make postgres-up` / `make postgres-down` | Explicitly start/stop the optional local Compose service |
@@ -307,7 +317,9 @@ The scaffold still includes `warehouse.transactional: postgres`; that setting
 does not implement PostgreSQL persistence or make operational serving mandatory.
 `GCSObjectStore` and `BigQueryWarehouse` are available with injectable clients
 for offline tests. `DuckDBWarehouse` executes local queries only.
-`PostgreSQLWarehouse` remains a skeleton.
+`PostgreSQLWarehouse` implements read `Warehouse.query` (offline by default;
+local PostgreSQL integration is separate). Issue #23 serving projections are
+not implemented.
 `ControlStore` is a fail-fast protocol only. Configuration alignment and
 runtime persistence require separately scoped work.
 
@@ -351,6 +363,7 @@ tracked YAML or logs.
 | [OpenAlex source profiling](docs/architecture/openalex-source-profiling.md) | Bounded profiler, evidence classes, verified representations, and format decision |
 | [Immutable local landing](docs/architecture/immutable-local-landing.md) | Raw key layout, atomic publish, replay/conflict, open integrity |
 | [Pipeline control](docs/architecture/pipeline-control.md) | Control models, lifecycle, claims, idempotency, ControlStore boundary |
+| [PostgreSQL Warehouse](docs/architecture/postgres-warehouse.md) | #7 read-query adapter, placeholders, Arrow types, lazy DSN, #23 boundary |
 | [OpenAlex canonical model](docs/architecture/openalex-canonical-model.md) | Normalized entities/relationships, IDs, mapping, PyArrow contracts |
 | [OpenAlex deletions](docs/architecture/openalex-deletions.md) | Tombstones, precedence/restore, deletion lineage, transaction boundary |
 | [21-step roadmap](docs/architecture/roadmap.md) | Completed stages and separately scoped future work |
@@ -373,7 +386,7 @@ src\research_platform\
   e2e\                        Step 19 bounded SEMANTIC_ONLY composition runner
   orchestration\              Step 20 thin DAG / TaskMessage / retry / publication-scope contracts
   readiness\                  Step 21 environment readiness registry + promotion gates
-  warehouse\                  Warehouse contract; BigQueryWarehouse; DuckDBWarehouse; PostgreSQL skeleton
+  warehouse\                  Warehouse contract; BigQueryWarehouse; DuckDBWarehouse; PostgreSQLWarehouse
   provenance\                 Immutable retrieval-provenance model
   ingestion\ serving\         Reserved runtime areas
 tests\                        Offline unit/integration tests and synthetic fixtures

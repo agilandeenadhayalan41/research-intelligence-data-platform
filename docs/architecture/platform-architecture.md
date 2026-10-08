@@ -54,9 +54,12 @@ BigQuery runtime, a Data Service/API, or downstream consumers. See
   physical design. Keep relationships separate; do not flatten. Step 12 writes
   these through the local ingestion transaction boundary.
 - **Analytical layer:** BigQuery is the first GCP analytical implementation;
-  DuckDB supports local analytical tests. Work-author, work-topic,
-  work-institution, and work-citation/reference relationships primarily remain
-  analytical rather than being copied wholesale to an operational database.
+  DuckDB supports local analytical tests. `PostgreSQLWarehouse` is a synchronous
+  read-query adapter for PostgreSQL ([details](postgres-warehouse.md)). It does
+  not replace BigQuery and it does not approve an operational serving
+  projection (issue #23). Work-author, work-topic, work-institution, and
+  work-citation/reference relationships primarily remain analytical rather than
+  being copied wholesale to an operational database.
 - **Models and aggregates:** publish analytical models and materialize repeated
   expensive queries when measured use warrants it. Avoid relationship fan-out.
 - **Data Service/API:** expose supported domain capabilities, filters, freshness,

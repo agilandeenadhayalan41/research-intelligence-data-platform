@@ -38,15 +38,6 @@ def test_openalex_construction_has_no_implicit_network_access(
     assert connector.manifest_uri == "s3://openalex/data/jsonl/works/manifest.json"
 
 
-def test_postgresql_warehouse_skeleton_does_not_execute_queries(
-    local_config: PlatformConfig,
-) -> None:
-    adapter = PostgreSQLWarehouse(local_config.warehouse)
-    assert isinstance(adapter, Warehouse)
-    with pytest.raises(NotImplementedError, match="later phase"):
-        adapter.query("SELECT :value", {"value": 1})
-
-
 def test_duckdb_warehouse_query_is_implemented(local_config: PlatformConfig) -> None:
     adapter = DuckDBWarehouse(local_config.warehouse)
     assert isinstance(adapter, Warehouse)
@@ -56,6 +47,13 @@ def test_duckdb_warehouse_query_is_implemented(local_config: PlatformConfig) -> 
         assert table.column("value")[0].as_py() == 1
     finally:
         adapter.close()
+
+
+def test_postgres_warehouse_constructs_without_a_connection(
+    local_config: PlatformConfig,
+) -> None:
+    adapter = PostgreSQLWarehouse(local_config.warehouse)
+    assert isinstance(adapter, Warehouse)
 
 
 def test_bigquery_warehouse_is_concrete_with_injected_client() -> None:
