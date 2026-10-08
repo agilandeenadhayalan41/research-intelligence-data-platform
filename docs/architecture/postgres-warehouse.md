@@ -76,8 +76,10 @@ NULL stays Arrow null. Supported result types:
 | timestamptz | `timestamp[us, tz=UTC]` (aware instant) |
 | numeric / decimal | `decimal128` or `decimal256` |
 
-NUMERIC uses the server precision and scale when present. Otherwise precision
-and scale are taken from the returned `Decimal` values. An empty unbounded
+NUMERIC uses the server precision and scale when present. Otherwise scale is
+the largest scale among the returned `Decimal` values and precision is the
+largest integer-digit count plus that scale, so mixed-scale results such as
+`avg()` output fit every row. An empty unbounded
 NUMERIC result uses `decimal128(38, 18)` because no values are present.
 Values that cannot be represented without losing precision raise
 `ArrowConversionError`. Other PostgreSQL types, including extension types and

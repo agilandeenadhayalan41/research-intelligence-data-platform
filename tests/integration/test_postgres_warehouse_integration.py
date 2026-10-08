@@ -12,6 +12,7 @@ from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from uuid import uuid4
 
+import pyarrow as pa
 import pytest
 
 pytest.importorskip("psycopg")
@@ -132,3 +133,30 @@ def test_local_postgres_query_adapter() -> None:
         warehouse.close()
         setup.execute(f"DROP TABLE IF EXISTS {table_name}")
         setup.close()
+
+
+def test_local_postgres_unbounded_numeric_with_mixed_scales() -> None:
+    with PostgreSQLWarehouse(WarehouseConfig(postgres_dsn_env="POSTGRES_DSN")) as warehouse:
+        mixed = warehouse.query(
+            "SELECT v::numeric AS v FROM (VALUES (12345678.0), (0.12345)) AS t(v)"
+        )
+        assert mixed.schema.field("v").type == pa.decimal128(13, 5)
+        assert mixed.column("v").to_pylist() == [
+            Decimal("12345678.0"),
+            Decimal("0.12345"),
+        ]
+
+        union = warehouse.query(
+            "SELECT 1.5::numeric AS v UNION ALL SELECT 100::numeric ORDER BY v"
+        )
+        assert union.schema.field("v").type == pa.decimal128(4, 1)
+        assert union.column("v").to_pylist() == [Decimal("1.5"), Decimal("100")]
+
+        averages = warehouse.query(
+            "SELECT g, avg(v) AS a FROM (VALUES (1, 1), (1, 2), (2, 1000000))"
+            " AS t(g, v) GROUP BY g ORDER BY g"
+        )
+        assert averages.column("a").to_pylist() == [
+            Decimal("1.5"),
+            Decimal("1000000"),
+        ]

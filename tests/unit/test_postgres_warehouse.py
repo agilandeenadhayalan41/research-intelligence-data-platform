@@ -312,6 +312,42 @@ def test_unbounded_numeric_preserves_decimal_scale(
     assert table.column("amount")[1].as_py() == Decimal("3.00")
 
 
+@pytest.mark.parametrize(
+    ("values", "arrow_type"),
+    [
+        ([Decimal("12345678.0"), Decimal("0.12345")], pa.decimal128(13, 5)),
+        ([Decimal("1.5"), Decimal("100")], pa.decimal128(4, 1)),
+        ([Decimal("0.001"), Decimal("-7")], pa.decimal128(4, 3)),
+        ([Decimal("1E+2"), Decimal("0.5")], pa.decimal128(4, 1)),
+        ([Decimal("0.000")], pa.decimal128(3, 3)),
+        ([10**30, Decimal("0.12345678901234")], pa.decimal256(45, 14)),
+    ],
+)
+def test_unbounded_numeric_mixed_scales_fit_every_value(
+    monkeypatch: pytest.MonkeyPatch,
+    values: list[object],
+    arrow_type: pa.DataType,
+) -> None:
+    monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://unit")
+    warehouse, connection = _warehouse()
+    connection.description = (_Column("amount", 1700),)
+    connection.rows = [(value,) for value in values]
+    table = warehouse.query("SELECT amount FROM probe")
+    assert table.schema.field("amount").type == arrow_type
+    assert table.column("amount").to_pylist() == [Decimal(value) for value in values]
+
+
+def test_unbounded_numeric_beyond_decimal256_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://unit")
+    warehouse, connection = _warehouse()
+    connection.description = (_Column("amount", 1700),)
+    connection.rows = [(10**60,), (Decimal("0.1234567890123456789"),)]
+    with pytest.raises(ArrowConversionError, match="could not be converted"):
+        warehouse.query("SELECT amount FROM probe")
+
+
 def test_numeric_that_cannot_fit_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://unit")
     warehouse, connection = _warehouse()
