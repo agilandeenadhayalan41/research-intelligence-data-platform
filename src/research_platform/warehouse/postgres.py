@@ -21,10 +21,10 @@ Dialect contract (not portable to DuckDB or BigQuery):
 - ``TimeZone=UTC`` is set so ``timestamptz`` instants are returned in UTC.
   ``timestamp`` without time zone stays a naive datetime.
 
-Evidence: offline fake-driver tests are ``OFFLINE_TESTED``. A separately invoked
-local PostgreSQL run is required before calling the adapter
-``LOCAL_POSTGRES_VERIFIED``. This module does not claim cloud or AlloyDB
-verification.
+Evidence: offline fake-driver tests are ``OFFLINE_TESTED``. The #90 local run
+(PostgreSQL 18.6, psycopg 3.2.13, CPython 3.14) is ``LOCAL_POSTGRES_VERIFIED``
+for that configuration only; see ``docs/architecture/postgres-warehouse.md``.
+This module does not claim cloud or AlloyDB verification.
 
 The adapter is synchronous and is not thread-safe. It does not pool connections.
 """

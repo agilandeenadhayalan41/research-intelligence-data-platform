@@ -15,9 +15,10 @@ This adapter is a supported PostgreSQL **query backend** only. It is not:
 Issue **#23** stays conditional. Completing this adapter does not approve #23,
 does not replace BigQuery, and does not mean PostgreSQL is production-ready.
 
-Evidence for the offline fake-driver suite is `OFFLINE_TESTED`. A successful
-`make test-postgres-warehouse` run against an explicit local `POSTGRES_DSN` is
-local PostgreSQL evidence only. It is not `GCP_VERIFIED`, `CLOUD_VERIFIED`, or
+Evidence: the offline fake-driver suite is `OFFLINE_TESTED`. The #90 local run
+makes the adapter `LOCAL_POSTGRES_VERIFIED` for the configuration recorded in
+[Local validation evidence](#local-validation-evidence-90) only. That is local
+PostgreSQL evidence. It is not `GCP_VERIFIED`, `CLOUD_VERIFIED`, or
 `ALLOYDB_VERIFIED`.
 
 ## Lifecycle
@@ -135,3 +136,53 @@ make test-postgres-warehouse
 That target installs the `postgres` extra and runs
 `tests/integration/test_postgres_warehouse_integration.py`. It skips when
 `POSTGRES_DSN` is unset. Docker is not started by the test or by the adapter.
+
+## Local validation evidence (#90)
+
+Recorded 2026-10-08 against `main` @ `e0b9271` (after PRs #89, #93, #94, #95,
+#97). Evidence comment:
+[#90](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/90#issuecomment-6067101622).
+
+| Item | Value |
+| --- | --- |
+| Server | PostgreSQL 18.6 (Ubuntu `18.6-0ubuntu0.26.04.1`) in WSL Ubuntu 26.04 |
+| Start | User-owned cluster via `pg_ctl`; Unix socket only (`listen_addresses=''`, socket dir mode 0700); `local trust`, host `reject`; superuser role; `TimeZone=Etc/UTC` |
+| DSN shape | `host=<user-owned socket dir> dbname=research user=<os user>` (no password) |
+| Client | CPython 3.14.4; psycopg 3.2.13 `binary` (bundled libpq 17.0.6) |
+
+| Check | Result |
+| --- | --- |
+| `make test-postgres-warehouse` (unmodified; collected, not skipped) | 7 passed |
+| Binding (`%(name)s` bound server-side; injection payload as a value) | Pass |
+| Types: int, bool, text, float, date, time, timestamp, timestamptz, bounded and mixed-scale unbounded numeric, NULL-only, empty result | Pass |
+| Connection errors (missing/blank DSN, unreachable socket, unknown database/role, refused TCP, malformed DSN): fixed message, no DSN/password, no chaining | Pass |
+| Lost session (terminated backend): safe error, next query on a new read-only session | Pass |
+| Caller `BEGIN`, aborted transaction, `COPY … TO STDOUT`: next query on a new session; `statement_timeout` cancel keeps the session | Pass |
+| Cleanup: construction opens nothing; idle after success and failure; `close()`/context manager release the backend; no probe tables or backends left | Pass |
+| `make test` with the `postgres` extra installed | 973 passed, 23 deselected |
+| `make check`, `make build` | Clean |
+
+Not exercised: `make postgres-up` (docker `postgres:16`, TCP, password/SCRAM,
+auth-failure messages), TLS, a non-superuser role, PostgreSQL versions other
+than 18, a live server under CPython 3.12 (CI runs 3.12 and 3.14 offline only),
+connect timeouts to unroutable hosts (no `connect_timeout` is set), and
+concurrent use (the adapter is not thread-safe).
+
+### Known limitations
+
+- **Auto-prepared statements.** psycopg prepares a query server-side after it
+  runs 5 times on one connection. If the table's shape then changes (for
+  example `ALTER TABLE` from another connection), every later run of that query
+  fails with `QueryExecutionError` until `close()`, because the session stays
+  idle and is kept. Not fixed yet.
+- **Read-only is a session default, not a security boundary.** Caller SQL can
+  turn it off (`set_config('default_transaction_read_only', 'off', false)`,
+  `BEGIN READ WRITE`). Use a read-only database role for enforcement.
+- **Session overrides.** A `PGTZ` environment variable overrides the adapter's
+  `TimeZone=UTC`; `timestamptz` instants stay correct, but literals without an
+  offset are read in that zone. A DSN's own `options=` is replaced by the
+  adapter's options.
+- **Dialect quirks.** With parameters, a literal `%` must be written `%%`.
+  Unused parameters are ignored. A multi-statement string without parameters
+  returns one result. Unaliased duplicate expressions (`SELECT 1, 2`) are
+  rejected as duplicate column names.

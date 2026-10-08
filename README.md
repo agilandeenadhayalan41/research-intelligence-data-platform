@@ -26,7 +26,7 @@ implemented.
 | 01 | Repository foundation | Python packaging, typed interfaces, structured logging, tests, CI, and optional local PostgreSQL tooling |
 | 02 | Configuration framework | Validated YAML, environment substitution, explicit environment selection, and strict sample limits |
 | 03 | Storage contracts | `ObjectStore` and immutable-write semantics; `GCSObjectStore` adapter (#9) with offline fake-client tests |
-| 04 | Warehouse contracts | Parameterized query/PyArrow interface; `DuckDBWarehouse` local queries (#8); `BigQueryWarehouse` offline (#10); `PostgreSQLWarehouse` query (#7) |
+| 04 | Warehouse contracts | Parameterized query/PyArrow interface; `DuckDBWarehouse` local queries (#8); `BigQueryWarehouse` offline (#10); `PostgreSQLWarehouse` query (#7; `LOCAL_POSTGRES_VERIFIED` by #90) |
 | 05 | Bounded OpenAlex connector | Anonymous manifest discovery and separate caller-owned streaming retrieval |
 | 06 | Works manifest parser | Pure parsing, validated metadata, stable identities, and duplicate/conflict handling |
 | 07 | Development sample selector | Deterministic, metadata-only selection with file-count and byte-size bounds |
@@ -67,7 +67,9 @@ prove BigQuery dialect, BigQuery cost, cloud readiness, or production readiness.
 `PostgreSQLWarehouse` implements the same read `Warehouse.query` contract for
 PostgreSQL (`%(name)s` placeholders, lazy DSN lookup, PyArrow results). Default
 tests inject a fake connection. `make test-postgres-warehouse` is the separate
-local PostgreSQL check and runs only when `POSTGRES_DSN` is set. The adapter
+local PostgreSQL check and runs only when `POSTGRES_DSN` is set; issue #90
+recorded it passing against local PostgreSQL 18.6 (`LOCAL_POSTGRES_VERIFIED`,
+not cloud evidence). The adapter
 is not the BigQuery analytical engine and does not implement issue #23
 (PostgreSQL/AlloyDB serving). See
 [PostgreSQL Warehouse](docs/architecture/postgres-warehouse.md).
@@ -107,7 +109,8 @@ as the open umbrella for deferred/runtime work and live-validation tracking.
 **#9** (GCS) and **#10** (BigQuery) adapter implementations are complete
 (`READY_TO_VALIDATE`) and should be closed; live sandbox smoke is separately
 scoped. **#7** (PostgreSQL) and **#8** (DuckDB) query adapters are implemented;
-neither is cloud or production evidence. Do not automatically start #23 or
+#7 is locally validated against PostgreSQL by #90. Neither is cloud or
+production evidence. Do not automatically start #23 or
 claim production readiness.
 
 ## Target architecture
@@ -319,7 +322,7 @@ does not implement PostgreSQL persistence or make operational serving mandatory.
 `GCSObjectStore` and `BigQueryWarehouse` are available with injectable clients
 for offline tests. `DuckDBWarehouse` executes local queries only.
 `PostgreSQLWarehouse` implements read `Warehouse.query` (offline by default;
-local PostgreSQL integration is separate). Issue #23 serving projections are
+local PostgreSQL integration is separate and recorded by #90). Issue #23 serving projections are
 not implemented.
 `ControlStore` is a fail-fast protocol only. Configuration alignment and
 runtime persistence require separately scoped work.
