@@ -151,6 +151,53 @@ def test_local_postgres_lost_session_fails_safely_then_reconnects() -> None:
         assert warehouse.query("SHOW transaction_read_only").column(0)[0].as_py() == "on"
 
 
+def _pid(warehouse: PostgreSQLWarehouse) -> int:
+    return warehouse.query("SELECT pg_backend_pid() AS pid").column("pid")[0].as_py()
+
+
+def test_local_postgres_copy_to_stdout_does_not_wedge_the_adapter() -> None:
+    with PostgreSQLWarehouse(WarehouseConfig(postgres_dsn_env="POSTGRES_DSN")) as warehouse:
+        before = _pid(warehouse)
+        with pytest.raises(QueryExecutionError, match="query execution failed") as raised:
+            warehouse.query("COPY (SELECT 1) TO STDOUT")
+        assert raised.value.__cause__ is None
+        assert warehouse.query("SELECT 1 AS value").column("value")[0].as_py() == 1
+        assert _pid(warehouse) != before
+
+
+def test_local_postgres_aborted_caller_transaction_does_not_wedge_the_adapter() -> None:
+    with PostgreSQLWarehouse(WarehouseConfig(postgres_dsn_env="POSTGRES_DSN")) as warehouse:
+        with pytest.raises(QueryExecutionError, match="did not produce a result set"):
+            warehouse.query("BEGIN")
+        with pytest.raises(QueryExecutionError, match="query execution failed"):
+            warehouse.query("SELECT 1/0 AS value")
+        assert warehouse.query("SELECT 1 AS value").column("value")[0].as_py() == 1
+        assert warehouse.query("SHOW transaction_read_only").column(0)[0].as_py() == "on"
+
+
+def test_local_postgres_caller_transaction_is_not_carried_into_later_queries() -> None:
+    with PostgreSQLWarehouse(WarehouseConfig(postgres_dsn_env="POSTGRES_DSN")) as warehouse:
+        opened = warehouse.query("SELECT pg_backend_pid() AS pid; BEGIN")
+        caller_pid = opened.column("pid")[0].as_py()
+        # Inside a transaction now() is frozen; in autocommit it advances.
+        first = warehouse.query("SELECT now() AS t").column("t")[0].as_py()
+        warehouse.query("SELECT 1 AS slept FROM pg_sleep(0.01)")
+        second = warehouse.query("SELECT now() AS t").column("t")[0].as_py()
+        assert second > first
+        assert _pid(warehouse) != caller_pid
+
+
+def test_local_postgres_statement_timeout_keeps_the_connection() -> None:
+    with PostgreSQLWarehouse(WarehouseConfig(postgres_dsn_env="POSTGRES_DSN")) as warehouse:
+        warehouse.query("SELECT set_config('statement_timeout', '100', false) AS s")
+        before = _pid(warehouse)
+        with pytest.raises(QueryExecutionError, match="query execution failed"):
+            warehouse.query("SELECT 1 AS slept FROM pg_sleep(2)")
+        assert _pid(warehouse) == before
+        timeout = warehouse.query("SHOW statement_timeout").column(0)[0].as_py()
+        assert timeout == "100ms"
+
+
 def test_local_postgres_unbounded_numeric_with_mixed_scales() -> None:
     with PostgreSQLWarehouse(WarehouseConfig(postgres_dsn_env="POSTGRES_DSN")) as warehouse:
         mixed = warehouse.query(

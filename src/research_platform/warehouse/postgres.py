@@ -100,9 +100,11 @@ class PostgreSQLWarehouse(Warehouse):
     """Synchronous PostgreSQL read adapter returning PyArrow tables.
 
     ``connect`` is an optional test seam. When omitted, the first ``query``
-    resolves ``config.postgres_dsn_env`` and opens one owned connection. If the
-    driver reports that connection closed after a failure, the next ``query``
-    opens a new one. ``close`` does not reconnect.
+    resolves ``config.postgres_dsn_env`` and opens one owned connection. If a
+    query leaves that connection closed or not idle (lost session, caller
+    transaction, unfinished COPY), it is discarded and the next ``query`` opens
+    a new session; settings the caller changed with ``SET`` are not carried
+    over. ``close`` does not reconnect.
     """
 
     def __init__(
@@ -124,28 +126,9 @@ class PostgreSQLWarehouse(Warehouse):
         bound = _validate_query(sql, parameters)
         connection = self._connection_or_open()
         try:
-            cursor = connection.cursor()
-        except Exception as error:
-            raise self._driver_failure(connection, error) from None
-        try:
-            try:
-                cursor.execute(sql, bound)
-            except (QueryParameterError, QueryExecutionError, WarehouseError):
-                raise
-            except Exception as error:
-                raise self._driver_failure(connection, error) from None
-            description = cursor.description
-            if not description:
-                raise QueryExecutionError(
-                    "PostgreSQL query did not produce a result set"
-                )
-            try:
-                rows = cursor.fetchall()
-            except Exception as error:
-                raise self._driver_failure(connection, error) from None
-            table = _table_from_result(tuple(description), rows)
+            table = _run_query(connection, sql, bound)
         finally:
-            _close_quietly(cursor)
+            self._discard_if_unusable(connection)
         _LOGGER.info(
             "postgres query completed",
             extra={
@@ -190,22 +173,71 @@ class PostgreSQLWarehouse(Warehouse):
         self._connection = connection
         return connection
 
-    def _driver_failure(
-        self, connection: _Connection, error: BaseException
-    ) -> WarehouseError:
-        """Map a driver failure; drop the connection if the driver closed it.
+    def _discard_if_unusable(self, connection: _Connection) -> None:
+        """Drop a connection that cannot safely run the next query.
 
         A lost session (server restart, terminated backend, network drop)
-        leaves the driver connection closed. Keeping it would fail every later
-        query, so it is discarded and the next ``query`` opens a new one. The
-        failed query is not retried.
+        leaves the driver connection closed. Caller SQL can also leave a live
+        session outside autocommit idle: ``BEGIN`` opens a transaction, an
+        error inside it aborts the transaction, and ``COPY ... TO STDOUT``
+        leaves a copy in progress. Reusing any of these would fail or run the
+        next query inside the caller's transaction, so the connection is closed
+        and the next ``query`` opens a new session. Nothing is retried.
         """
-        if not getattr(connection, "closed", False):
-            return _map_driver_error(error)
+        if _is_reusable(connection):
+            return
         if self._connection is connection:
             self._connection = None
-        _close_quietly(connection)
+        _close_quietly(connection, "connection")
+
+
+def _run_query(
+    connection: _Connection, sql: str, bound: dict[str, object] | None
+) -> pa.Table:
+    try:
+        cursor = connection.cursor()
+    except Exception as error:
+        raise _driver_failure(connection, error) from None
+    try:
+        try:
+            cursor.execute(sql, bound)
+        except (QueryParameterError, QueryExecutionError, WarehouseError):
+            raise
+        except Exception as error:
+            raise _driver_failure(connection, error) from None
+        description = cursor.description
+        if not description:
+            raise QueryExecutionError("PostgreSQL query did not produce a result set")
+        try:
+            rows = cursor.fetchall()
+        except Exception as error:
+            raise _driver_failure(connection, error) from None
+        return _table_from_result(tuple(description), rows)
+    finally:
+        _close_quietly(cursor, "cursor")
+
+
+def _driver_failure(connection: _Connection, error: BaseException) -> WarehouseError:
+    """Map a driver failure; a closed connection means the session was lost."""
+    if getattr(connection, "closed", False):
         return QueryExecutionError("PostgreSQL connection failed")
+    return _map_driver_error(error)
+
+
+def _is_reusable(connection: _Connection) -> bool:
+    """True when the session is open and idle outside any transaction.
+
+    Reads psycopg's ``info.transaction_status`` by name so this module does not
+    import psycopg. Connections without ``info`` (test fakes) count as idle; an
+    unrecognised status does not.
+    """
+    if getattr(connection, "closed", False):
+        return False
+    info = getattr(connection, "info", None)
+    if info is None:
+        return True
+    status = getattr(info, "transaction_status", None)
+    return status is None or getattr(status, "name", None) == "IDLE"
 
 
 def _read_dsn(env_var: object) -> str:
@@ -283,7 +315,7 @@ def _map_driver_error(error: BaseException) -> WarehouseError:
     return QueryExecutionError("PostgreSQL query execution failed")
 
 
-def _close_quietly(resource: object) -> None:
+def _close_quietly(resource: object, kind: str) -> None:
     close = getattr(resource, "close", None)
     if not callable(close):
         return
@@ -291,7 +323,8 @@ def _close_quietly(resource: object) -> None:
         close()
     except Exception:
         _LOGGER.info(
-            "postgres cursor close failed",
+            "postgres %s close failed",
+            kind,
             extra={"operation": "close", "backend": "postgres"},
         )
 
