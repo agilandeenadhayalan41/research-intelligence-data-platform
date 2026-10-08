@@ -114,5 +114,5 @@ make test-postgres-warehouse
 ```
 
 That target installs the `postgres` extra and runs
-`tests/integration/test_postgres_warehouse.py`. It skips when `POSTGRES_DSN`
-is unset. Docker is not started by the test or by the adapter.
+`tests/integration/test_postgres_warehouse_integration.py`. It skips when
+`POSTGRES_DSN` is unset. Docker is not started by the test or by the adapter.
