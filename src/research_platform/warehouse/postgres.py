@@ -100,8 +100,9 @@ class PostgreSQLWarehouse(Warehouse):
     """Synchronous PostgreSQL read adapter returning PyArrow tables.
 
     ``connect`` is an optional test seam. When omitted, the first ``query``
-    resolves ``config.postgres_dsn_env`` and opens one owned connection.
-    ``close`` does not reconnect.
+    resolves ``config.postgres_dsn_env`` and opens one owned connection. If the
+    driver reports that connection closed after a failure, the next ``query``
+    opens a new one. ``close`` does not reconnect.
     """
 
     def __init__(
@@ -122,14 +123,17 @@ class PostgreSQLWarehouse(Warehouse):
             raise WarehouseError("PostgreSQL warehouse is closed")
         bound = _validate_query(sql, parameters)
         connection = self._connection_or_open()
-        cursor = connection.cursor()
+        try:
+            cursor = connection.cursor()
+        except Exception as error:
+            raise self._driver_failure(connection, error) from None
         try:
             try:
                 cursor.execute(sql, bound)
             except (QueryParameterError, QueryExecutionError, WarehouseError):
                 raise
             except Exception as error:
-                raise _map_driver_error(error) from None
+                raise self._driver_failure(connection, error) from None
             description = cursor.description
             if not description:
                 raise QueryExecutionError(
@@ -138,7 +142,7 @@ class PostgreSQLWarehouse(Warehouse):
             try:
                 rows = cursor.fetchall()
             except Exception as error:
-                raise _map_driver_error(error) from None
+                raise self._driver_failure(connection, error) from None
             table = _table_from_result(tuple(description), rows)
         finally:
             _close_quietly(cursor)
@@ -185,6 +189,23 @@ class PostgreSQLWarehouse(Warehouse):
             raise QueryExecutionError("PostgreSQL connection failed") from None
         self._connection = connection
         return connection
+
+    def _driver_failure(
+        self, connection: _Connection, error: BaseException
+    ) -> WarehouseError:
+        """Map a driver failure; drop the connection if the driver closed it.
+
+        A lost session (server restart, terminated backend, network drop)
+        leaves the driver connection closed. Keeping it would fail every later
+        query, so it is discarded and the next ``query`` opens a new one. The
+        failed query is not retried.
+        """
+        if not getattr(connection, "closed", False):
+            return _map_driver_error(error)
+        if self._connection is connection:
+            self._connection = None
+        _close_quietly(connection)
+        return QueryExecutionError("PostgreSQL connection failed")
 
 
 def _read_dsn(env_var: object) -> str:
