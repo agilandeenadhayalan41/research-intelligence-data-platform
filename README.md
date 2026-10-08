@@ -13,10 +13,11 @@ access, proprietary data, or cloud credentials are needed for the default tests.
 
 **Steps 01–20 are complete.** Step 19 / #27 delivered the bounded end-to-end
 pipeline (`research_platform.e2e`, local `SEMANTIC_ONLY`). Step 20 / #25
-delivered orchestration contracts (`research_platform.orchestration`: thin DAG,
-logical vs physical ExecutionUnits, safe TaskMessage/XCom, retries, publication
-scope; no Airflow/Composer/Dataform/GCP deploy). **Step 21 / #28 is next.**
-The full cloud/Airflow pipeline is not implemented.
+delivered orchestration contracts (`research_platform.orchestration`).
+**Step 21 / #28 is ACTIVE** (environment readiness contracts in
+`research_platform.readiness`; Sandbox→DEV→QA→PROD matrix; no cloud
+provisioning/deploy/PROD access). The full cloud/Airflow pipeline is not
+implemented.
 
 | Step | Delivered capability | Implementation boundary |
 | --- | --- | --- |
@@ -40,6 +41,7 @@ The full cloud/Airflow pipeline is not implemented.
 | 18 | Data Service domain layer | Storage-independent capabilities, capability registry, typed request/response contracts, cursor pagination, freshness/`PUBLISHED_SNAPSHOT`, in-memory `SEMANTIC_ONLY` repository; no HTTP deploy, no raw SQL, no Postgres/AlloyDB serving ([#26](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/26)) |
 | 19 | Bounded end-to-end pipeline | One outer `PipelineRun`, reusable Step-12/13 stages, DuckDB `SEMANTIC_ONLY` analytical/Gold, real Step-17 gates, atomic local publication, Data Service final validation; no BigQuery/Airflow/GCP ([#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27)) |
 | 20 | Orchestration contracts | Thin DAG + physical ExecutionUnits (REGISTER/INGEST/CANONICALIZE → one `WORKS_INGEST_UNIT`), bounded TaskMessage/XCom, recursive safe metadata, retries, backfill bounds, publication concurrency scope (`TEMP_TABLES` recommended), dry-run plan renderer; no Airflow/Composer/Dataform/GCP deploy ([#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25)) |
+| 21 | Environment readiness (ACTIVE) | Truthful Sandbox→DEV→QA→PROD readiness registry, evidence levels, promotion gates, IAM/WIF/secrets/GCS/BigQuery gaps documented; no cloud provisioning ([#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28)) |
 
 Constructing adapters or loading configuration does not connect to services.
 `LocalObjectStore` writes only under the configured local landing path. Default
@@ -57,20 +59,18 @@ Postgres serving.
 
 **Steps 01–20 ✅ complete.**
 
-**Step 20 / [#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25)**
-(complete, closed): orchestration contracts
-(`research_platform.orchestration`) — thin DAG, physical ExecutionUnits,
-bounded TaskMessage/XCom, retries, publication concurrency scope. No
-Airflow/Composer/Dataform/GCP deploy. See
-[Orchestration](docs/architecture/orchestration.md).
+**Step 21 / [#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28)**
+(**ACTIVE**, pending review/merge): environment readiness contracts
+(`research_platform.readiness`) — Sandbox→DEV→QA→PROD matrix, evidence-honest
+statuses, promotion gates. Docs/contracts only; no cloud provisioning, no PROD
+access. See [Environment readiness](docs/architecture/environment-readiness.md).
 
 ```text
-Logical:  DISCOVER → REGISTER → INGEST → CANONICALIZE → …
-Physical: DISCOVERY_UNIT → WORKS_INGEST_UNIT → DELETION_UNIT → …
+LOCAL (evidence only) → GCP_SANDBOX → DEV → QA → PROD
 ```
 
-**Next — Step 21 / [#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28):**
-environment readiness. Do not start #28 from this PR.
+Today Sandbox/DEV/QA/PROD are all `NOT_READY` (GCS #9 / BigQuery #10 / IAM /
+Composer gaps). Do not equate YAML presence with readiness.
 
 Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
@@ -319,6 +319,7 @@ tracked YAML or logs.
 | [Gold analytical marts](docs/architecture/gold-analytical-marts.md) | Step 16 Gold grains, fan-out safety, materialization honesty, SEMANTIC_ONLY limits |
 | [Data quality](docs/architecture/data-quality.md) | Step 17 HARD_GATE/metric registry, publication blocking, SEMANTIC_ONLY limits |
 | [Orchestration](docs/architecture/orchestration.md) | Step 20 thin DAG, TaskMessage/XCom, retries, publication scope, Airflow mapping (no deploy) |
+| [Environment readiness](docs/architecture/environment-readiness.md) | Step 21 Sandbox→DEV→QA→PROD readiness matrix, promotion gates, cloud gaps |
 | [Public data sources](docs/architecture/public-data-sources.md) | Source priorities and source-specific normalization |
 | [OpenAlex contract](docs/architecture/openalex-manifest-contract.md) | Implemented metadata, parser, selector, connector, and public-access evidence |
 | [OpenAlex source profiling](docs/architecture/openalex-source-profiling.md) | Bounded profiler, evidence classes, verified representations, and format decision |
@@ -345,6 +346,7 @@ src\research_platform\
   quality\                    Step 17 data-quality gates, metrics, SEMANTIC_ONLY runner
   e2e\                        Step 19 bounded SEMANTIC_ONLY composition runner
   orchestration\              Step 20 thin DAG / TaskMessage / retry / publication-scope contracts
+  readiness\                  Step 21 environment readiness registry + promotion gates
   warehouse\                  Warehouse contract; DuckDB/BigQuery/PostgreSQL skeletons
   provenance\                 Immutable retrieval-provenance model
   ingestion\ serving\         Reserved runtime areas
