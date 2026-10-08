@@ -2,10 +2,11 @@
 
 This roadmap preserves completed work and sequences implementation from bounded
 source profiling through consumer delivery. It does not authorize work beyond an
-explicitly scoped task. Steps 01–19 are complete. Step 19 / #27 bounded E2E
-pipeline is complete (local `SEMANTIC_ONLY`; no BigQuery/GCP/Airflow deploy).
-Step 20 / #25 is **ACTIVE** (orchestration contracts; no Airflow/Composer deploy).
-Step 21 / #28 remains planned. GCS landing and later steps remain planned.
+explicitly scoped task. Steps 01–20 are complete. Step 19 / #27 bounded E2E
+pipeline is complete (local `SEMANTIC_ONLY`). Step 20 / #25 orchestration
+contracts are complete (logical DAG + physical ExecutionUnits; no
+Airflow/Composer/Dataform/GCP deploy). Step 21 / #28 is next. GCS landing and
+later steps remain planned.
 
 ## Completed foundation
 
@@ -30,13 +31,13 @@ Step 21 / #28 remains planned. GCS landing and later steps remain planned.
 | 17 | Data quality gates and metrics ([details](data-quality.md)) | HARD_GATE vs INFORMATIONAL_METRIC, canonical/relationship/reconciliation/Gold exclusion, DuckDB `SEMANTIC_ONLY` runner; no silent repair; no GCP deploy ([#24](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/24)) |
 | 18 | Data Service domain layer ([details](data-service.md)) | Storage-independent capabilities, registry, typed contracts, cursor pagination, freshness/`PUBLISHED_SNAPSHOT`, in-memory `SEMANTIC_ONLY` repo; no HTTP/raw SQL/Postgres serving ([#26](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/26)) |
 | 19 | Bounded end-to-end pipeline ([details](end-to-end-pipeline.md)) | Complete — one outer `PipelineRun`, reusable Step-12/13 stages, DuckDB `SEMANTIC_ONLY` analytical/Gold, Step-17 gates, atomic local publication, Data Service final validation; no BigQuery/Airflow ([#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27)) |
+| 20 | Orchestration contracts ([details](orchestration.md)) | Complete — thin DAG + physical ExecutionUnits (`WORKS_INGEST_UNIT` = one `ingest_works_asset`), bounded TaskMessage/XCom, recursive safe metadata, retries, publication concurrency scope; no Airflow/Composer/Dataform/GCP deploy ([#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25)) |
 
-## Active / planned steps
+## Planned steps
 
 | Step | Work | Status |
 | --- | --- | --- |
-| 20 | Orchestration contracts: thin DAG, TaskMessage/XCom, retries, backfill bounds, publication concurrency scope (`TEMP_TABLES` recommended; `RUN_SCOPED` / `SINGLE_WRITER` supported), CI contract tests, Airflow/Composer/Dataform **alignment docs only** — no scheduler/cloud deploy ([details](orchestration.md)) | **ACTIVE** ([#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25)) |
-| 21 | Prepare sandbox/dev/QA/prod readiness documentation for IAM, workload identity, secrets, monitoring, recovery, cost controls, deployment, rollback, lineage, and governance. Do not automatically deploy production. | Planned ([#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28)) |
+| 21 | Prepare sandbox/dev/QA/prod readiness documentation for IAM, workload identity, secrets, monitoring, recovery, cost controls, deployment, rollback, lineage, and governance. Do not automatically deploy production. | Next ([#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28)) |
 
 ## Source extension
 

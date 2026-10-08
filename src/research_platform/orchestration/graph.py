@@ -2,34 +2,22 @@
 
 from __future__ import annotations
 
+from research_platform.orchestration.execution import (
+    EXECUTION_UNIT_CAPABILITY,
+    capability_ref_for_task,
+    execution_unit_for,
+    execution_unit_order_from_logical,
+    is_logical_checkpoint,
+    physical_invocations,
+)
 from research_platform.orchestration.models import (
     TASK_INVENTORY,
+    ExecutionUnit,
     TaskId,
     TaskSpec,
 )
 from research_platform.orchestration.retry import retry_policy_for
 from research_platform.service.models import SettingsModel
-
-
-# Capability refs point at existing public APIs — not duplicated here.
-_CAPABILITY = {
-    TaskId.DISCOVER: "research_platform.sources.openalex.connector.OpenAlexConnector.discover_metadata",
-    TaskId.REGISTER: "research_platform.control.store.ControlStore (source file claim/register)",
-    TaskId.INGEST: "research_platform.ingestion.pipeline.ingest_works_asset",
-    TaskId.CANONICALIZE: "research_platform.ingestion.pipeline.ingest_works_asset (canonical upsert path)",
-    TaskId.APPLY_DELETIONS: "research_platform.ingestion.deletion_pipeline.ingest_deletion_asset",
-    TaskId.ANALYTICAL_PUBLICATION: (
-        "research_platform.analytics.bigquery contracts + "
-        "research_platform.e2e.analytical.project_canonical_to_duckdb (local SEMANTIC_ONLY)"
-    ),
-    TaskId.PRE_SERVING_QUALITY: "research_platform.quality.runner.run_quality_checks (PRE_SERVING_BUILD)",
-    TaskId.STAGE_GOLD: "research_platform.analytics.gold.semantic_build.build_all_gold_marts",
-    TaskId.PRE_VISIBLE_QUALITY: (
-        "research_platform.quality.runner.run_quality_checks (PRE_VISIBLE_PUBLICATION)"
-    ),
-    TaskId.PUBLISH_SUCCESS: "research_platform.e2e.publication.PublicationStore.activate",
-    TaskId.FINAL_VALIDATION: "research_platform.e2e.runner final validation (Step 19)",
-}
 
 
 class OrchestrationGraph(SettingsModel):
@@ -48,86 +36,93 @@ class OrchestrationGraph(SettingsModel):
         raise KeyError(task_id)
 
 
+def _spec(
+    task_id: TaskId,
+    depends_on: tuple[TaskId, ...],
+    *,
+    description: str,
+    quality_gate: str | None = None,
+) -> TaskSpec:
+    unit = execution_unit_for(task_id)
+    return TaskSpec(
+        task_id=task_id,
+        depends_on=depends_on,
+        execution_unit=unit,
+        logical_only=is_logical_checkpoint(task_id),
+        retry_policy=retry_policy_for(task_id),
+        capability_ref=capability_ref_for_task(task_id),
+        description=description,
+        quality_gate=quality_gate,
+    )
+
+
 def build_openalex_works_graph() -> OrchestrationGraph:
     """Canonical OpenAlex Works orchestration graph for future Airflow mapping."""
     specs = (
-        TaskSpec(
-            task_id=TaskId.DISCOVER,
-            depends_on=(),
-            retry_policy=retry_policy_for(TaskId.DISCOVER),
-            capability_ref=_CAPABILITY[TaskId.DISCOVER],
+        _spec(
+            TaskId.DISCOVER,
+            (),
             description="Discover bounded source asset metadata",
         ),
-        TaskSpec(
-            task_id=TaskId.REGISTER,
-            depends_on=(TaskId.DISCOVER,),
-            retry_policy=retry_policy_for(TaskId.REGISTER),
-            capability_ref=_CAPABILITY[TaskId.REGISTER],
-            description="Idempotent asset registration / claim",
+        _spec(
+            TaskId.REGISTER,
+            (TaskId.DISCOVER,),
+            description=(
+                "Logical checkpoint: asset registration/claim phase of "
+                "WORKS_INGEST_UNIT (owned inside ingest_works_asset)"
+            ),
         ),
-        TaskSpec(
-            task_id=TaskId.INGEST,
-            depends_on=(TaskId.REGISTER,),
-            retry_policy=retry_policy_for(TaskId.INGEST),
-            capability_ref=_CAPABILITY[TaskId.INGEST],
-            description="Immutable landing + stream ingest (Step 12)",
+        _spec(
+            TaskId.INGEST,
+            (TaskId.REGISTER,),
+            description=(
+                "Primary physical invoke for WORKS_INGEST_UNIT: "
+                "ingest_works_asset (claim + land + decode/map + canonical)"
+            ),
         ),
-        TaskSpec(
-            task_id=TaskId.CANONICALIZE,
-            depends_on=(TaskId.INGEST,),
-            retry_policy=retry_policy_for(TaskId.CANONICALIZE),
-            capability_ref=_CAPABILITY[TaskId.CANONICALIZE],
-            description="Canonical upsert path (Step 11/12)",
+        _spec(
+            TaskId.CANONICALIZE,
+            (TaskId.INGEST,),
+            description=(
+                "Logical checkpoint: canonical publication phase of "
+                "WORKS_INGEST_UNIT (not a second ingest_works_asset call)"
+            ),
         ),
-        TaskSpec(
-            task_id=TaskId.APPLY_DELETIONS,
-            depends_on=(TaskId.CANONICALIZE,),
-            retry_policy=retry_policy_for(TaskId.APPLY_DELETIONS),
-            capability_ref=_CAPABILITY[TaskId.APPLY_DELETIONS],
+        _spec(
+            TaskId.APPLY_DELETIONS,
+            (TaskId.CANONICALIZE,),
             description="Deletion tombstones / unknown-work barriers (Step 13)",
         ),
-        TaskSpec(
-            task_id=TaskId.ANALYTICAL_PUBLICATION,
-            depends_on=(TaskId.APPLY_DELETIONS,),
-            retry_policy=retry_policy_for(TaskId.ANALYTICAL_PUBLICATION),
-            capability_ref=_CAPABILITY[TaskId.ANALYTICAL_PUBLICATION],
+        _spec(
+            TaskId.ANALYTICAL_PUBLICATION,
+            (TaskId.APPLY_DELETIONS,),
             description="Analytical projection under PublicationScope (Step 15)",
         ),
-        TaskSpec(
-            task_id=TaskId.PRE_SERVING_QUALITY,
-            depends_on=(TaskId.ANALYTICAL_PUBLICATION,),
-            retry_policy=retry_policy_for(TaskId.PRE_SERVING_QUALITY),
-            capability_ref=_CAPABILITY[TaskId.PRE_SERVING_QUALITY],
+        _spec(
+            TaskId.PRE_SERVING_QUALITY,
+            (TaskId.ANALYTICAL_PUBLICATION,),
             description="PRE_SERVING_BUILD hard gate (Step 17)",
             quality_gate="PRE_SERVING_BUILD",
         ),
-        TaskSpec(
-            task_id=TaskId.STAGE_GOLD,
-            depends_on=(TaskId.PRE_SERVING_QUALITY,),
-            retry_policy=retry_policy_for(TaskId.STAGE_GOLD),
-            capability_ref=_CAPABILITY[TaskId.STAGE_GOLD],
+        _spec(
+            TaskId.STAGE_GOLD,
+            (TaskId.PRE_SERVING_QUALITY,),
             description="Stage Gold marts/views (Step 16) — blocked if PRE_SERVING fails",
         ),
-        TaskSpec(
-            task_id=TaskId.PRE_VISIBLE_QUALITY,
-            depends_on=(TaskId.STAGE_GOLD,),
-            retry_policy=retry_policy_for(TaskId.PRE_VISIBLE_QUALITY),
-            capability_ref=_CAPABILITY[TaskId.PRE_VISIBLE_QUALITY],
+        _spec(
+            TaskId.PRE_VISIBLE_QUALITY,
+            (TaskId.STAGE_GOLD,),
             description="PRE_VISIBLE_PUBLICATION hard gate (Step 17)",
             quality_gate="PRE_VISIBLE_PUBLICATION",
         ),
-        TaskSpec(
-            task_id=TaskId.PUBLISH_SUCCESS,
-            depends_on=(TaskId.PRE_VISIBLE_QUALITY,),
-            retry_policy=retry_policy_for(TaskId.PUBLISH_SUCCESS),
-            capability_ref=_CAPABILITY[TaskId.PUBLISH_SUCCESS],
+        _spec(
+            TaskId.PUBLISH_SUCCESS,
+            (TaskId.PRE_VISIBLE_QUALITY,),
             description="Atomic consumer publication activation (Step 19)",
         ),
-        TaskSpec(
-            task_id=TaskId.FINAL_VALIDATION,
-            depends_on=(TaskId.PUBLISH_SUCCESS,),
-            retry_policy=retry_policy_for(TaskId.FINAL_VALIDATION),
-            capability_ref=_CAPABILITY[TaskId.FINAL_VALIDATION],
+        _spec(
+            TaskId.FINAL_VALIDATION,
+            (TaskId.PUBLISH_SUCCESS,),
             description="Post-activation consumer coherence checks (Step 19)",
         ),
     )
@@ -137,7 +132,7 @@ def build_openalex_works_graph() -> OrchestrationGraph:
 
 
 def validate_graph(graph: OrchestrationGraph) -> None:
-    """Assert inventory, acyclicity, and required quality-gate edges."""
+    """Assert inventory, acyclicity, execution units, and quality-gate edges."""
     ids = graph.task_ids
     if ids != TASK_INVENTORY:
         raise ValueError(
@@ -150,8 +145,41 @@ def validate_graph(graph: OrchestrationGraph) -> None:
                 raise ValueError(f"{task.task_id} depends on unknown {dep}")
             if dep is task.task_id:
                 raise ValueError(f"{task.task_id} cannot depend on itself")
+        if task.execution_unit is not execution_unit_for(task.task_id):
+            raise ValueError(f"{task.task_id} execution_unit mismatch")
+        if task.logical_only != is_logical_checkpoint(task.task_id):
+            raise ValueError(f"{task.task_id} logical_only mismatch")
+        if task.logical_only:
+            if not task.capability_ref.startswith("logical_checkpoint:"):
+                raise ValueError(
+                    f"{task.task_id} logical checkpoint must not advertise a callable"
+                )
+        else:
+            expected = EXECUTION_UNIT_CAPABILITY[task.execution_unit]
+            if task.capability_ref != expected:
+                raise ValueError(
+                    f"{task.task_id} capability_ref must match unit capability"
+                )
 
-    # Required chain edges
+    # Exactly one physical invoke for WORKS_INGEST_UNIT among REGISTER/INGEST/CANONICALIZE
+    works_tasks = [
+        t
+        for t in graph.tasks
+        if t.execution_unit is ExecutionUnit.WORKS_INGEST_UNIT
+    ]
+    primaries = [t for t in works_tasks if not t.logical_only]
+    if len(primaries) != 1 or primaries[0].task_id is not TaskId.INGEST:
+        raise ValueError(
+            "WORKS_INGEST_UNIT must have exactly one primary invoke on INGEST"
+        )
+    if "ingest_works_asset" not in primaries[0].capability_ref:
+        raise ValueError("WORKS_INGEST_UNIT primary must reference ingest_works_asset")
+    for t in works_tasks:
+        if t.logical_only and "ingest_works_asset" in t.capability_ref:
+            raise ValueError(
+                f"{t.task_id} must not advertise ingest_works_asset as a second invoke"
+            )
+
     required_edges = (
         (TaskId.DISCOVER, TaskId.REGISTER),
         (TaskId.REGISTER, TaskId.INGEST),
@@ -168,18 +196,24 @@ def validate_graph(graph: OrchestrationGraph) -> None:
         if upstream not in deps:
             raise ValueError(f"{downstream} must depend on {upstream}")
 
-    # No publish without PRE_VISIBLE; no gold before PRE_SERVING
     if TaskId.PRE_VISIBLE_QUALITY not in graph.spec(TaskId.PUBLISH_SUCCESS).depends_on:
         raise ValueError("PUBLISH_SUCCESS must depend on PRE_VISIBLE_QUALITY")
     if TaskId.PRE_SERVING_QUALITY not in graph.spec(TaskId.STAGE_GOLD).depends_on:
         raise ValueError("STAGE_GOLD must depend on PRE_SERVING_QUALITY")
-
-    # No shortcut INGEST -> PUBLISH_SUCCESS
     if TaskId.INGEST in graph.spec(TaskId.PUBLISH_SUCCESS).depends_on:
         raise ValueError("PUBLISH_SUCCESS must not depend directly on INGEST")
 
-    # Cycle detection via topological sort
-    topological_order(graph)
+    order = topological_order(graph)
+    execution_unit_order_from_logical(order)
+    # Exactly one Step-12 capability among physical invocations.
+    invokes = physical_invocations(order)
+    works_invokes = [
+        cap
+        for unit, cap in invokes
+        if unit is ExecutionUnit.WORKS_INGEST_UNIT
+    ]
+    if len(works_invokes) != 1:
+        raise ValueError("physical plan must invoke WORKS_INGEST_UNIT exactly once")
 
 
 def topological_order(graph: OrchestrationGraph) -> tuple[TaskId, ...]:
@@ -212,11 +246,7 @@ def topological_order(graph: OrchestrationGraph) -> tuple[TaskId, ...]:
 
 
 def depends_on_path(graph: OrchestrationGraph, start: TaskId, end: TaskId) -> bool:
-    """True if ``end`` is reachable from ``start`` following dependency edges reverse.
-
-    Edge meaning: B depends_on A means A -> B in execution order.
-    """
-    # Build forward adjacency: dep -> task
+    """True if ``end`` is reachable from ``start`` (A -> B when B depends_on A)."""
     forward: dict[TaskId, list[TaskId]] = {t.task_id: [] for t in graph.tasks}
     for task in graph.tasks:
         for dep in task.depends_on:

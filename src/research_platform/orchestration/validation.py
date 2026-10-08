@@ -5,10 +5,17 @@ Does not execute cloud resources or emulate Airflow.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
+from research_platform.orchestration.execution import (
+    EXECUTION_UNIT_CAPABILITY,
+    EXECUTION_UNIT_ORDER,
+    execution_unit_for,
+    execution_unit_order_from_logical,
+)
 from research_platform.orchestration.graph import (
     OrchestrationGraph,
     build_openalex_works_graph,
@@ -16,13 +23,15 @@ from research_platform.orchestration.graph import (
     validate_graph,
 )
 from research_platform.orchestration.messages import (
-    assert_safe_message_keys,
+    assert_bounded_event_details,
     build_task_message,
     task_message_as_xcom_dict,
 )
 from research_platform.orchestration.models import (
+    MAX_EVENT_JSON_BYTES,
     ORCHESTRATION_CONTRACT_VERSION,
     RECOMMENDED_PUBLICATION_STRATEGY,
+    ExecutionUnit,
     FailureCategory,
     OrchestrationEvent,
     OrchestrationEventType,
@@ -35,17 +44,32 @@ from research_platform.orchestration.publication_scope import (
     physical_decision_table_name,
     publication_scope_suffix,
 )
-from research_platform.orchestration.retry import is_retryable_failure, retry_policy_for
+from research_platform.orchestration.retry import (
+    is_retryable_failure,
+    is_retryable_unit_failure,
+    retry_policy_for,
+    retry_policy_for_unit,
+)
 from research_platform.service.models import SettingsModel
 
 
 class ExecutionPlanTask(SettingsModel):
     task_id: TaskId
     depends_on: tuple[TaskId, ...]
+    execution_unit: ExecutionUnit
+    logical_only: bool
     capability_ref: str
     retryability: str
     max_attempts: int
     quality_gate: str | None = None
+
+
+class ExecutionUnitPlanStep(SettingsModel):
+    unit: ExecutionUnit
+    capability_ref: str
+    retryability: str
+    max_attempts: int
+    logical_tasks: tuple[TaskId, ...]
 
 
 class ExecutionPlan(SettingsModel):
@@ -56,8 +80,11 @@ class ExecutionPlan(SettingsModel):
     scheduling_class: SchedulingClass
     publication_strategy: PublicationConcurrencyStrategy
     publication_scope_suffix: str
-    topological_order: tuple[TaskId, ...]
+    logical_task_order: tuple[TaskId, ...]
+    execution_unit_order: tuple[ExecutionUnit, ...]
+    topological_order: tuple[TaskId, ...]  # alias of logical_task_order
     tasks: tuple[ExecutionPlanTask, ...]
+    execution_units: tuple[ExecutionUnitPlanStep, ...]
     decision_table_bindings: dict[str, str]
     notes: tuple[str, ...] = ()
 
@@ -81,7 +108,7 @@ def render_execution_plan(
     source: str = "openalex",
     graph: OrchestrationGraph | None = None,
 ) -> ExecutionPlan:
-    """Render a dry-run execution plan (order, retries, scope) — no cloud I/O."""
+    """Render a dry-run plan with logical and deduplicated physical orders."""
     resolved = validate_orchestration_plan(graph)
     rid = run_id or uuid4()
     version = (publication_version or f"pub-{rid}").strip()
@@ -94,19 +121,37 @@ def render_execution_plan(
         strategy=strategy,
     )
     suffix = publication_scope_suffix(rid)
-    order = topological_order(resolved)
+    logical_order = topological_order(resolved)
+    unit_order = execution_unit_order_from_logical(logical_order)
     tasks = tuple(
         ExecutionPlanTask(
             task_id=spec.task_id,
             depends_on=spec.depends_on,
+            execution_unit=spec.execution_unit,
+            logical_only=spec.logical_only,
             capability_ref=spec.capability_ref,
             retryability=spec.retry_policy.retryability.value,
             max_attempts=spec.retry_policy.max_attempts,
             quality_gate=spec.quality_gate,
         )
-        for tid in order
+        for tid in logical_order
         for spec in (resolved.spec(tid),)
     )
+    unit_steps: list[ExecutionUnitPlanStep] = []
+    for unit in unit_order:
+        policy = retry_policy_for_unit(unit)
+        logical_tasks = tuple(
+            t.task_id for t in tasks if t.execution_unit is unit
+        )
+        unit_steps.append(
+            ExecutionUnitPlanStep(
+                unit=unit,
+                capability_ref=EXECUTION_UNIT_CAPABILITY[unit],
+                retryability=policy.retryability.value,
+                max_attempts=policy.max_attempts,
+                logical_tasks=logical_tasks,
+            )
+        )
     bindings = {
         name: physical_decision_table_name(name, scope)
         for name in (
@@ -115,7 +160,6 @@ def render_execution_plan(
             "relationship_publish_work_ids",
         )
     }
-    # Sample message schema check (not executed).
     sample = build_task_message(
         run_id=rid,
         publication_version=version,
@@ -131,8 +175,12 @@ def render_execution_plan(
     notes = (
         "CONTRACT_ONLY dry-run — no Airflow/Composer/Dataform/GCP execution",
         "Step 19 run_bounded_e2e_pipeline remains the local SEMANTIC_ONLY proof",
+        "REGISTER/INGEST/CANONICALIZE are logical phases of WORKS_INGEST_UNIT "
+        "(one ingest_works_asset invoke)",
         f"recommended publication strategy={RECOMMENDED_PUBLICATION_STRATEGY.value}",
         f"selected publication strategy={strategy.value}",
+        f"physical execution units={len(unit_order)} "
+        f"(logical tasks={len(logical_order)})",
     )
     return ExecutionPlan(
         contract_version=ORCHESTRATION_CONTRACT_VERSION,
@@ -142,8 +190,11 @@ def render_execution_plan(
         scheduling_class=scheduling_class,
         publication_strategy=strategy,
         publication_scope_suffix=suffix,
-        topological_order=order,
-        tasks=tasks,
+        logical_task_order=logical_order,
+        execution_unit_order=unit_order,
+        topological_order=logical_order,
+        tasks=tuple(tasks),
+        execution_units=tuple(unit_steps),
         decision_table_bindings=bindings,
         notes=notes,
     )
@@ -161,10 +212,10 @@ def build_orchestration_event(
     recovery_action: str | None = None,
     details: dict[str, Any] | None = None,
 ) -> OrchestrationEvent:
-    """Build a safe observability event; rejects forbidden detail keys."""
+    """Build a safe observability event; rejects forbidden/oversized details."""
     payload = dict(details or {})
-    assert_safe_message_keys(payload)
-    return OrchestrationEvent(
+    assert_bounded_event_details(payload)
+    event = OrchestrationEvent(
         event_type=event_type,
         run_id=run_id,
         task_id=task_id,
@@ -175,15 +226,39 @@ def build_orchestration_event(
         recovery_action=recovery_action,
         details=payload,
     )
+    raw = json.dumps(event.model_dump(mode="json"), sort_keys=True, default=str).encode(
+        "utf-8"
+    )
+    if len(raw) > MAX_EVENT_JSON_BYTES:
+        raise ValueError(f"OrchestrationEvent JSON exceeds {MAX_EVENT_JSON_BYTES} bytes")
+    return event
 
 
 def classify_retry(task_id: TaskId, category: FailureCategory) -> dict[str, Any]:
-    """Summarize retry decision for dry-run / tests."""
+    """Summarize retry decision for dry-run / tests (unit-authoritative)."""
     policy = retry_policy_for(task_id)
     return {
         "task_id": task_id.value,
+        "execution_unit": execution_unit_for(task_id).value,
         "category": category.value,
         "retryable": is_retryable_failure(task_id, category),
         "max_attempts": policy.max_attempts,
         "retryability": policy.retryability.value,
     }
+
+
+def classify_unit_retry(
+    unit: ExecutionUnit, category: FailureCategory
+) -> dict[str, Any]:
+    policy = retry_policy_for_unit(unit)
+    return {
+        "execution_unit": unit.value,
+        "category": category.value,
+        "retryable": is_retryable_unit_failure(unit, category),
+        "max_attempts": policy.max_attempts,
+        "retryability": policy.retryability.value,
+    }
+
+
+# Re-export for callers that inspect default physical order.
+DEFAULT_EXECUTION_UNIT_ORDER = EXECUTION_UNIT_ORDER

@@ -11,12 +11,12 @@ access, proprietary data, or cloud credentials are needed for the default tests.
 
 ## Current status
 
-**Steps 01–19 are complete.** Step 19 / #27 delivered the bounded end-to-end
-pipeline (`research_platform.e2e`, local `SEMANTIC_ONLY` only — no BigQuery,
-GCP, or Airflow deployment). **Step 20 / #25 is ACTIVE** (orchestration
-contracts + local dry-run validation in `research_platform.orchestration`; no
-Airflow/Composer/Dataform/GCP deploy). Step 21 / #28 remains planned. The full
-cloud/Airflow pipeline is not implemented.
+**Steps 01–20 are complete.** Step 19 / #27 delivered the bounded end-to-end
+pipeline (`research_platform.e2e`, local `SEMANTIC_ONLY`). Step 20 / #25
+delivered orchestration contracts (`research_platform.orchestration`: thin DAG,
+logical vs physical ExecutionUnits, safe TaskMessage/XCom, retries, publication
+scope; no Airflow/Composer/Dataform/GCP deploy). **Step 21 / #28 is next.**
+The full cloud/Airflow pipeline is not implemented.
 
 | Step | Delivered capability | Implementation boundary |
 | --- | --- | --- |
@@ -39,7 +39,7 @@ cloud/Airflow pipeline is not implemented.
 | 17 | Data quality gates and metrics | HARD_GATE vs INFORMATIONAL_METRIC, canonical/relationship/reconciliation/Gold exclusion gates, DuckDB `SEMANTIC_ONLY` runner; no silent repair, no GCP deploy ([#24](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/24)) |
 | 18 | Data Service domain layer | Storage-independent capabilities, capability registry, typed request/response contracts, cursor pagination, freshness/`PUBLISHED_SNAPSHOT`, in-memory `SEMANTIC_ONLY` repository; no HTTP deploy, no raw SQL, no Postgres/AlloyDB serving ([#26](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/26)) |
 | 19 | Bounded end-to-end pipeline | One outer `PipelineRun`, reusable Step-12/13 stages, DuckDB `SEMANTIC_ONLY` analytical/Gold, real Step-17 gates, atomic local publication, Data Service final validation; no BigQuery/Airflow/GCP ([#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27)) |
-| 20 | Orchestration contracts (ACTIVE) | Thin DAG graph, TaskMessage/XCom contract, retries, backfill bounds, publication concurrency scope (`TEMP_TABLES` recommended), dry-run plan renderer; no Airflow/Composer/Dataform/GCP deploy ([#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25)) |
+| 20 | Orchestration contracts | Thin DAG + physical ExecutionUnits (REGISTER/INGEST/CANONICALIZE → one `WORKS_INGEST_UNIT`), bounded TaskMessage/XCom, recursive safe metadata, retries, backfill bounds, publication concurrency scope (`TEMP_TABLES` recommended), dry-run plan renderer; no Airflow/Composer/Dataform/GCP deploy ([#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25)) |
 
 Constructing adapters or loading configuration does not connect to services.
 `LocalObjectStore` writes only under the configured local landing path. Default
@@ -55,22 +55,21 @@ Postgres serving.
 
 ### Next scoped work
 
-**Steps 01–19 ✅ complete.**
+**Steps 01–20 ✅ complete.**
 
 **Step 20 / [#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25)**
-(**ACTIVE**, pending review/merge): orchestration contracts
-(`research_platform.orchestration`) — thin DAG, safe TaskMessage/XCom, retries,
-backfill bounds, analytical publication concurrency scope, CI-aligned contract
-tests. No Airflow/Composer/Dataform/GCP deploy. See
+(complete, closed): orchestration contracts
+(`research_platform.orchestration`) — thin DAG, physical ExecutionUnits,
+bounded TaskMessage/XCom, retries, publication concurrency scope. No
+Airflow/Composer/Dataform/GCP deploy. See
 [Orchestration](docs/architecture/orchestration.md).
 
 ```text
-DISCOVER → REGISTER → INGEST → CANONICALIZE → APPLY_DELETIONS →
-ANALYTICAL_PUBLICATION → PRE_SERVING_QUALITY → STAGE_GOLD →
-PRE_VISIBLE_QUALITY → PUBLISH_SUCCESS → FINAL_VALIDATION
+Logical:  DISCOVER → REGISTER → INGEST → CANONICALIZE → …
+Physical: DISCOVERY_UNIT → WORKS_INGEST_UNIT → DELETION_UNIT → …
 ```
 
-**After Step 20 merge — Step 21 / [#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28):**
+**Next — Step 21 / [#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28):**
 environment readiness. Do not start #28 from this PR.
 
 Keep

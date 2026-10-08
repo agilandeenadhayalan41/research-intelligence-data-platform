@@ -1,9 +1,9 @@
 # Orchestration contracts (Step 20 / #25)
 
-**Status:** ACTIVE / in review — contracts and deterministic local validation only.  
-Package: `research_platform.orchestration`  
-Issue: [#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25)  
-Umbrella: [#2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2) (remains OPEN)
+**Status:** COMPLETE — contracts and deterministic local validation only.  
+Package: `research_platform.orchestration` (`orchestration-contract-v1.1`)  
+Issue: [#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25) (CLOSED)  
+Umbrella: [#2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2) (remains OPEN; Step 21 / #28 next)
 
 ### Explicit non-claims
 
@@ -27,10 +27,12 @@ This step does **NOT**:
 
 ---
 
-## Required DAG (thin)
+## Logical DAG vs physical ExecutionUnit
 
-Business logic stays in Steps 12–19 public APIs. Task specs hold identity,
-dependencies, retry policy, and a `capability_ref` string only.
+Business logic stays in Steps 12–19 public APIs. The logical DAG from #25 is
+preserved, but **logical TaskIds are not 1:1 Python invokes**.
+
+### Logical task order
 
 ```text
 DISCOVER
@@ -46,6 +48,48 @@ DISCOVER
   -> FINAL_VALIDATION             (Step 19 alignment)
 ```
 
+### Physical execution-unit order
+
+```text
+DISCOVERY_UNIT
+  -> WORKS_INGEST_UNIT
+  -> DELETION_UNIT
+  -> ANALYTICAL_PUBLICATION_UNIT
+  -> PRE_SERVING_QUALITY_UNIT
+  -> GOLD_UNIT
+  -> PRE_VISIBLE_QUALITY_UNIT
+  -> CONSUMER_PUBLICATION_UNIT
+  -> FINAL_VALIDATION_UNIT
+```
+
+### Step-12 physical boundary (critical)
+
+`REGISTER`, `INGEST`, and `CANONICALIZE` are **logical phases** of one
+`WORKS_INGEST_UNIT` whose sole capability is:
+
+```text
+research_platform.ingestion.pipeline.ingest_works_asset
+```
+
+That existing function already owns, as one composed transactional unit:
+
+1. registration / claim  
+2. fetch + immutable landing  
+3. decode / map  
+4. canonical publication  
+
+A future Airflow mapper **must not** call claim separately and then call
+`ingest_works_asset` twice (once for INGEST, once for CANONICALIZE). That would
+duplicate work or conflict with the claim lifecycle inside Step 12.
+
+`TaskSpec.logical_only=True` marks REGISTER and CANONICALIZE as checkpoints.
+Only INGEST is the primary physical invoke for `WORKS_INGEST_UNIT`.
+
+`render_execution_plan()` exposes both:
+
+- `logical_task_order`
+- `execution_unit_order` (deduplicated physical plan)
+
 Rules:
 
 - No path reaches `PUBLISH_SUCCESS` without `PRE_VISIBLE_QUALITY` success.
@@ -53,15 +97,13 @@ Rules:
 - No direct `INGEST -> PUBLISH_SUCCESS` shortcut.
 - Graph is acyclic with deterministic topological order (`TASK_INVENTORY`).
 
-Capability refs (examples):
-
-| Task | Reuses |
+| Physical unit | Capability |
 |---|---|
-| INGEST | `ingest_works_asset(...)` |
-| APPLY_DELETIONS | `ingest_deletion_asset(...)` |
-| PRE_*_QUALITY | `run_quality_checks(...)` |
-| STAGE_GOLD | `build_all_gold_marts(...)` |
-| PUBLISH_SUCCESS | `PublicationStore.activate(...)` |
+| WORKS_INGEST_UNIT | `ingest_works_asset(...)` |
+| DELETION_UNIT | `ingest_deletion_asset(...)` |
+| PRE_*_QUALITY_UNIT | `run_quality_checks(...)` |
+| GOLD_UNIT | `build_all_gold_marts(...)` |
+| CONSUMER_PUBLICATION_UNIT | `PublicationStore.activate(...)` |
 
 ---
 
@@ -69,28 +111,36 @@ Capability refs (examples):
 
 `TaskMessage` may carry bounded identifiers/metadata only:
 
-- `run_id`, `publication_version`, `source`, `task_id`, `attempt`, `environment`
-- optional: `asset_id`, `source_file_id`, `object_key_ref`, `quality_report_ref`,
-  `publication_scope_ref`, `scheduling_class`
+- `run_id`, `publication_version` (≤128), `source` (≤64), `task_id`, `attempt`,
+  `environment` (≤64)
+- optional: `asset_id` (≤256), `source_file_id` (≤256),
+  `object_key_ref` (≤1024), `quality_report_ref` (≤512),
+  `publication_scope_ref` (≤128), `scheduling_class`
 
-Forbidden (validated): raw payloads, Arrow/DataFrames, DuckDB/DB connections,
-credentials/tokens/DSNs, SQL text, large record lists, canonical/Gold contents.
+Serialized XCom JSON must be ≤ **8192 bytes**. Oversized messages fail closed
+(no silent truncation).
+
+Forbidden keys are validated **recursively** (bounded depth/nodes) for mappings
+and lists used in messages/event details — including nested
+`metadata.password`, `context[].sql`, `credentials.token`, etc.
 
 This is the intended future Airflow XCom shape — small and safe.
 
 ---
 
-## Retry policy
+## Retry policy (ExecutionUnit-authoritative)
 
-Typed per-task policies with bounded `max_attempts` (≤ 5). Infinite retries are
-forbidden.
+Retries are owned by **ExecutionUnit**, not by each logical TaskId.
 
-| Class | Examples | Notes |
-|---|---|---|
-| Retryable transient | DISCOVER transport | Bounded attempts |
-| Idempotent replay | REGISTER, INGEST | Preserve `ALREADY_SUCCESS` semantics |
-| Non-retryable business | PRE_*_QUALITY hard gate | Retries cannot convert FAIL → SUCCESS |
-| Non-retryable conflict | CANONICALIZE conflict / RESTORE_REQUIRED; PUBLISH content conflict | Operator decision required |
+`WORKS_INGEST_UNIT` (REGISTER/INGEST/CANONICALIZE together):
+
+- transient fetch/transport may retry boundedly
+- `ALREADY_SUCCESS` is successful replay
+- canonical conflict / `RESTORE_REQUIRED` / bounds-config are **non-retryable**
+- the unit must not be partially retried as “CANONICALIZE only”
+
+Quality hard gates remain non-retryable. Publication content conflict remains
+non-retryable. `max_attempts` ≤ 5 everywhere.
 
 ---
 
@@ -173,10 +223,10 @@ Documented only — no cron deployment:
 
 | Contract | Future mapping |
 |---|---|
-| `OrchestrationGraph` | Airflow DAG |
-| `TaskSpec` | Task / operator wrapper calling existing Python APIs |
-| `TaskMessage` | Small XCom payload |
-| `RetryPolicy` | `retries` / `retry_delay` |
+| `OrchestrationGraph` | Airflow DAG shape (logical) |
+| `ExecutionUnit` | Operator / task invoke (physical) |
+| `TaskMessage` | Small XCom payload (≤8 KiB) |
+| unit `RetryPolicy` | `retries` / `retry_delay` |
 | `run_id` / `publication_version` | DAG run metadata |
 
 Composer must use workload identity / secret-managed connections (Step 21).
@@ -223,10 +273,12 @@ No deployment credentials in GitHub Actions. No automatic GCP deploy.
 
 Safe events only: `TaskStarted`, `TaskSucceeded`, `TaskFailed`,
 `PipelineSucceeded`, `PipelineFailed` with `run_id`, `task_id`, `attempt`,
-timestamps, safe error category, `publication_version`, recovery action.
+timestamps, safe error category, `publication_version`, recovery action
+(≤512 chars).
 
-Never log payload, credentials, DSN, SQL, or secret-bearing tracebacks.
-No monitoring vendor SDK in this step.
+Event `details` are recursively deny-listed, depth/node bounded, and size
+bounded (details ≤4 KiB; full event ≤8 KiB). No raw exception traceback,
+payload, credentials, DSN, or SQL. No monitoring vendor SDK.
 
 ---
 
@@ -240,10 +292,12 @@ from research_platform.orchestration import (
 
 validate_orchestration_plan()
 plan = render_execution_plan(publication_version="pub-demo")
+plan.logical_task_order
+plan.execution_unit_order
 ```
 
-Shows task order, dependencies, retry classification, and publication-scope
-bindings. Does not execute cloud resources or emulate Airflow.
+Shows logical order, deduplicated physical units, retry classification, and
+publication-scope bindings. Does not execute cloud resources or emulate Airflow.
 
 ---
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -10,11 +11,14 @@ from pydantic import ValidationError
 
 from research_platform.orchestration import (
     ANALYTICAL_PUBLICATION_ORDER,
+    EXECUTION_UNIT_ORDER,
     FORBIDDEN_MESSAGE_KEYS,
+    MAX_XCOM_JSON_BYTES,
     RECOMMENDED_PUBLICATION_STRATEGY,
     STEP15_DECISION_CONTRACT_NAMES,
     TASK_INVENTORY,
     BackfillRequest,
+    ExecutionUnit,
     FailureCategory,
     OrchestrationEventType,
     PublicationConcurrencyStrategy,
@@ -27,16 +31,24 @@ from research_platform.orchestration import (
     build_publication_scope,
     build_task_message,
     depends_on_path,
+    execution_unit_for,
     is_retryable_failure,
+    is_retryable_unit_failure,
     physical_decision_table_name,
+    physical_invocations,
     publication_scope_suffix,
     quality_failure_blocks,
     render_execution_plan,
     retry_policy_for,
+    retry_policy_for_unit,
     scopes_collide,
     task_message_as_xcom_dict,
     topological_order,
     validate_orchestration_plan,
+)
+from research_platform.orchestration.models import (
+    MAX_PUBLICATION_VERSION_LEN,
+    MAX_SOURCE_LEN,
 )
 from research_platform.quality.models import ExecutionStage
 
@@ -282,12 +294,23 @@ def test_render_execution_plan_dry_run() -> None:
         publication_version="pub-plan-1",
         scheduling_class=SchedulingClass.MANUAL,
     )
+    assert plan.logical_task_order == TASK_INVENTORY
     assert plan.topological_order == TASK_INVENTORY
+    assert plan.execution_unit_order == EXECUTION_UNIT_ORDER
     assert plan.publication_version == "pub-plan-1"
     assert "CONTRACT_ONLY" in plan.notes[0]
     assert "Airflow" in plan.notes[0]
     assert plan.tasks[0].task_id is TaskId.DISCOVER
     assert plan.tasks[-1].task_id is TaskId.FINAL_VALIDATION
+    # Physical plan: one WORKS_INGEST_UNIT invoke only.
+    works = [u for u in plan.execution_units if u.unit is ExecutionUnit.WORKS_INGEST_UNIT]
+    assert len(works) == 1
+    assert works[0].capability_ref.endswith("ingest_works_asset")
+    assert works[0].logical_tasks == (
+        TaskId.REGISTER,
+        TaskId.INGEST,
+        TaskId.CANONICALIZE,
+    )
 
 
 def test_observability_event_rejects_forbidden_details() -> None:
@@ -350,6 +373,134 @@ def test_thin_dag_capability_refs_point_outside_orchestration() -> None:
     for spec in graph.tasks:
         assert "research_platform.orchestration" not in spec.capability_ref
         assert spec.capability_ref
-        # No embedded SQL / DSN in task specs
         assert "postgres://" not in spec.capability_ref.lower()
         assert "select " not in spec.capability_ref.lower()
+        if spec.logical_only:
+            assert spec.capability_ref.startswith("logical_checkpoint:")
+            assert "ingest_works_asset" not in spec.capability_ref
+        else:
+            assert not spec.capability_ref.startswith("logical_checkpoint:")
+
+
+def test_works_ingest_unit_single_physical_invocation() -> None:
+    graph = build_openalex_works_graph()
+    order = topological_order(graph)
+    invokes = physical_invocations(order)
+    works_caps = [
+        cap
+        for unit, cap in invokes
+        if unit is ExecutionUnit.WORKS_INGEST_UNIT
+    ]
+    assert len(works_caps) == 1
+    assert works_caps[0].endswith("ingest_works_asset")
+    # Logical stages share the unit; REGISTER/CANONICALIZE are checkpoints.
+    assert execution_unit_for(TaskId.REGISTER) is ExecutionUnit.WORKS_INGEST_UNIT
+    assert execution_unit_for(TaskId.INGEST) is ExecutionUnit.WORKS_INGEST_UNIT
+    assert execution_unit_for(TaskId.CANONICALIZE) is ExecutionUnit.WORKS_INGEST_UNIT
+    assert graph.spec(TaskId.REGISTER).logical_only is True
+    assert graph.spec(TaskId.INGEST).logical_only is False
+    assert graph.spec(TaskId.CANONICALIZE).logical_only is True
+
+
+def test_works_ingest_unit_authoritative_retry_policy() -> None:
+    unit_policy = retry_policy_for_unit(ExecutionUnit.WORKS_INGEST_UNIT)
+    for task_id in (TaskId.REGISTER, TaskId.INGEST, TaskId.CANONICALIZE):
+        assert retry_policy_for(task_id) == unit_policy
+    assert is_retryable_unit_failure(
+        ExecutionUnit.WORKS_INGEST_UNIT, FailureCategory.TRANSIENT_TRANSPORT
+    )
+    assert not is_retryable_unit_failure(
+        ExecutionUnit.WORKS_INGEST_UNIT, FailureCategory.CANONICAL_CONFLICT
+    )
+    assert not is_retryable_unit_failure(
+        ExecutionUnit.WORKS_INGEST_UNIT, FailureCategory.RESTORE_REQUIRED
+    )
+    assert not is_retryable_unit_failure(
+        ExecutionUnit.WORKS_INGEST_UNIT, FailureCategory.BOUNDS_CONFIG
+    )
+    # Logical CANONICALIZE must not get an independent retry policy.
+    assert not is_retryable_failure(
+        TaskId.CANONICALIZE, FailureCategory.CANONICAL_CONFLICT
+    )
+
+
+def test_task_message_string_bounds() -> None:
+    with pytest.raises((ValidationError, ValueError)):
+        build_task_message(
+            run_id=uuid4(),
+            publication_version="v" * (MAX_PUBLICATION_VERSION_LEN + 1),
+            source="openalex",
+            task_id=TaskId.DISCOVER,
+            attempt=1,
+            environment="local",
+        )
+    with pytest.raises((ValidationError, ValueError)):
+        build_task_message(
+            run_id=uuid4(),
+            publication_version="v1",
+            source="s" * (MAX_SOURCE_LEN + 1),
+            task_id=TaskId.DISCOVER,
+            attempt=1,
+            environment="local",
+        )
+
+
+def test_xcom_serialized_size_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    msg = build_task_message(
+        run_id=uuid4(),
+        publication_version="v1",
+        source="openalex",
+        task_id=TaskId.DISCOVER,
+        attempt=1,
+        environment="local",
+        object_key_ref="k" * 1024,
+    )
+    data = task_message_as_xcom_dict(msg)
+    assert len(json.dumps(data, sort_keys=True).encode()) <= MAX_XCOM_JSON_BYTES
+
+    import research_platform.orchestration.messages as messages_mod
+
+    original = messages_mod.TaskMessage.model_dump
+
+    def huge_dump(self, *args, **kwargs):  # noqa: ANN001
+        payload = original(self, *args, **kwargs)
+        payload["object_key_ref"] = "x" * (MAX_XCOM_JSON_BYTES + 100)
+        return payload
+
+    monkeypatch.setattr(messages_mod.TaskMessage, "model_dump", huge_dump)
+    with pytest.raises(ValueError, match="XCom JSON exceeds"):
+        task_message_as_xcom_dict(msg)
+
+
+def test_nested_forbidden_keys_rejected() -> None:
+    with pytest.raises(ValueError, match="forbidden"):
+        assert_safe_message_keys({"metadata": {"password": "x"}})
+    with pytest.raises(ValueError, match="forbidden"):
+        assert_safe_message_keys({"context": [{"sql": "select 1"}]})
+    with pytest.raises(ValueError, match="forbidden"):
+        assert_safe_message_keys({"nested": {"credentials": {"token": "x"}}})
+    with pytest.raises(ValueError, match="forbidden"):
+        assert_safe_message_keys({"wrap": {"payload": {"records": []}}})
+    with pytest.raises(ValueError, match="forbidden"):
+        build_orchestration_event(
+            event_type=OrchestrationEventType.TASK_FAILED,
+            run_id=uuid4(),
+            details={"metadata": {"password": "x"}},
+        )
+
+
+def test_event_detail_bounds() -> None:
+    with pytest.raises(ValueError, match="max key count"):
+        build_orchestration_event(
+            event_type=OrchestrationEventType.TASK_FAILED,
+            run_id=uuid4(),
+            details={f"k{i}": "v" for i in range(20)},
+        )
+    with pytest.raises((ValidationError, ValueError)):
+        build_orchestration_event(
+            event_type=OrchestrationEventType.TASK_FAILED,
+            run_id=uuid4(),
+            recovery_action="x" * 600,
+        )
+    with pytest.raises(ValueError, match="nesting depth"):
+        assert_safe_message_keys({"a": {"b": {"c": {"d": {"e": 1}}}}})
