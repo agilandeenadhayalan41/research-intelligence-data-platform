@@ -17,8 +17,10 @@ environment readiness assessment/contracts are complete (no cloud provisioning).
 
 GCS (#9 / PR #84) and BigQuery (#10 / PR #85) **adapters** are complete offline.
 GCS passed a live sandbox smoke (#91): `VERIFIED` for GCP_SANDBOX only
-(operator-owned project, user ADC; DEV/QA stay `READY_TO_VALIDATE`). BigQuery
-stays `READY_TO_VALIDATE`; its live sandbox smoke (#92) is **not yet done**.
+(operator-owned project, user ADC; DEV/QA stay `READY_TO_VALIDATE`). The
+BigQuery adapter passed a live sandbox smoke (#92): `VERIFIED` for GCP_SANDBOX
+only, for the adapter contract; the Step 15–16 models are not deployed or
+MEASURED.
 DuckDBWarehouse (#8) implements local query execution only. That local adapter
 is not BigQuery dialect, cost, cloud, or production evidence.
 PostgreSQLWarehouse (#7) implements read `Warehouse.query` and is
@@ -29,7 +31,8 @@ Explicit remaining gaps (separately scoped; do not start automatically):
 
 - GCS beyond the sandbox (#91 covered GCP_SANDBOX only): enterprise project,
   least-privilege runtime identity, DEV/QA
-- Live BigQuery sandbox smoke (#92: ADC + approved dataset) — does not reopen #10
+- BigQuery beyond the adapter smoke (#92 covered GCP_SANDBOX only): deploy and
+  MEASURE Step 15–16 models, enterprise project, least-privilege identity, DEV/QA
 - Composer/Airflow deployment
 - HTTP Data Service deployment
 - cloud IAM/WIF/secrets
@@ -42,7 +45,7 @@ Explicit remaining gaps (separately scoped; do not start automatically):
 | 01 | Repository foundation | Complete |
 | 02 | Configuration framework | Complete |
 | 03 | Storage abstraction/contracts | Complete contract; GCSObjectStore adapter in #9; live sandbox smoke passed in #91 (`VERIFIED`, GCP_SANDBOX only) |
-| 04 | Warehouse abstraction/contracts | Complete contract; BigQueryWarehouse via #10 (offline); DuckDBWarehouse via #8 (local query only; not BigQuery/production evidence); PostgreSQLWarehouse query via #7 (`LOCAL_POSTGRES_VERIFIED` by #90; not cloud evidence) |
+| 04 | Warehouse abstraction/contracts | Complete contract; BigQueryWarehouse via #10 (live sandbox smoke #92; `VERIFIED` GCP_SANDBOX only); DuckDBWarehouse via #8 (local query only; not BigQuery/production evidence); PostgreSQLWarehouse query via #7 (`LOCAL_POSTGRES_VERIFIED` by #90; not cloud evidence) |
 | 05 | Bounded public OpenAlex connector | Complete |
 | 06 | OpenAlex Works manifest parser | Complete |
 | 07 | Bounded deterministic development sample selector | Complete |
@@ -66,7 +69,7 @@ Explicit remaining gaps (separately scoped; do not start automatically):
 | Gap | Scope | Notes |
 | --- | --- | --- |
 | #9 | GCS ObjectStore runtime | Adapter implemented; live sandbox smoke passed (#91) — `VERIFIED` for GCP_SANDBOX only; DEV/QA/enterprise project not verified |
-| #10 | BigQuery Warehouse adapter | Adapter implemented offline (closed); not VERIFIED live; live sandbox smoke tracked in #92 |
+| #10 | BigQuery Warehouse adapter | Adapter implemented (closed); live sandbox smoke passed (#92) — `VERIFIED` for GCP_SANDBOX only; models not deployed/MEASURED; DEV/QA/enterprise project not verified |
 | — | Composer/Airflow deployment | Not authorized by Step 20/21 |
 | — | HTTP Data Service deployment | Domain contracts only today |
 | — | Cloud IAM / WIF / secrets | Documented; not provisioned |

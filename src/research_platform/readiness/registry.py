@@ -88,9 +88,10 @@ def _local_entries() -> tuple[ReadinessEntry, ...]:
             env,
             EvidenceLevel.CONTRACT_DEFINED,
             "Step 15–16 BigQuery SQL/contracts + DuckDB SEMANTIC_ONLY; "
-            "BigQueryWarehouse adapter offline-tested (#10); no live job evidence",
-            gaps=("No paid/MEASURED BigQuery execution evidence",),
-            next_action="Run separately approved sandbox smoke before VERIFIED",
+            "BigQueryWarehouse adapter offline-tested (#10); no live job in LOCAL; "
+            "live sandbox adapter evidence is GCP_SANDBOX (#92)",
+            gaps=("No paid/MEASURED BigQuery model execution evidence",),
+            next_action="Keep LOCAL offline; see GCP_SANDBOX for live-job evidence (#92)",
             labels=(EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.SEMANTIC_ONLY),
             blocking=False,
         ),
@@ -230,9 +231,27 @@ def _sandbox_entries() -> tuple[ReadinessEntry, ...]:
         ),
         configuration_gaps=(
             "No actual GCP project/bucket/dataset provisioned by this repository",
-            "No enterprise-managed sandbox project; #91 used an operator-owned project",
+            "No enterprise-managed sandbox project; #91/#92 used an operator-owned project",
         ),
         domain_overrides={
+            ReadinessDomain.BIGQUERY_ANALYTICAL: (
+                EvidenceLevel.VERIFIED,
+                "BigQueryWarehouse (#10) live sandbox smoke passed (#92): dry-run budget "
+                "rejection, provider-enforced maximum_bytes_billed (bytesBilledLimitExceeded "
+                "mapped to QueryBudgetExceededError), bounded execute, typed @parameter "
+                "binding, empty/null Arrow results; operator-owned sandbox project and "
+                "dataset (identifiers redacted)",
+                (
+                    "Adapter contract only: no Step 15-16 tables deployed; MERGE/partition/"
+                    "cluster behaviour and MEASURED cost/latency unverified",
+                    "Operator-owned project and user ADC, not an enterprise project or "
+                    "least-privilege runtime identity",
+                    "Job timeout/cancellation under load unverified",
+                ),
+                "Deploy and MEASURE the Step 15-16 models in an enterprise-managed project "
+                "with a least-privilege runtime identity before DEV promotion",
+                (EvidenceLabel.CONTRACT_DEFINED,),
+            ),
             ReadinessDomain.GCS_RAW_LANDING: (
                 EvidenceLevel.VERIFIED,
                 "GCSObjectStore (#9) live sandbox smoke passed (#91): create via "
@@ -310,6 +329,14 @@ def _prod_entries() -> tuple[ReadinessEntry, ...]:
                 "Do not run smoke in PROD; verify in DEV and QA first, then promote",
                 (EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.CLOUD_UNVERIFIED),
             ),
+            ReadinessDomain.BIGQUERY_ANALYTICAL: (
+                EvidenceLevel.BLOCKED,
+                "BigQueryWarehouse adapter implemented (#10); live smoke passed only in "
+                "GCP_SANDBOX (#92); PROD has no access",
+                ("No PROD access", "No DEV/QA live-dataset evidence to promote from"),
+                "Do not run smoke in PROD; verify in DEV and QA first, then promote",
+                (EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.CLOUD_UNVERIFIED),
+            ),
         },
     )
 
@@ -381,13 +408,13 @@ def _cloud_placeholder_matrix(
         ReadinessDomain.BIGQUERY_ANALYTICAL: (
             EvidenceLevel.READY_TO_VALIDATE,
             "BigQueryWarehouse adapter implemented (#10) with dry-run + maximum_bytes_billed; "
-            "offline fake-client tests only — not live-job VERIFIED",
+            "live smoke passed only in GCP_SANDBOX (#92) — not live-job VERIFIED here",
             (
-                "No approved sandbox ADC/dataset execution evidence",
+                "No approved ADC/dataset execution evidence in this environment",
                 "No MERGE/partition/cluster MEASURED evidence",
-                "No live maximum_bytes_billed enforcement evidence",
+                "No maximum_bytes_billed enforcement evidence in this environment",
             ),
-            "Run separately approved sandbox smoke (ADC + real dataset) before any VERIFIED claim",
+            "Run the approved #92-style smoke in this environment before any VERIFIED claim",
             (EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.CLOUD_UNVERIFIED),
         ),
         ReadinessDomain.PUBLICATION_CONCURRENCY: (

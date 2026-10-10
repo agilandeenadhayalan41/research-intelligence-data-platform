@@ -10,7 +10,7 @@ cost-safety rules, and local DuckDB semantic checks.
 | --- | --- |
 | **DEFINED IN STEP 15** | Table DDL contracts, query SQL files, pattern mappings, grains, partition/cluster decisions, MERGE/refresh design, cost rules, DuckDB `SEMANTIC_ONLY` fixtures, static offline checks |
 | **NOT YET DEPLOYED / MEASURED** | GCP datasets/tables, paid BigQuery jobs, partition pruning proof, clustering effectiveness, real cost/latency |
-| **RUNTIME ADAPTER (#10)** | `BigQueryWarehouse` — dry-run + `maximum_bytes_billed`, typed `@params`, Arrow results; offline fake-client tests only |
+| **RUNTIME ADAPTER (#10)** | `BigQueryWarehouse` — dry-run + `maximum_bytes_billed`, typed `@params`, Arrow results; offline fake-client tests plus a live sandbox smoke (#92) |
 
 No cloud deployment, service accounts, Terraform, or paid queries are included
 in default CI. DuckDB `SEMANTIC_ONLY` is **not** a BigQuery dialect or cost
@@ -20,8 +20,31 @@ validator.
 
 Not run by `make test`, GitHub Actions, or default development. Requires a
 separately approved project/dataset and ADC. Suggested checks: dry-run budget
-rejection, bounded execute, parameter binding, empty/null Arrow results. Until
-that evidence exists, readiness remains `READY_TO_VALIDATE`, not `VERIFIED`.
+rejection, bounded execute, parameter binding, empty/null Arrow results.
+
+#### Recorded run (#92)
+
+On 2026-10-10 (`main` @ `91edd61`, unmodified `BigQueryWarehouse`, no injected
+client) all checks passed against real BigQuery. A 1 KiB cap was rejected by
+the dry-run check before execution. With an 8 MiB cap the dry-run estimate fit
+but BigQuery's 10 MiB billing minimum did not, so the job failed
+`bytesBilledLimitExceeded` (mapped to `QueryBudgetExceededError`, 0 bytes
+billed). A bounded query on `bigquery-public-data.samples.shakespeare` under a
+20 MiB cap returned 5,318 rows (5,114,816 bytes processed, 10,485,760 billed).
+BOOL/INT64/FLOAT64/STRING/TIMESTAMP/DATE/ARRAY parameters bound correctly, and
+empty and typed-NULL results kept their Arrow schema. Evidence:
+[#92](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/92#issuecomment-6102493009)
+(identifiers redacted).
+
+Environment: the operator-owned sandbox project used for #91 and an empty
+dataset created for the run with operator approval; user ADC; CPython 3.14.4
+and `google-cloud-bigquery` 3.46.1. No tables were created.
+
+`BIGQUERY_ANALYTICAL` is therefore `VERIFIED` for **GCP_SANDBOX only**, for the
+adapter contract. It is not evidence that the Step 15–16 models deploy, that
+MERGE/partition pruning/clustering behave as designed, of MEASURED cost or
+latency, of an enterprise-managed project or least-privilege runtime identity,
+or of DEV/QA/PROD, which stay `READY_TO_VALIDATE` / `BLOCKED`.
 
 ## Separation of validation kinds
 
