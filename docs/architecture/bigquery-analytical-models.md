@@ -9,7 +9,7 @@ cost-safety rules, and local DuckDB semantic checks.
 | Status | What |
 | --- | --- |
 | **DEFINED IN STEP 15** | Table DDL contracts, query SQL files, pattern mappings, grains, partition/cluster decisions, MERGE/refresh design, cost rules, DuckDB `SEMANTIC_ONLY` fixtures, static offline checks |
-| **NOT YET DEPLOYED / MEASURED** | GCP datasets/tables, paid BigQuery jobs, partition pruning proof, clustering effectiveness, real cost/latency |
+| **NOT YET DEPLOYED / MEASURED** | Step 15–16 datasets/tables, model query jobs, partition pruning proof, clustering effectiveness, real cost/latency (the #92 adapter smoke used only an empty scratch dataset and literal/public-table queries) |
 | **RUNTIME ADAPTER (#10)** | `BigQueryWarehouse` — dry-run + `maximum_bytes_billed`, typed `@params`, Arrow results; offline fake-client tests plus a live sandbox smoke (#92) |
 
 No cloud deployment, service accounts, Terraform, or paid queries are included
@@ -43,8 +43,9 @@ and `google-cloud-bigquery` 3.46.1. No tables were created.
 `BIGQUERY_ANALYTICAL` is therefore `VERIFIED` for **GCP_SANDBOX only**, for the
 adapter contract. It is not evidence that the Step 15–16 models deploy, that
 MERGE/partition pruning/clustering behave as designed, of MEASURED cost or
-latency, of an enterprise-managed project or least-privilege runtime identity,
-or of DEV/QA/PROD, which stay `READY_TO_VALIDATE` / `BLOCKED`.
+latency, of job timeout/cancellation under load, of an enterprise-managed
+project or least-privilege runtime identity, or of DEV/QA/PROD, which stay
+`READY_TO_VALIDATE` / `BLOCKED`.
 
 ## Separation of validation kinds
 

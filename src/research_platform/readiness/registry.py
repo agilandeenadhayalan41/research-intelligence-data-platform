@@ -333,7 +333,11 @@ def _prod_entries() -> tuple[ReadinessEntry, ...]:
                 EvidenceLevel.BLOCKED,
                 "BigQueryWarehouse adapter implemented (#10); live smoke passed only in "
                 "GCP_SANDBOX (#92); PROD has no access",
-                ("No PROD access", "No DEV/QA live-dataset evidence to promote from"),
+                (
+                    "No PROD access",
+                    "No DEV/QA live-dataset evidence to promote from",
+                    "No MERGE/partition/cluster MEASURED evidence",
+                ),
                 "Do not run smoke in PROD; verify in DEV and QA first, then promote",
                 (EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.CLOUD_UNVERIFIED),
             ),

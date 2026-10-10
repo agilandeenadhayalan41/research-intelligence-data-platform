@@ -250,6 +250,7 @@ def test_bigquery_verified_only_in_sandbox_with_evidence_and_honest_gaps() -> No
     prod_action = levels[EnvironmentName.PROD].required_next_action
     assert "in this environment" not in prod_action
     assert "Do not run smoke in PROD" in prod_action
+    assert any("MEASURED" in g for g in levels[EnvironmentName.PROD].gaps)
     assert (
         evaluate_environment_readiness(EnvironmentName.GCP_SANDBOX).overall_status
         is EnvironmentOverallStatus.NOT_READY

@@ -151,8 +151,9 @@ separation, and access logging.
 Therefore `BIGQUERY_ANALYTICAL` is `VERIFIED` for **GCP_SANDBOX only**, for the
 adapter contract, and `READY_TO_VALIDATE` for DEV/QA; PROD remains BLOCKED.
 The evidence used an operator-owned project and user ADC, deployed no tables,
-and does not cover MERGE/partition/cluster behaviour, MEASURED cost/latency, an
-enterprise-managed project, or a least-privilege runtime identity. GCP_SANDBOX
+and does not cover MERGE/partition/cluster behaviour, MEASURED cost/latency,
+job timeout/cancellation under load, an enterprise-managed project, or a
+least-privilege runtime identity. GCP_SANDBOX
 stays `NOT_READY` while other mandatory domains are unverified.
 
 **Do not run paid queries from this readiness step.**
@@ -262,7 +263,8 @@ No cloud calls. Results derive from the static readiness registry.
 ## Known gaps (blocking cloud readiness today)
 
 1. GCS beyond the sandbox (#91 verified GCP_SANDBOX only): DEV/QA, enterprise project, least-privilege identity  
-2. BigQuery beyond the adapter smoke (#92 verified GCP_SANDBOX only): deploy/MEASURE models, DEV/QA  
+2. BigQuery beyond the adapter smoke (#92 verified GCP_SANDBOX only): deploy/MEASURE
+   models, DEV/QA, enterprise project, least-privilege identity  
 3. No cloud IAM / WIF / secrets wiring  
 4. No Composer/Airflow deployment  
 5. No HTTP Data Service deploy  
