@@ -206,6 +206,38 @@ def test_local_postgres_statement_timeout_keeps_the_connection() -> None:
         assert timeout == "100ms"
 
 
+def test_local_postgres_repeated_query_survives_concurrent_schema_change() -> None:
+    table_name = f"wh_probe_{uuid4().hex}"
+    setup = psycopg.connect(DSN, autocommit=True)
+    try:
+        setup.execute(f"CREATE TABLE {table_name} (a integer)")
+        setup.execute(f"INSERT INTO {table_name} (a) VALUES (1)")
+        with PostgreSQLWarehouse(WarehouseConfig(postgres_dsn_env="POSTGRES_DSN")) as warehouse:
+            # psycopg would auto-prepare after 5 runs; run past that threshold.
+            for _ in range(7):
+                assert warehouse.query(f"SELECT * FROM {table_name}").column_names == ["a"]
+            setup.execute(f"ALTER TABLE {table_name} ADD COLUMN b integer")
+            for _ in range(2):
+                table = warehouse.query(f"SELECT * FROM {table_name}")
+                assert table.column_names == ["a", "b"]
+                assert table.to_pylist() == [{"a": 1, "b": None}]
+    finally:
+        setup.execute(f"DROP TABLE IF EXISTS {table_name}")
+        setup.close()
+
+
+def test_local_postgres_caller_deallocate_all_does_not_break_later_queries() -> None:
+    with PostgreSQLWarehouse(WarehouseConfig(postgres_dsn_env="POSTGRES_DSN")) as warehouse:
+        for _ in range(7):
+            warehouse.query("SELECT 1 AS value")
+        before = _pid(warehouse)
+        with pytest.raises(QueryExecutionError, match="did not produce a result set"):
+            warehouse.query("DEALLOCATE ALL")
+        for _ in range(2):
+            assert warehouse.query("SELECT 1 AS value").column("value")[0].as_py() == 1
+        assert _pid(warehouse) == before
+
+
 def test_local_postgres_unbounded_numeric_with_mixed_scales() -> None:
     with PostgreSQLWarehouse(WarehouseConfig(postgres_dsn_env="POSTGRES_DSN")) as warehouse:
         mixed = warehouse.query(

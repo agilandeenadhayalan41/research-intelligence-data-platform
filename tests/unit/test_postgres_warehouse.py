@@ -797,6 +797,35 @@ def test_logs_omit_dsn_and_parameter_values(
     assert "postgresql://" not in caplog.text
 
 
+class _RecordingConnection(_Connection):
+    """Records attribute writes made after construction (except fake bookkeeping)."""
+
+    _BOOKKEEPING = frozenset({"cursor_calls"})
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.prepare_threshold = 5
+        self.description = (_Column("value", 23),)
+        self.rows = [(1,)]
+        self.writes: list[str] = []
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if "writes" in self.__dict__ and name not in self._BOOKKEEPING:
+            self.writes.append(name)
+        super().__setattr__(name, value)
+
+
+def test_injected_connection_settings_are_left_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("POSTGRES_DSN_UNIT", "postgresql://unit")
+    injected = _RecordingConnection()
+    warehouse, _ = _warehouse(injected)
+    assert warehouse.query("SELECT 1 AS value").column("value")[0].as_py() == 1
+    assert injected.prepare_threshold == 5
+    assert injected.writes == []
+
+
 def test_real_connect_uses_read_only_autocommit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -820,6 +849,8 @@ def test_real_connect_uses_read_only_autocommit(
     table = warehouse.query("SELECT 1 AS value")
     assert table.column("value")[0].as_py() == 1
     assert calls[0]["autocommit"] is True
+    assert "prepare_threshold" in calls[0]
+    assert calls[0]["prepare_threshold"] is None
     options = str(calls[0]["options"])
     assert "default_transaction_read_only=on" in options
     assert "TimeZone=UTC" in options
