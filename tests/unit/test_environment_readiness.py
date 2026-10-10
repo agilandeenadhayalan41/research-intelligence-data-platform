@@ -129,14 +129,12 @@ def test_sandbox_reports_cloud_gaps() -> None:
     report = readiness_report("GCP_SANDBOX")
     assert report.overall_status is EnvironmentOverallStatus.NOT_READY
     by_domain = {e.domain: e for e in report.entries}
-    # #91 live smoke verified GCS in the sandbox only; the environment is still NOT_READY.
+    # #91/#92 live smokes verified GCS and the BigQuery adapter in the sandbox only;
+    # the environment is still NOT_READY.
     assert by_domain[ReadinessDomain.GCS_RAW_LANDING].evidence_level is (
         EvidenceLevel.VERIFIED
     )
     assert by_domain[ReadinessDomain.BIGQUERY_ANALYTICAL].evidence_level is (
-        EvidenceLevel.READY_TO_VALIDATE
-    )
-    assert by_domain[ReadinessDomain.BIGQUERY_ANALYTICAL].evidence_level is not (
         EvidenceLevel.VERIFIED
     )
     assert by_domain[ReadinessDomain.ORCHESTRATION].evidence_level is (
@@ -178,15 +176,17 @@ def test_gcs_and_bigquery_runtime_gaps_surfaced() -> None:
         assert "#9" in by_domain[ReadinessDomain.GCS_RAW_LANDING].evidence or any(
             "#9" in g for g in by_domain[ReadinessDomain.GCS_RAW_LANDING].gaps
         )
-        assert by_domain[ReadinessDomain.BIGQUERY_ANALYTICAL].evidence_level in {
-            EvidenceLevel.CLOUD_UNVERIFIED,
-            EvidenceLevel.BLOCKED,
-            EvidenceLevel.CONTRACT_DEFINED,
-            EvidenceLevel.READY_TO_VALIDATE,
-        }
-        assert by_domain[ReadinessDomain.BIGQUERY_ANALYTICAL].evidence_level is not (
-            EvidenceLevel.VERIFIED
-        )
+        if env is not EnvironmentName.GCP_SANDBOX:
+            # #92 evidence is sandbox-only; it must not leak into later environments.
+            assert by_domain[ReadinessDomain.BIGQUERY_ANALYTICAL].evidence_level in {
+                EvidenceLevel.CLOUD_UNVERIFIED,
+                EvidenceLevel.BLOCKED,
+                EvidenceLevel.CONTRACT_DEFINED,
+                EvidenceLevel.READY_TO_VALIDATE,
+            }
+            assert by_domain[ReadinessDomain.BIGQUERY_ANALYTICAL].evidence_level is not (
+                EvidenceLevel.VERIFIED
+            )
         assert "#10" in by_domain[ReadinessDomain.BIGQUERY_ANALYTICAL].evidence or any(
             "#10" in g for g in by_domain[ReadinessDomain.BIGQUERY_ANALYTICAL].gaps
         )
@@ -224,13 +224,49 @@ def test_gcs_verified_only_in_sandbox_with_evidence_and_honest_gaps() -> None:
     )
 
 
-def test_verified_is_confined_to_sandbox_gcs() -> None:
+def test_bigquery_verified_only_in_sandbox_with_evidence_and_honest_gaps() -> None:
+    levels = {
+        env: next(
+            e
+            for e in evaluate_environment_readiness(env).entries
+            if e.domain is ReadinessDomain.BIGQUERY_ANALYTICAL
+        )
+        for env in EnvironmentName
+    }
+    sandbox = levels[EnvironmentName.GCP_SANDBOX]
+    assert sandbox.evidence_level is EvidenceLevel.VERIFIED
+    assert sandbox.blocking is False
+    assert "#92" in sandbox.evidence
+    assert EvidenceLabel.CLOUD_UNVERIFIED not in sandbox.evidence_labels
+    gaps = " ".join(sandbox.gaps)
+    # Adapter-contract evidence only: the analytical models stay unmeasured.
+    assert "MERGE/partition/" in gaps and "MEASURED" in gaps
+    assert "least-privilege" in gaps
+    assert "enterprise" in gaps
+    assert levels[EnvironmentName.DEV].evidence_level is EvidenceLevel.READY_TO_VALIDATE
+    assert levels[EnvironmentName.QA].evidence_level is EvidenceLevel.READY_TO_VALIDATE
+    assert levels[EnvironmentName.PROD].evidence_level is EvidenceLevel.BLOCKED
+    assert levels[EnvironmentName.LOCAL].evidence_level is EvidenceLevel.CONTRACT_DEFINED
+    prod_action = levels[EnvironmentName.PROD].required_next_action
+    assert "in this environment" not in prod_action
+    assert "Do not run smoke in PROD" in prod_action
+    assert any("MEASURED" in g for g in levels[EnvironmentName.PROD].gaps)
+    assert (
+        evaluate_environment_readiness(EnvironmentName.GCP_SANDBOX).overall_status
+        is EnvironmentOverallStatus.NOT_READY
+    )
+
+
+def test_verified_is_confined_to_sandbox_gcs_and_bigquery() -> None:
     verified = {
         (e.environment, e.domain)
         for e in build_readiness_registry()
         if e.evidence_level is EvidenceLevel.VERIFIED
     }
-    assert verified == {(EnvironmentName.GCP_SANDBOX, ReadinessDomain.GCS_RAW_LANDING)}
+    assert verified == {
+        (EnvironmentName.GCP_SANDBOX, ReadinessDomain.GCS_RAW_LANDING),
+        (EnvironmentName.GCP_SANDBOX, ReadinessDomain.BIGQUERY_ANALYTICAL),
+    }
 
 
 def test_orchestration_runtime_gap_surfaced() -> None:

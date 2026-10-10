@@ -26,7 +26,7 @@ implemented.
 | 01 | Repository foundation | Python packaging, typed interfaces, structured logging, tests, CI, and optional local PostgreSQL tooling |
 | 02 | Configuration framework | Validated YAML, environment substitution, explicit environment selection, and strict sample limits |
 | 03 | Storage contracts | `ObjectStore` and immutable-write semantics; `GCSObjectStore` adapter (#9) with offline fake-client tests; live sandbox smoke passed (#91, `VERIFIED` for GCP_SANDBOX only) |
-| 04 | Warehouse contracts | Parameterized query/PyArrow interface; `DuckDBWarehouse` local queries (#8); `BigQueryWarehouse` offline (#10); `PostgreSQLWarehouse` query (#7; `LOCAL_POSTGRES_VERIFIED` by #90) |
+| 04 | Warehouse contracts | Parameterized query/PyArrow interface; `DuckDBWarehouse` local queries (#8); `BigQueryWarehouse` (#10; live sandbox smoke passed in #92, `VERIFIED` for GCP_SANDBOX only); `PostgreSQLWarehouse` query (#7; `LOCAL_POSTGRES_VERIFIED` by #90) |
 | 05 | Bounded OpenAlex connector | Anonymous manifest discovery and separate caller-owned streaming retrieval |
 | 06 | Works manifest parser | Pure parsing, validated metadata, stable identities, and duplicate/conflict handling |
 | 07 | Development sample selector | Deterministic, metadata-only selection with file-count and byte-size bounds |
@@ -57,7 +57,8 @@ smoke, so `GCS_RAW_LANDING` is `VERIFIED` for GCP_SANDBOX only.
 `BigQueryWarehouse` is implemented behind the existing `Warehouse` contract
 (dry-run + `maximum_bytes_billed`; default tests use an injected fake client —
 no live credentials/network/paid queries). Live dataset validation is
-separately approved and is not part of default CI.
+separately approved and is not part of default CI; #92 recorded a passing live
+sandbox smoke of the adapter contract (models not deployed or measured).
 
 `DuckDBWarehouse` implements local `Warehouse.query` for `:memory:` or an
 explicit DuckDB file path. Construction does not open a connection or create a
@@ -75,12 +76,13 @@ is not the BigQuery analytical engine and does not implement issue #23
 (PostgreSQL/AlloyDB serving). See
 [PostgreSQL Warehouse](docs/architecture/postgres-warehouse.md).
 
-**Still planned:** separately scoped live BigQuery sandbox smoke (#92), HTTP
+**Still planned:** deploying and measuring the Step 15–16 BigQuery models, HTTP
 consumer deployment, Composer provisioning, and Dataform runtime. There is no
 deployed BigQuery dataset/table estate or production pipeline. Steps 15–18
 define BigQuery/Gold/quality/Data Service contracts; runtime adapters are
-offline-tested only, except `GCSObjectStore` (live sandbox smoke, #91) and
-`PostgreSQLWarehouse` (local PostgreSQL, #90). Step 20 adds orchestration
+offline-tested only, except `GCSObjectStore` (live sandbox smoke, #91),
+`BigQueryWarehouse` (live sandbox smoke, #92) and `PostgreSQLWarehouse`
+(local PostgreSQL, #90). Step 20 adds orchestration
 **contracts** only (no scheduler deploy). Step 18 adds no HTTP service and no
 Postgres serving.
 
@@ -101,10 +103,11 @@ gaps remain explicitly documented; this does not mean production-ready.
 LOCAL (evidence only) → GCP_SANDBOX → DEV → QA → PROD
 ```
 
-Today Sandbox/DEV/QA/PROD are all `NOT_READY`. GCS (#9) is `VERIFIED` in
-GCP_SANDBOX only (#91 live smoke; operator-owned project, user ADC),
-`READY_TO_VALIDATE` for DEV/QA, and `BLOCKED` in PROD. BigQuery (#10) is `READY_TO_VALIDATE`
-(implemented + offline tested), **not** `VERIFIED` in a live sandbox.
+Today Sandbox/DEV/QA/PROD are all `NOT_READY`. GCS (#9) and the BigQuery
+adapter (#10) are `VERIFIED` in GCP_SANDBOX only (#91/#92 live smokes;
+operator-owned project, user ADC), `READY_TO_VALIDATE` for DEV/QA, and
+`BLOCKED` in PROD. The BigQuery evidence covers the adapter contract only; the
+Step 15–16 models are not deployed or MEASURED.
 IAM / Composer / HTTP deploy gaps remain. Do not equate YAML presence or
 adapter code with production readiness.
 
@@ -112,8 +115,7 @@ Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
 as the open umbrella for deferred/runtime work and live-validation tracking.
 **#9** (GCS) and **#10** (BigQuery) adapter implementations are complete
-(both closed); GCS live sandbox smoke passed in #91 (sandbox only), and
-BigQuery live sandbox smoke (#92) is separately scoped. **#7** (PostgreSQL)
+(both closed); their live sandbox smokes passed in #91 and #92 (sandbox only). **#7** (PostgreSQL)
 and **#8** (DuckDB) query adapters are implemented; #7 is locally validated
 against PostgreSQL by #90. Neither is cloud or production evidence. Do not
 automatically start #23 or claim production readiness.

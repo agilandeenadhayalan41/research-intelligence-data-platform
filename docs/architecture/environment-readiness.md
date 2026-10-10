@@ -47,7 +47,7 @@ promotion rung and never equals cloud readiness.
 | `CONTRACT_DEFINED` | Specs/SQL/contracts exist; not cloud-proven |
 | `CLOUD_UNVERIFIED` | Cloud path required; no execution evidence |
 | `READY_TO_VALIDATE` | Prerequisites met to begin cloud validation |
-| `VERIFIED` | Actual cloud evidence exists (today: `GCS_RAW_LANDING` in `GCP_SANDBOX` only, #91) |
+| `VERIFIED` | Actual cloud evidence exists (today: `GCS_RAW_LANDING` and `BIGQUERY_ANALYTICAL` in `GCP_SANDBOX` only, #91/#92) |
 | `BLOCKED` / `NOT_IMPLEMENTED` | Missing runtime capability blocks readiness |
 
 Additional labels: `LOCAL_TESTED`, `SEMANTIC_ONLY`, `PLACEHOLDER_CONFIG`,
@@ -64,7 +64,7 @@ Additional labels: `LOCAL_TESTED`, `SEMANTIC_ONLY`, `PLACEHOLDER_CONFIG`,
 |---|---|---|---|---|---|
 | CONFIGURATION | DEMONSTRATED_LOCAL | CONTRACT_DEFINED (yaml shape) | PLACEHOLDER | PLACEHOLDER | BLOCKED / NOT READY |
 | GCS_RAW_LANDING | LocalObjectStore + GCSObjectStore (fake tests); no live bucket | VERIFIED (#91 live smoke; sandbox only) | READY_TO_VALIDATE | READY_TO_VALIDATE | BLOCKED (PROD) |
-| BIGQUERY_ANALYTICAL | CONTRACT + SEMANTIC_ONLY + offline adapter (#10) | READY_TO_VALIDATE (#10 adapter) | READY_TO_VALIDATE | READY_TO_VALIDATE | BLOCKED (PROD) |
+| BIGQUERY_ANALYTICAL | CONTRACT + SEMANTIC_ONLY + offline adapter (#10) | VERIFIED (#92 adapter smoke; sandbox only; models not MEASURED) | READY_TO_VALIDATE | READY_TO_VALIDATE | BLOCKED (PROD) |
 | PUBLICATION_CONCURRENCY | CONTRACT (TEMP_TABLES) | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
 | ORCHESTRATION | CONTRACT_ONLY (Step 20) | CLOUD_UNVERIFIED (no Composer) | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
 | DATA_QUALITY | DEMONSTRATED_LOCAL / SEMANTIC_ONLY | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
@@ -146,10 +146,15 @@ separation, and access logging.
 | DuckDB SEMANTIC_ONLY | local evidence only (not a BigQuery dialect/cost proof) |
 | `BigQueryWarehouse` adapter | implemented (#10) — dry-run + `maximum_bytes_billed`, fake-client tests |
 | Live ADC / real dataset jobs | **not** executed in default CI |
+| Live sandbox smoke (#92) | **passed** in GCP_SANDBOX: dry-run budget rejection, provider-enforced `maximum_bytes_billed`, bounded execute, typed `@parameter` binding, empty/null Arrow results ([details](bigquery-analytical-models.md#recorded-run-92)) |
 
-Sandbox/DEV/QA `BIGQUERY_ANALYTICAL` is `READY_TO_VALIDATE` (adapter ready for
-separately approved sandbox smoke), **not** `VERIFIED`. PROD remains BLOCKED.
-Do not mark any environment READY solely because the adapter exists.
+Therefore `BIGQUERY_ANALYTICAL` is `VERIFIED` for **GCP_SANDBOX only**, for the
+adapter contract, and `READY_TO_VALIDATE` for DEV/QA; PROD remains BLOCKED.
+The evidence used an operator-owned project and user ADC, deployed no tables,
+and does not cover MERGE/partition/cluster behaviour, MEASURED cost/latency,
+job timeout/cancellation under load, an enterprise-managed project, or a
+least-privilege runtime identity. GCP_SANDBOX
+stays `NOT_READY` while other mandatory domains are unverified.
 
 **Do not run paid queries from this readiness step.**
 
@@ -258,7 +263,8 @@ No cloud calls. Results derive from the static readiness registry.
 ## Known gaps (blocking cloud readiness today)
 
 1. GCS beyond the sandbox (#91 verified GCP_SANDBOX only): DEV/QA, enterprise project, least-privilege identity  
-2. BigQuery live sandbox validation (adapter complete in #10; no ADC/dataset VERIFIED evidence)  
+2. BigQuery beyond the adapter smoke (#92 verified GCP_SANDBOX only): deploy/MEASURE
+   models, DEV/QA, enterprise project, least-privilege identity  
 3. No cloud IAM / WIF / secrets wiring  
 4. No Composer/Airflow deployment  
 5. No HTTP Data Service deploy  
