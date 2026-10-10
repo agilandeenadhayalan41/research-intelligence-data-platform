@@ -301,6 +301,16 @@ def _prod_entries() -> tuple[ReadinessEntry, ...]:
             "Explicitly NOT READY",
         ),
         force_blocked_domains=frozenset(MANDATORY_CLOUD_DOMAINS),
+        domain_overrides={
+            ReadinessDomain.GCS_RAW_LANDING: (
+                EvidenceLevel.BLOCKED,
+                "GCSObjectStore adapter implemented (#9); live smoke passed only in "
+                "GCP_SANDBOX (#91); PROD has no access",
+                ("No PROD access", "No DEV/QA live-bucket evidence to promote from"),
+                "Do not run smoke in PROD; verify in DEV and QA first, then promote",
+                (EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.CLOUD_UNVERIFIED),
+            ),
+        },
     )
 
 

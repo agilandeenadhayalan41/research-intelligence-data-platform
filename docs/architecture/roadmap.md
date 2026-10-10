@@ -66,7 +66,7 @@ Explicit remaining gaps (separately scoped; do not start automatically):
 | Gap | Scope | Notes |
 | --- | --- | --- |
 | #9 | GCS ObjectStore runtime | Adapter implemented; live sandbox smoke passed (#91) — `VERIFIED` for GCP_SANDBOX only; DEV/QA/enterprise project not verified |
-| #10 | BigQuery Warehouse adapter | Adapter implemented offline; keep OPEN until review; not VERIFIED live |
+| #10 | BigQuery Warehouse adapter | Adapter implemented offline (closed); not VERIFIED live; live sandbox smoke tracked in #92 |
 | — | Composer/Airflow deployment | Not authorized by Step 20/21 |
 | — | HTTP Data Service deployment | Domain contracts only today |
 | — | Cloud IAM / WIF / secrets | Documented; not provisioned |

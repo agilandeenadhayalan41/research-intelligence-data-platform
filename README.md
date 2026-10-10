@@ -79,8 +79,10 @@ is not the BigQuery analytical engine and does not implement issue #23
 consumer deployment, Composer provisioning, and Dataform runtime. There is no
 deployed BigQuery dataset/table estate or production pipeline. Steps 15–18
 define BigQuery/Gold/quality/Data Service contracts; runtime adapters are
-offline-tested only. Step 20 adds orchestration **contracts** only (no
-scheduler deploy). Step 18 adds no HTTP service and no Postgres serving.
+offline-tested only, except `GCSObjectStore` (live sandbox smoke, #91) and
+`PostgreSQLWarehouse` (local PostgreSQL, #90). Step 20 adds orchestration
+**contracts** only (no scheduler deploy). Step 18 adds no HTTP service and no
+Postgres serving.
 
 ### Roadmap completion status
 
@@ -100,8 +102,8 @@ LOCAL (evidence only) → GCP_SANDBOX → DEV → QA → PROD
 ```
 
 Today Sandbox/DEV/QA/PROD are all `NOT_READY`. GCS (#9) is `VERIFIED` in
-GCP_SANDBOX only (#91 live smoke; operator-owned project, user ADC) and
-`READY_TO_VALIDATE` elsewhere. BigQuery (#10) is `READY_TO_VALIDATE`
+GCP_SANDBOX only (#91 live smoke; operator-owned project, user ADC),
+`READY_TO_VALIDATE` for DEV/QA, and `BLOCKED` in PROD. BigQuery (#10) is `READY_TO_VALIDATE`
 (implemented + offline tested), **not** `VERIFIED` in a live sandbox.
 IAM / Composer / HTTP deploy gaps remain. Do not equate YAML presence or
 adapter code with production readiness.
@@ -110,7 +112,7 @@ Keep
 [issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
 as the open umbrella for deferred/runtime work and live-validation tracking.
 **#9** (GCS) and **#10** (BigQuery) adapter implementations are complete
-and should be closed; GCS live sandbox smoke passed in #91 (sandbox only), and
+(both closed); GCS live sandbox smoke passed in #91 (sandbox only), and
 BigQuery live sandbox smoke (#92) is separately scoped. **#7** (PostgreSQL)
 and **#8** (DuckDB) query adapters are implemented; #7 is locally validated
 against PostgreSQL by #90. Neither is cloud or production evidence. Do not

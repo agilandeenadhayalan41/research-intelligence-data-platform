@@ -213,11 +213,24 @@ def test_gcs_verified_only_in_sandbox_with_evidence_and_honest_gaps() -> None:
     assert levels[EnvironmentName.QA].evidence_level is EvidenceLevel.READY_TO_VALIDATE
     assert levels[EnvironmentName.PROD].evidence_level is EvidenceLevel.BLOCKED
     assert levels[EnvironmentName.LOCAL].evidence_level is EvidenceLevel.DEMONSTRATED_LOCAL
+    # PROD guidance must not ask for a live write smoke in PROD.
+    prod_action = levels[EnvironmentName.PROD].required_next_action
+    assert "in this environment" not in prod_action
+    assert "Do not run smoke in PROD" in prod_action
     # One VERIFIED domain does not make the sandbox READY.
     assert (
         evaluate_environment_readiness(EnvironmentName.GCP_SANDBOX).overall_status
         is EnvironmentOverallStatus.NOT_READY
     )
+
+
+def test_verified_is_confined_to_sandbox_gcs() -> None:
+    verified = {
+        (e.environment, e.domain)
+        for e in build_readiness_registry()
+        if e.evidence_level is EvidenceLevel.VERIFIED
+    }
+    assert verified == {(EnvironmentName.GCP_SANDBOX, ReadinessDomain.GCS_RAW_LANDING)}
 
 
 def test_orchestration_runtime_gap_surfaced() -> None:

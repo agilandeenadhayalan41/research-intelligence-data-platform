@@ -131,9 +131,10 @@ Therefore `GCS_RAW_LANDING` is `VERIFIED` for **GCP_SANDBOX only**, and
 an operator-owned project and user ADC, so it does not cover an
 enterprise-managed project or a least-privilege runtime identity. A VERIFIED
 domain does not make the environment READY: GCP_SANDBOX stays `NOT_READY` while
-other mandatory domains are unverified. Still not validated in any environment:
-retries, concurrent writers, large/resumable uploads, encryption/CMEK,
-retention, environment separation, and access logging.
+other mandatory domains are unverified. Not yet validated against real GCS in
+any environment: retries, concurrent writers (covered locally and with the fake
+client only), large/resumable uploads, encryption/CMEK, retention, environment
+separation, and access logging.
 
 ---
 
