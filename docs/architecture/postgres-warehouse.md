@@ -48,6 +48,12 @@ the connection. Data-changing SQL fails in PostgreSQL instead of being detected
 by a SQL parser. `TimeZone=UTC` applies to `timestamptz` display; `timestamp`
 without time zone is not rewritten.
 
+Automatic server-side preparation is off (`prepare_threshold=None`). psycopg
+would otherwise prepare a query after 5 runs on one connection, and a schema
+change from another connection (`ALTER TABLE`) or caller `DEALLOCATE ALL` /
+`DISCARD ALL` would then make every later run of that query fail on an idle,
+kept session (#99). Each query is planned by the server on every run instead.
+
 Caller SQL is not parsed, so it can still leave a live session unusable:
 `BEGIN` (alone or in a multi-statement string) opens a transaction, an error
 inside it aborts that transaction, and `COPY … TO STDOUT` cannot be read
@@ -170,11 +176,6 @@ concurrent use (the adapter is not thread-safe).
 
 ### Known limitations
 
-- **Auto-prepared statements.** psycopg prepares a query server-side after it
-  runs 5 times on one connection. If the table's shape then changes (for
-  example `ALTER TABLE` from another connection), every later run of that query
-  fails with `QueryExecutionError` until `close()`, because the session stays
-  idle and is kept. Not fixed yet.
 - **Read-only is a session default, not a security boundary.** Caller SQL can
   turn it off (`set_config('default_transaction_read_only', 'off', false)`,
   `BEGIN READ WRITE`). Use a read-only database role for enforcement.

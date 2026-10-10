@@ -272,11 +272,18 @@ def _open_postgres(dsn: str) -> _Connection:
     transactions can span writes. A query adapter must not stay idle in
     transaction after SELECT, and must not commit caller writes. Read-only is
     enforced by the server, not by inspecting SQL text.
+
+    ``prepare_threshold=None`` turns off psycopg's automatic server-side
+    preparation (by default after 5 runs of one query). A prepared plan is
+    invalidated by a schema change from another connection or by caller
+    ``DEALLOCATE ALL`` / ``DISCARD ALL``, and the session stays idle, so every
+    later run of that query would fail until ``close()``.
     """
     psycopg = _import_psycopg()
     return psycopg.connect(  # type: ignore[attr-defined, no-any-return]
         dsn,
         autocommit=True,
+        prepare_threshold=None,
         options="-c default_transaction_read_only=on -c TimeZone=UTC",
     )
 

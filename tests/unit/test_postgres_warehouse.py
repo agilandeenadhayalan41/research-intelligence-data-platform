@@ -820,6 +820,8 @@ def test_real_connect_uses_read_only_autocommit(
     table = warehouse.query("SELECT 1 AS value")
     assert table.column("value")[0].as_py() == 1
     assert calls[0]["autocommit"] is True
+    assert "prepare_threshold" in calls[0]
+    assert calls[0]["prepare_threshold"] is None
     options = str(calls[0]["options"])
     assert "default_transaction_read_only=on" in options
     assert "TimeZone=UTC" in options
