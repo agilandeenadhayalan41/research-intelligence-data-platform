@@ -60,8 +60,9 @@ inside it aborts that transaction, and `COPY … TO STDOUT` cannot be read
 through `query` and leaves a copy in progress. After any query, a connection
 that is not idle outside a transaction is closed (which rolls back any open
 transaction) and the next `query` opens a new session. A reconnect starts a
-fresh server session: only the adapter's `autocommit`, read-only and
-`TimeZone=UTC` options are reapplied, and settings the caller changed with
+fresh server session: only the adapter's `autocommit`, read-only,
+`TimeZone=UTC` and `prepare_threshold=None` settings are reapplied, and
+settings the caller changed with
 `SET` or `set_config` are not kept. Do not rely on session state across
 `query` calls.
 
