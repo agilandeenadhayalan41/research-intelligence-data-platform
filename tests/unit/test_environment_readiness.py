@@ -14,6 +14,7 @@ from research_platform.readiness import (
     MANDATORY_CLOUD_DOMAINS,
     OPTIONAL_DOMAINS,
     SYMBOLIC_CONFIG_VARS,
+    EvidenceLabel,
     EvidenceLevel,
     EnvironmentName,
     EnvironmentOverallStatus,
@@ -128,11 +129,8 @@ def test_sandbox_reports_cloud_gaps() -> None:
     report = readiness_report("GCP_SANDBOX")
     assert report.overall_status is EnvironmentOverallStatus.NOT_READY
     by_domain = {e.domain: e for e in report.entries}
-    # Adapter exists offline; live bucket still unverified — not VERIFIED / not READY env.
+    # #91 live smoke verified GCS in the sandbox only; the environment is still NOT_READY.
     assert by_domain[ReadinessDomain.GCS_RAW_LANDING].evidence_level is (
-        EvidenceLevel.READY_TO_VALIDATE
-    )
-    assert by_domain[ReadinessDomain.GCS_RAW_LANDING].evidence_level is not (
         EvidenceLevel.VERIFIED
     )
     assert by_domain[ReadinessDomain.BIGQUERY_ANALYTICAL].evidence_level is (
@@ -167,14 +165,16 @@ def test_gcs_and_bigquery_runtime_gaps_surfaced() -> None:
     for env in CLOUD_PROMOTION_ORDER:
         report = evaluate_environment_readiness(env)
         by_domain = {e.domain: e for e in report.entries}
-        assert by_domain[ReadinessDomain.GCS_RAW_LANDING].evidence_level in {
-            EvidenceLevel.BLOCKED,
-            EvidenceLevel.CLOUD_UNVERIFIED,
-            EvidenceLevel.READY_TO_VALIDATE,
-        }
-        assert by_domain[ReadinessDomain.GCS_RAW_LANDING].evidence_level is not (
-            EvidenceLevel.VERIFIED
-        )
+        if env is not EnvironmentName.GCP_SANDBOX:
+            # #91 evidence is sandbox-only; it must not leak into later environments.
+            assert by_domain[ReadinessDomain.GCS_RAW_LANDING].evidence_level in {
+                EvidenceLevel.BLOCKED,
+                EvidenceLevel.CLOUD_UNVERIFIED,
+                EvidenceLevel.READY_TO_VALIDATE,
+            }
+            assert by_domain[ReadinessDomain.GCS_RAW_LANDING].evidence_level is not (
+                EvidenceLevel.VERIFIED
+            )
         assert "#9" in by_domain[ReadinessDomain.GCS_RAW_LANDING].evidence or any(
             "#9" in g for g in by_domain[ReadinessDomain.GCS_RAW_LANDING].gaps
         )
@@ -190,6 +190,47 @@ def test_gcs_and_bigquery_runtime_gaps_surfaced() -> None:
         assert "#10" in by_domain[ReadinessDomain.BIGQUERY_ANALYTICAL].evidence or any(
             "#10" in g for g in by_domain[ReadinessDomain.BIGQUERY_ANALYTICAL].gaps
         )
+
+
+def test_gcs_verified_only_in_sandbox_with_evidence_and_honest_gaps() -> None:
+    levels = {
+        env: next(
+            e
+            for e in evaluate_environment_readiness(env).entries
+            if e.domain is ReadinessDomain.GCS_RAW_LANDING
+        )
+        for env in EnvironmentName
+    }
+    sandbox = levels[EnvironmentName.GCP_SANDBOX]
+    assert sandbox.evidence_level is EvidenceLevel.VERIFIED
+    assert sandbox.blocking is False
+    assert "#91" in sandbox.evidence
+    assert EvidenceLabel.CLOUD_UNVERIFIED not in sandbox.evidence_labels
+    gaps = " ".join(sandbox.gaps)
+    assert "least-privilege" in gaps
+    assert "enterprise" in gaps
+    assert levels[EnvironmentName.DEV].evidence_level is EvidenceLevel.READY_TO_VALIDATE
+    assert levels[EnvironmentName.QA].evidence_level is EvidenceLevel.READY_TO_VALIDATE
+    assert levels[EnvironmentName.PROD].evidence_level is EvidenceLevel.BLOCKED
+    assert levels[EnvironmentName.LOCAL].evidence_level is EvidenceLevel.DEMONSTRATED_LOCAL
+    # PROD guidance must not ask for a live write smoke in PROD.
+    prod_action = levels[EnvironmentName.PROD].required_next_action
+    assert "in this environment" not in prod_action
+    assert "Do not run smoke in PROD" in prod_action
+    # One VERIFIED domain does not make the sandbox READY.
+    assert (
+        evaluate_environment_readiness(EnvironmentName.GCP_SANDBOX).overall_status
+        is EnvironmentOverallStatus.NOT_READY
+    )
+
+
+def test_verified_is_confined_to_sandbox_gcs() -> None:
+    verified = {
+        (e.environment, e.domain)
+        for e in build_readiness_registry()
+        if e.evidence_level is EvidenceLevel.VERIFIED
+    }
+    assert verified == {(EnvironmentName.GCP_SANDBOX, ReadinessDomain.GCS_RAW_LANDING)}
 
 
 def test_orchestration_runtime_gap_surfaced() -> None:

@@ -168,5 +168,24 @@ Suggested manual checks (operator-owned):
 4. Conflicting bytes/provenance → `ObjectConflictError`.
 5. `open` returns original bytes; caller closes the stream.
 
-Until that evidence exists, readiness remains `READY_TO_VALIDATE`, not
-`VERIFIED`.
+#### Recorded run (#91)
+
+On 2026-10-10 (`main` @ `b6da206`, unmodified `GCSObjectStore`, no injected
+client) all five checks passed against real GCS, plus extras: a checksum
+mismatch raised `ChecksumMismatchError` and created nothing, a missing key
+raised `ObjectNotFoundError`, and a `gs://` key raised `InvalidObjectKeyError`.
+The object generation stayed unchanged across replay and both conflicts. One
+41-byte synthetic object was written; its provenance is the object's
+`rp_provenance` metadata. Evidence:
+[#91](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/91#issuecomment-6102155343)
+(identifiers redacted).
+
+Environment: an operator-owned sandbox project and bucket, created for the run
+with operator approval (the original sandbox project's billing was closed);
+uniform bucket-level access and public access prevention enforced; user ADC;
+CPython 3.14.4 and `google-cloud-storage` 3.16.0.
+
+`GCS_RAW_LANDING` is therefore `VERIFIED` for **GCP_SANDBOX only**. It is not
+evidence for an enterprise-managed project, a least-privilege runtime identity,
+concurrent writers, retries, large/resumable uploads, CMEK, retention, access
+logging, or DEV/QA/PROD, which stay `READY_TO_VALIDATE` / `BLOCKED`.

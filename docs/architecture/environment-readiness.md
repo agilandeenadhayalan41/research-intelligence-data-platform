@@ -47,7 +47,7 @@ promotion rung and never equals cloud readiness.
 | `CONTRACT_DEFINED` | Specs/SQL/contracts exist; not cloud-proven |
 | `CLOUD_UNVERIFIED` | Cloud path required; no execution evidence |
 | `READY_TO_VALIDATE` | Prerequisites met to begin cloud validation |
-| `VERIFIED` | Actual cloud evidence exists (**unused today**) |
+| `VERIFIED` | Actual cloud evidence exists (today: `GCS_RAW_LANDING` in `GCP_SANDBOX` only, #91) |
 | `BLOCKED` / `NOT_IMPLEMENTED` | Missing runtime capability blocks readiness |
 
 Additional labels: `LOCAL_TESTED`, `SEMANTIC_ONLY`, `PLACEHOLDER_CONFIG`,
@@ -63,7 +63,7 @@ Additional labels: `LOCAL_TESTED`, `SEMANTIC_ONLY`, `PLACEHOLDER_CONFIG`,
 | Domain | LOCAL | GCP_SANDBOX | DEV | QA | PROD |
 |---|---|---|---|---|---|
 | CONFIGURATION | DEMONSTRATED_LOCAL | CONTRACT_DEFINED (yaml shape) | PLACEHOLDER | PLACEHOLDER | BLOCKED / NOT READY |
-| GCS_RAW_LANDING | LocalObjectStore + GCSObjectStore (fake tests); no live bucket | READY_TO_VALIDATE (#9 adapter) | READY_TO_VALIDATE | READY_TO_VALIDATE | BLOCKED (PROD) |
+| GCS_RAW_LANDING | LocalObjectStore + GCSObjectStore (fake tests); no live bucket | VERIFIED (#91 live smoke; sandbox only) | READY_TO_VALIDATE | READY_TO_VALIDATE | BLOCKED (PROD) |
 | BIGQUERY_ANALYTICAL | CONTRACT + SEMANTIC_ONLY + offline adapter (#10) | READY_TO_VALIDATE (#10 adapter) | READY_TO_VALIDATE | READY_TO_VALIDATE | BLOCKED (PROD) |
 | PUBLICATION_CONCURRENCY | CONTRACT (TEMP_TABLES) | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
 | ORCHESTRATION | CONTRACT_ONLY (Step 20) | CLOUD_UNVERIFIED (no Composer) | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
@@ -124,13 +124,17 @@ No IAM bindings, WIF pools, or Secret Manager resources are created here.
 | `LocalObjectStore` | demonstrated |
 | `GCSObjectStore` adapter | implemented (#9) — create-only `if_generation_match=0`, fake-client contract tests |
 | Live ADC / real bucket | **not** executed in default CI |
+| Live sandbox smoke (#91) | **passed** in GCP_SANDBOX: create-only precondition create, identical replay no-op, bytes/provenance conflict → `ObjectConflictError` with generation unchanged, checksum/provenance, caller-owned reads ([details](immutable-local-landing.md#recorded-run-91)) |
 
-Therefore `GCS_RAW_LANDING` is `READY_TO_VALIDATE` for Sandbox/DEV/QA (adapter
-ready for separately approved sandbox smoke), **not** `VERIFIED`, and PROD
-remains BLOCKED. Do not mark any environment READY solely because the adapter
-exists. Future live validation must cover immutable writes, checksum/provenance,
-preconditions, retries, encryption, retention, environment separation, and
-access logging — under a separately approved sandbox issue.
+Therefore `GCS_RAW_LANDING` is `VERIFIED` for **GCP_SANDBOX only**, and
+`READY_TO_VALIDATE` for DEV/QA; PROD remains BLOCKED. The sandbox evidence used
+an operator-owned project and user ADC, so it does not cover an
+enterprise-managed project or a least-privilege runtime identity. A VERIFIED
+domain does not make the environment READY: GCP_SANDBOX stays `NOT_READY` while
+other mandatory domains are unverified. Not yet validated against real GCS in
+any environment: retries, concurrent writers (covered locally and with the fake
+client only), large/resumable uploads, encryption/CMEK, retention, environment
+separation, and access logging.
 
 ---
 
@@ -253,7 +257,7 @@ No cloud calls. Results derive from the static readiness registry.
 
 ## Known gaps (blocking cloud readiness today)
 
-1. GCS live sandbox validation (adapter complete in #9; no ADC/bucket VERIFIED evidence)  
+1. GCS beyond the sandbox (#91 verified GCP_SANDBOX only): DEV/QA, enterprise project, least-privilege identity  
 2. BigQuery live sandbox validation (adapter complete in #10; no ADC/dataset VERIFIED evidence)  
 3. No cloud IAM / WIF / secrets wiring  
 4. No Composer/Airflow deployment  
