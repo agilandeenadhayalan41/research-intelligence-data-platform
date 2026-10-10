@@ -77,9 +77,9 @@ def _local_entries() -> tuple[ReadinessEntry, ...]:
             env,
             EvidenceLevel.DEMONSTRATED_LOCAL,
             "LocalObjectStore + GCSObjectStore (fake-client contract tests) demonstrated; "
-            "no live GCS bucket evidence (#9)",
-            gaps=("No ADC/live-bucket sandbox execution evidence",),
-            next_action="Run separately approved sandbox smoke against a real bucket before VERIFIED",
+            "no live GCS bucket in LOCAL (#9); live sandbox evidence is GCP_SANDBOX (#91)",
+            gaps=("LOCAL never uses a live bucket; cloud evidence lives in GCP_SANDBOX",),
+            next_action="Keep LOCAL offline; see GCP_SANDBOX for live-bucket evidence (#91)",
             labels=(EvidenceLabel.LOCAL_TESTED, EvidenceLabel.CONTRACT_DEFINED),
             blocking=False,
         ),
@@ -230,8 +230,26 @@ def _sandbox_entries() -> tuple[ReadinessEntry, ...]:
         ),
         configuration_gaps=(
             "No actual GCP project/bucket/dataset provisioned by this repository",
-            "GCS and BigQuery adapters not implemented",
+            "No enterprise-managed sandbox project; #91 used an operator-owned project",
         ),
+        domain_overrides={
+            ReadinessDomain.GCS_RAW_LANDING: (
+                EvidenceLevel.VERIFIED,
+                "GCSObjectStore (#9) live sandbox smoke passed (#91): create via "
+                "if_generation_match=0, identical replay no-op, bytes/provenance conflict "
+                "raises ObjectConflictError with generation unchanged, open returns original "
+                "bytes; operator-owned sandbox project and bucket (identifiers redacted)",
+                (
+                    "Operator-owned project and user ADC, not an enterprise project or "
+                    "least-privilege runtime identity",
+                    "Concurrent writers, retries, large/resumable uploads unverified",
+                    "Encryption/CMEK, retention, access logging, environment separation unverified",
+                ),
+                "Repeat the #91 smoke in an enterprise-managed project with a "
+                "least-privilege runtime identity before DEV promotion",
+                (EvidenceLabel.CONTRACT_DEFINED,),
+            ),
+        },
     )
 
 
@@ -293,6 +311,11 @@ def _cloud_placeholder_matrix(
     configuration_labels: tuple[EvidenceLabel, ...],
     configuration_gaps: tuple[str, ...],
     force_blocked_domains: frozenset[ReadinessDomain] | None = None,
+    domain_overrides: dict[
+        ReadinessDomain,
+        tuple[EvidenceLevel, str, tuple[str, ...], str, tuple[EvidenceLabel, ...]],
+    ]
+    | None = None,
 ) -> tuple[ReadinessEntry, ...]:
     force_blocked = force_blocked_domains or frozenset()
     rows: list[ReadinessEntry] = []
@@ -337,12 +360,12 @@ def _cloud_placeholder_matrix(
         ReadinessDomain.GCS_RAW_LANDING: (
             EvidenceLevel.READY_TO_VALIDATE,
             "GCSObjectStore adapter implemented (#9) with create-only if_generation_match=0; "
-            "offline fake-client contract tests only — not live-bucket VERIFIED",
+            "live smoke passed only in GCP_SANDBOX (#91) — not live-bucket VERIFIED here",
             (
-                "No approved sandbox ADC/bucket execution evidence",
-                "Immutable GCS write/precondition behavior unverified in cloud",
+                "No approved ADC/bucket execution evidence in this environment",
+                "Immutable GCS write/precondition behavior unverified in this environment",
             ),
-            "Run separately approved sandbox smoke (ADC + real bucket) before any VERIFIED claim",
+            "Run the approved #91-style smoke in this environment before any VERIFIED claim",
             (EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.CLOUD_UNVERIFIED),
         ),
         ReadinessDomain.BIGQUERY_ANALYTICAL: (
@@ -463,6 +486,8 @@ def _cloud_placeholder_matrix(
             (EvidenceLabel.OPTIONAL, EvidenceLabel.OPTIONAL_NOT_REQUIRED),
         ),
     }
+    if domain_overrides:
+        specs.update(domain_overrides)
 
     for domain in DOMAIN_INVENTORY:
         level, evidence, gaps, action, labels = specs[domain]

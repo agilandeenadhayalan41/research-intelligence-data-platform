@@ -15,8 +15,10 @@ Step 20 / #25 orchestration contracts are complete (logical DAG + physical
 ExecutionUnits; no Airflow/Composer/Dataform/GCP deploy). Step 21 / #28
 environment readiness assessment/contracts are complete (no cloud provisioning).
 
-GCS (#9 / PR #84) and BigQuery (#10 / PR #85) **adapters** are complete offline
-(`READY_TO_VALIDATE`). Live cloud validation is **not yet done**.
+GCS (#9 / PR #84) and BigQuery (#10 / PR #85) **adapters** are complete offline.
+GCS passed a live sandbox smoke (#91): `VERIFIED` for GCP_SANDBOX only
+(operator-owned project, user ADC; DEV/QA stay `READY_TO_VALIDATE`). BigQuery
+stays `READY_TO_VALIDATE`; its live sandbox smoke (#92) is **not yet done**.
 DuckDBWarehouse (#8) implements local query execution only. That local adapter
 is not BigQuery dialect, cost, cloud, or production evidence.
 PostgreSQLWarehouse (#7) implements read `Warehouse.query` and is
@@ -25,8 +27,9 @@ only, not cloud/AlloyDB; see [details](postgres-warehouse.md#local-validation-ev
 
 Explicit remaining gaps (separately scoped; do not start automatically):
 
-- Live GCS sandbox smoke (ADC + approved bucket) — does not reopen #9
-- Live BigQuery sandbox smoke (ADC + approved dataset) — does not reopen #10
+- GCS beyond the sandbox (#91 covered GCP_SANDBOX only): enterprise project,
+  least-privilege runtime identity, DEV/QA
+- Live BigQuery sandbox smoke (#92: ADC + approved dataset) — does not reopen #10
 - Composer/Airflow deployment
 - HTTP Data Service deployment
 - cloud IAM/WIF/secrets
@@ -38,13 +41,13 @@ Explicit remaining gaps (separately scoped; do not start automatically):
 | --- | --- | --- |
 | 01 | Repository foundation | Complete |
 | 02 | Configuration framework | Complete |
-| 03 | Storage abstraction/contracts | Complete contract; GCSObjectStore adapter in #9 (live sandbox validation separate) |
+| 03 | Storage abstraction/contracts | Complete contract; GCSObjectStore adapter in #9; live sandbox smoke passed in #91 (`VERIFIED`, GCP_SANDBOX only) |
 | 04 | Warehouse abstraction/contracts | Complete contract; BigQueryWarehouse via #10 (offline); DuckDBWarehouse via #8 (local query only; not BigQuery/production evidence); PostgreSQLWarehouse query via #7 (`LOCAL_POSTGRES_VERIFIED` by #90; not cloud evidence) |
 | 05 | Bounded public OpenAlex connector | Complete |
 | 06 | OpenAlex Works manifest parser | Complete |
 | 07 | Bounded deterministic development sample selector | Complete |
 | 08 | Bounded OpenAlex source profiling ([details](openalex-source-profiling.md)) | Implemented; real payload profile pending public network access |
-| 09 | Immutable local raw landing ([details](immutable-local-landing.md)) | `LocalObjectStore` delivered; `GCSObjectStore` via #9 (offline tests; live bucket separate) |
+| 09 | Immutable local raw landing ([details](immutable-local-landing.md)) | `LocalObjectStore` delivered; `GCSObjectStore` via #9 (offline tests; live sandbox bucket verified in #91) |
 | 10 | Pipeline control and provenance contracts ([details](pipeline-control.md)) | Models, lifecycle, `ControlStore` protocol, DDL specs; local Postgres adapter in Step 12 |
 | 11 | Canonical OpenAlex logical model ([details](openalex-canonical-model.md)) | Normalized entities/relationships, PyArrow schemas, mapping |
 | 12 | One-file local Works ingestion ([details](local-works-ingestion.md)) | Claim → land → stream decode/map/upsert/provenance in one txn → SUCCESS; memory + Postgres backends |
@@ -62,7 +65,7 @@ Explicit remaining gaps (separately scoped; do not start automatically):
 
 | Gap | Scope | Notes |
 | --- | --- | --- |
-| #9 | GCS ObjectStore runtime | Adapter implemented; keep OPEN until review/live-validation policy; not VERIFIED |
+| #9 | GCS ObjectStore runtime | Adapter implemented; live sandbox smoke passed (#91) — `VERIFIED` for GCP_SANDBOX only; DEV/QA/enterprise project not verified |
 | #10 | BigQuery Warehouse adapter | Adapter implemented offline; keep OPEN until review; not VERIFIED live |
 | — | Composer/Airflow deployment | Not authorized by Step 20/21 |
 | — | HTTP Data Service deployment | Domain contracts only today |
