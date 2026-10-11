@@ -160,7 +160,7 @@ def test_scale_rejects_mixes_that_do_not_fit(overrides: dict[str, object]) -> No
 
 
 def test_large_scale_is_ten_times_the_default_and_plans_consistently() -> None:
-    """Validators and planned counts only: generating the large cycle takes hours."""
+    """Validators and planned counts only: generating the large cycle takes minutes and ~5.5 GiB."""
     scale = LARGE_SCALE
     assert SYNTHETIC_SCALES["large"] is scale and resolve_scale("large") is scale
     assert SyntheticScale.model_validate(scale.model_dump()) == scale

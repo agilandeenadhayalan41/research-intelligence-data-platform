@@ -90,7 +90,7 @@ def publish_claimed_deletions_memory(
     except Exception:
         canonical._works = works_before  # noqa: SLF001
         canonical._deletion_barriers = barriers_before  # noqa: SLF001
-        control._provenance = provenance_before  # noqa: SLF001
+        control._restore_provenance(provenance_before)  # noqa: SLF001
         control._deletion_events = events_before  # noqa: SLF001
         raise
 

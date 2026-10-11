@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Any
 from uuid import UUID
 
 from research_platform.canonical.openalex.deletions import (
@@ -83,16 +85,21 @@ class InMemoryCanonicalStore(CanonicalStore):
         self._publishers: dict[str, Publisher] = {}
         self._topics: dict[str, Topic] = {}
         self._funders: dict[str, Funder] = {}
-        self._work_authors: dict[tuple[str, int], WorkAuthor] = {}
+        # Relationship rows nest by the grain key's work_id (key[0]):
+        # work_id -> {grain key -> row}, so clearing a work is one pop per map.
+        # Inner dicts are copy-on-write values, never mutated in place, so a
+        # shallow copy of an outer map is a consistent rollback snapshot
+        # (persistence/memory_unit_of_work.py).
+        self._work_authors: dict[str, dict[tuple[str, int], WorkAuthor]] = {}
         self._work_author_institutions: dict[
-            tuple[str, int, int], WorkAuthorInstitution
+            str, dict[tuple[str, int, int], WorkAuthorInstitution]
         ] = {}
-        self._work_topics: dict[tuple[str, str], WorkTopic] = {}
-        self._work_keywords: dict[tuple[str, str], WorkKeyword] = {}
-        self._work_references: dict[tuple[str, int], WorkReference] = {}
-        self._work_mesh: dict[tuple[str, int], WorkMesh] = {}
-        self._work_locations: dict[tuple[str, int], WorkLocation] = {}
-        self._work_grants: dict[tuple[str, int], WorkGrant] = {}
+        self._work_topics: dict[str, dict[tuple[str, str], WorkTopic]] = {}
+        self._work_keywords: dict[str, dict[tuple[str, str], WorkKeyword]] = {}
+        self._work_references: dict[str, dict[tuple[str, int], WorkReference]] = {}
+        self._work_mesh: dict[str, dict[tuple[str, int], WorkMesh]] = {}
+        self._work_locations: dict[str, dict[tuple[str, int], WorkLocation]] = {}
+        self._work_grants: dict[str, dict[tuple[str, int], WorkGrant]] = {}
         # Unknown-work deletion ledger: work_id -> authoritative deleted_date.
         # Not a fabricated bibliographic Work row; blocks stale ACTIVE resurrection.
         self._deletion_barriers: dict[str, date] = {}
@@ -114,14 +121,14 @@ class InMemoryCanonicalStore(CanonicalStore):
                 "publishers": len(self._publishers),
                 "topics": len(self._topics),
                 "funders": len(self._funders),
-                "work_authors": len(self._work_authors),
-                "work_author_institutions": len(self._work_author_institutions),
-                "work_topics": len(self._work_topics),
-                "work_keywords": len(self._work_keywords),
-                "work_references": len(self._work_references),
-                "work_mesh": len(self._work_mesh),
-                "work_locations": len(self._work_locations),
-                "work_grants": len(self._work_grants),
+                "work_authors": _row_count(self._work_authors),
+                "work_author_institutions": _row_count(self._work_author_institutions),
+                "work_topics": _row_count(self._work_topics),
+                "work_keywords": _row_count(self._work_keywords),
+                "work_references": _row_count(self._work_references),
+                "work_mesh": _row_count(self._work_mesh),
+                "work_locations": _row_count(self._work_locations),
+                "work_grants": _row_count(self._work_grants),
             }
 
     def snapshot(self) -> CanonicalSnapshot:
@@ -141,13 +148,13 @@ class InMemoryCanonicalStore(CanonicalStore):
                 funders=tuple(sorted(self._funders.values(), key=lambda f: f.funder_id)),
                 work_authors=tuple(
                     sorted(
-                        self._work_authors.values(),
+                        _rows(self._work_authors),
                         key=lambda r: (r.work_id, r.authorship_index),
                     )
                 ),
                 work_author_institutions=tuple(
                     sorted(
-                        self._work_author_institutions.values(),
+                        _rows(self._work_author_institutions),
                         key=lambda r: (
                             r.work_id,
                             r.authorship_index,
@@ -157,37 +164,37 @@ class InMemoryCanonicalStore(CanonicalStore):
                 ),
                 work_topics=tuple(
                     sorted(
-                        self._work_topics.values(),
+                        _rows(self._work_topics),
                         key=lambda r: (r.work_id, r.topic_id),
                     )
                 ),
                 work_keywords=tuple(
                     sorted(
-                        self._work_keywords.values(),
+                        _rows(self._work_keywords),
                         key=lambda r: (r.work_id, r.keyword_id),
                     )
                 ),
                 work_references=tuple(
                     sorted(
-                        self._work_references.values(),
+                        _rows(self._work_references),
                         key=lambda r: (r.work_id, r.reference_index),
                     )
                 ),
                 work_mesh=tuple(
                     sorted(
-                        self._work_mesh.values(),
+                        _rows(self._work_mesh),
                         key=lambda r: (r.work_id, r.mesh_index),
                     )
                 ),
                 work_locations=tuple(
                     sorted(
-                        self._work_locations.values(),
+                        _rows(self._work_locations),
                         key=lambda r: (r.work_id, r.location_index),
                     )
                 ),
                 work_grants=tuple(
                     sorted(
-                        self._work_grants.values(),
+                        _rows(self._work_grants),
                         key=lambda r: (r.work_id, r.grant_index),
                     )
                 ),
@@ -275,56 +282,52 @@ class InMemoryCanonicalStore(CanonicalStore):
         self._works[work_id] = bundle.work
         if replace_relationships:
             self._clear_work_relationships(work_id)
-        for row in bundle.work_authors:
-            self._work_authors[(row.work_id, row.authorship_index)] = row
-        for row in bundle.work_author_institutions:
-            self._work_author_institutions[
-                (row.work_id, row.authorship_index, row.institution_index)
-            ] = row
-        for row in bundle.work_topics:
-            self._work_topics[(row.work_id, row.topic_id)] = row
-        for row in bundle.work_keywords:
-            self._work_keywords[(row.work_id, row.keyword_id)] = row
-        for row in bundle.work_references:
-            self._work_references[(row.work_id, row.reference_index)] = row
-        for row in bundle.work_mesh:
-            self._work_mesh[(row.work_id, row.mesh_index)] = row
-        for row in bundle.work_locations:
-            self._work_locations[(row.work_id, row.location_index)] = row
-        for row in bundle.work_grants:
-            self._work_grants[(row.work_id, row.grant_index)] = row
+        _merge_rows(
+            self._work_authors,
+            bundle.work_authors,
+            lambda r: (r.work_id, r.authorship_index),
+        )
+        _merge_rows(
+            self._work_author_institutions,
+            bundle.work_author_institutions,
+            lambda r: (r.work_id, r.authorship_index, r.institution_index),
+        )
+        _merge_rows(
+            self._work_topics, bundle.work_topics, lambda r: (r.work_id, r.topic_id)
+        )
+        _merge_rows(
+            self._work_keywords,
+            bundle.work_keywords,
+            lambda r: (r.work_id, r.keyword_id),
+        )
+        _merge_rows(
+            self._work_references,
+            bundle.work_references,
+            lambda r: (r.work_id, r.reference_index),
+        )
+        _merge_rows(
+            self._work_mesh, bundle.work_mesh, lambda r: (r.work_id, r.mesh_index)
+        )
+        _merge_rows(
+            self._work_locations,
+            bundle.work_locations,
+            lambda r: (r.work_id, r.location_index),
+        )
+        _merge_rows(
+            self._work_grants, bundle.work_grants, lambda r: (r.work_id, r.grant_index)
+        )
 
     def _clear_work_relationships(self, work_id: str) -> None:
-        self._work_authors = {
-            key: value for key, value in self._work_authors.items() if key[0] != work_id
-        }
-        self._work_author_institutions = {
-            key: value
-            for key, value in self._work_author_institutions.items()
-            if key[0] != work_id
-        }
-        self._work_topics = {
-            key: value for key, value in self._work_topics.items() if key[0] != work_id
-        }
-        self._work_keywords = {
-            key: value for key, value in self._work_keywords.items() if key[0] != work_id
-        }
-        self._work_references = {
-            key: value
-            for key, value in self._work_references.items()
-            if key[0] != work_id
-        }
-        self._work_mesh = {
-            key: value for key, value in self._work_mesh.items() if key[0] != work_id
-        }
-        self._work_locations = {
-            key: value
-            for key, value in self._work_locations.items()
-            if key[0] != work_id
-        }
-        self._work_grants = {
-            key: value for key, value in self._work_grants.items() if key[0] != work_id
-        }
+        # Drops every row whose key[0] is work_id, as the flat-map filter did,
+        # without scanning other works or mutating a shared inner dict.
+        self._work_authors.pop(work_id, None)
+        self._work_author_institutions.pop(work_id, None)
+        self._work_topics.pop(work_id, None)
+        self._work_keywords.pop(work_id, None)
+        self._work_references.pop(work_id, None)
+        self._work_mesh.pop(work_id, None)
+        self._work_locations.pop(work_id, None)
+        self._work_grants.pop(work_id, None)
 
     def _upsert_shared_entities(self, bundle: CanonicalWorkBundle) -> None:
         for author in bundle.authors:
@@ -365,6 +368,40 @@ class InMemoryCanonicalStore(CanonicalStore):
         raise CanonicalConflictError(
             f"conflicting shared entity values for {type(incoming).__name__} {entity_id}"
         )
+
+
+def _row_count(table: Mapping[str, Mapping[Any, Any]]) -> int:
+    return sum(len(rows) for rows in table.values())
+
+
+def _rows[R](table: Mapping[str, Mapping[Any, R]]) -> Iterator[R]:
+    """Every row of a nested relationship map; callers sort by the grain key."""
+    for rows in table.values():
+        yield from rows.values()
+
+
+def _merge_rows[K: tuple[Any, ...], R](
+    table: dict[str, dict[K, R]],
+    rows: Iterable[R],
+    key: Callable[[R], K],
+) -> None:
+    """Upsert ``rows`` by grain key (last write wins), copy-on-write per work.
+
+    Rows group by their own ``key[0]`` (``row.work_id``), which may differ
+    from the bundle's Work, exactly as the flat map keyed them. Each touched
+    work gets a new inner dict holding its current rows plus these; the
+    current inner dict is never mutated, because a rollback snapshot may
+    share it.
+    """
+    updated: dict[str, dict[K, R]] = {}
+    for row in rows:
+        row_key = key(row)
+        work_id = row_key[0]
+        work_rows = updated.get(work_id)
+        if work_rows is None:
+            work_rows = updated[work_id] = dict(table.get(work_id, {}))
+        work_rows[row_key] = row
+    table.update(updated)
 
 
 def _deletion_blocks_active_upsert(

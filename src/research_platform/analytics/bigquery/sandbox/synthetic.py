@@ -330,11 +330,11 @@ TINY_SCALE: Final = SyntheticScale(
     restore_required=3,
 )
 # Ten times the default corpus (8 x 12,500 dated works) and delta mix. Each
-# dated asset is ~5x a default one, well inside the decode limits. Generation is
-# slow: InMemoryCanonicalStore rebuilds its relationship maps on every work
-# upsert, so batch-1 ingest grows with the square of the corpus (~13 min at
-# default scale, so roughly a day here). The cycle is still synthetic, not a
-# representative slice.
+# dated asset is ~5x a default one, well inside the decode limits. Generation
+# grows linearly with the corpus: 288-379 s here on 2026-10-11 (WSL, 4 cores,
+# 7.7 GiB RAM; 21-30 s at default scale), with a peak RSS of 5.3-5.4 GiB while
+# export_snapshot_to_parquet holds every built table. The cycle is still
+# synthetic, not a representative slice.
 LARGE_SCALE: Final = SyntheticScale(
     name="large",
     batch1_assets=8,

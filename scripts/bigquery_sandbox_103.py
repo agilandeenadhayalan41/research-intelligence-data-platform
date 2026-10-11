@@ -12,9 +12,9 @@ Then (WSL, user ADC)::
         --confirm-project <project> --out /tmp/i103 [--scale tiny|default|large]
 
 ``--scale`` takes a ``SYNTHETIC_SCALES`` preset. ``large`` (8 x 12,500 dated
-works, ten times the default delta mix) is slow to generate locally: the
-in-memory canonical store makes batch-1 ingest grow with the square of the
-corpus (~13 min at default scale, roughly a day at ``large``). It is still
+works, ten times the default delta mix) took 288-379 s to generate locally on
+2026-10-11 (WSL, 4 cores, 7.7 GiB RAM; ``default`` took 21-30 s) with a peak
+RSS of 5.3-5.4 GiB, so it needs at least 6 GB of free memory. It is still
 labelled synthetic and does not stand in for a representative slice. The
 cycle is generated before anything is deployed.
 
@@ -369,7 +369,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--confirm-project", required=True)
     parser.add_argument("--out", required=True, type=Path)
-    parser.add_argument("--scale", default="default", choices=sorted(SYNTHETIC_SCALES), help="synthetic preset ('large' takes roughly a day to generate)")
+    parser.add_argument("--scale", default="default", choices=sorted(SYNTHETIC_SCALES), help="synthetic preset ('large' takes ~5-6 min and at least 6 GB of free memory to generate)")
     parser.add_argument("--budget-gib", type=float, default=20.0)
     parser.add_argument("--max-job-mib", type=int, default=512, help="ceiling on any one job's maximum_bytes_billed")
     parser.add_argument("--job-timeout-s", type=float, default=600.0, help="base result timeout per query, adapter and load job")
@@ -412,7 +412,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"run {run.run_id}: location {dataset.location}, table expiration ms {dataset.default_table_expiration_ms}, ADC {principal['type']}")
 
     # Generate the synthetic cycle offline before deploying, so a slow or failed
-    # generation (hours at 'large') leaves the dataset empty.
+    # generation (minutes and ~5.4 GiB peak RSS at 'large') leaves the dataset empty.
     print(f"generating the {args.scale} synthetic cycle", flush=True)
     cycle = out / "cycle"
     write_synthetic_cycle(cycle, scale=args.scale)
