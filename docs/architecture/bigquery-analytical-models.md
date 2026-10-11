@@ -384,3 +384,13 @@ latency. Two parts remain open: item 2, a representative slice rather than
 synthetic data, and the cost part of item 3 (billed bytes were floor
 artifacts). Repeat the run at representative scale in an enterprise-managed
 project with a least-privilege identity before item 7.
+
+Operator decision for #108 (2026-10-11): Stage 2 uses the synthetic `large`
+preset (`scripts/bigquery_sandbox_103.py --scale large`, 100,100 batch-1 works).
+Its results will be labelled MEASURED (synthetic-<N>), and item 2 (a
+representative slice) stays open. No public-slice path is built.
+
+Generating the `large` cycle locally currently takes an estimated 20 hours,
+extrapolated from 746 s for `default`. The cause is in `InMemoryCanonicalStore`:
+it rebuilds every relationship map on each work upsert, so ingestion time grows
+with the square of the corpus.

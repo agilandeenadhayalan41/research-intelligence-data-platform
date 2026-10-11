@@ -107,6 +107,7 @@ __all__ = [
     "DeltaStaging",
     "EXPECTED_DECISIONS_FILE_NAME",
     "EXPECTED_DECISIONS_SCHEMA",
+    "LARGE_SCALE",
     "MANIFEST_FILE_NAME",
     "MAX_RAW_ASSET_BYTES",
     "NullTopicInjection",
@@ -328,9 +329,32 @@ TINY_SCALE: Final = SyntheticScale(
     conflict_null_dates=2,
     restore_required=3,
 )
+# Ten times the default corpus (8 x 12,500 dated works) and delta mix. Each
+# dated asset is ~5x a default one, well inside the decode limits. Generation is
+# slow: InMemoryCanonicalStore rebuilds its relationship maps on every work
+# upsert, so batch-1 ingest grows with the square of the corpus (~13 min at
+# default scale, so roughly a day here). The cycle is still synthetic, not a
+# representative slice.
+LARGE_SCALE: Final = SyntheticScale(
+    name="large",
+    batch1_assets=8,
+    works_per_asset=12_500,
+    undated_works=100,
+    batch1_deletions=2_500,
+    insert_new=2_000,
+    identical_replay=2_000,
+    apply_update_newer=2_000,
+    apply_update_tombstone=1_000,
+    stale_older=1_000,
+    stale_null_source_date=100,
+    conflict_equal_date=1_000,
+    conflict_null_dates=100,
+    restore_required=1_000,
+)
 SYNTHETIC_SCALES: Final[Mapping[str, SyntheticScale]] = {
     DEFAULT_SCALE.name: DEFAULT_SCALE,
     TINY_SCALE.name: TINY_SCALE,
+    LARGE_SCALE.name: LARGE_SCALE,
 }
 
 

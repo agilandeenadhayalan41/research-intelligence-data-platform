@@ -31,9 +31,11 @@ from research_platform.analytics.bigquery.sandbox.synthetic import (
     DEFAULT_SEED,
     DELTA_CASE_DECISIONS,
     EXPECTED_DECISIONS_FILE_NAME,
+    LARGE_SCALE,
     MANIFEST_FILE_NAME,
     MAX_RAW_ASSET_BYTES,
     SYNTHETIC_ID_BASE,
+    SYNTHETIC_SCALES,
     TINY_SCALE,
     WORK_TOPICS_STAGING_INJECTION_SCHEMA,
     DeltaCase,
@@ -155,6 +157,42 @@ def test_default_scale_matches_the_plan_delta_composition() -> None:
 def test_scale_rejects_mixes_that_do_not_fit(overrides: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         SyntheticScale.model_validate({**DEFAULT_SCALE.model_dump(), **overrides})
+
+
+def test_large_scale_is_ten_times_the_default_and_plans_consistently() -> None:
+    """Validators and planned counts only: generating the large cycle takes hours."""
+    scale = LARGE_SCALE
+    assert SYNTHETIC_SCALES["large"] is scale and resolve_scale("large") is scale
+    assert SyntheticScale.model_validate(scale.model_dump()) == scale
+    assert (scale.batch1_assets, scale.works_per_asset) == (8, 12_500)
+    assert scale.case_counts() == {
+        case: 10 * count for case, count in DEFAULT_SCALE.case_counts().items()
+    }
+    assert (scale.undated_works, scale.batch1_deletions) == (100, 2_500)
+    assert scale.batch1_works == 100_100
+    assert scale.batch2_works == 10 * DEFAULT_SCALE.batch2_works == 10_200
+    assert scale.dataset_scale == "synthetic-100100-works"
+    # The batch-2 "newer" works asset and the deletion ledgers stay within the decoder counts.
+    newer = scale.insert_new + scale.apply_update_newer + scale.restore_required
+    assert newer <= JsonlDecodeLimits().max_records
+    deletion_ids = scale.batch1_deletions + scale.apply_update_tombstone
+    assert deletion_ids <= CsvDeletionDecodeLimits().max_ids
+
+    plan = plan_synthetic_cycle(scale="large")
+    assert [len(works) for works in plan.batch1_asset_works] == [12_500] * 8
+    assert {case: len(numbers) for case, numbers in plan.cases.items()} == scale.case_counts()
+    roles = [
+        set(numbers)
+        for case, numbers in plan.cases.items()
+        if case is not DeltaCase.RESTORE_REQUIRED
+    ]
+    assert sum(len(role) for role in roles) == len(set().union(*roles))
+    deleted = set(plan.batch1_deleted_works)
+    assert len(deleted) == scale.batch1_deletions
+    assert set(plan.cases[DeltaCase.RESTORE_REQUIRED]) <= deleted
+    assert not deleted & set().union(*roles)
+    assert len(set(plan.batch1_dates)) == 8
+    assert min(plan.cases[DeltaCase.INSERT_NEW]) > scale.batch1_works
 
 
 def test_resolve_scale_accepts_presets_and_instances_only() -> None:
