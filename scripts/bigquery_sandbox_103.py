@@ -9,14 +9,50 @@ that name), ideally created with a default table expiration::
 Then (WSL, user ADC)::
 
     GOOGLE_CLOUD_PROJECT=<project> .venv/bin/python scripts/bigquery_sandbox_103.py \\
-        --confirm-project <project> --out /tmp/i103 [--scale tiny|default]
+        --confirm-project <project> --out /tmp/i103 [--scale tiny|default|large]
+
+``--scale`` takes a ``SYNTHETIC_SCALES`` preset. ``large`` (8 x 12,500 dated
+works, ten times the default delta mix) is slow to generate locally: the
+in-memory canonical store makes batch-1 ingest grow with the square of the
+corpus (~13 min at default scale, roughly a day at ``large``). It is still
+labelled synthetic and does not stand in for a representative slice. The
+cycle is generated before anything is deployed.
 
 Every job is labelled ``run=<run id>`` and capped with ``maximum_bytes_billed``;
-the run aborts once cumulative billed bytes pass ``--budget-gib``. Repo SQL is
-submitted byte-for-byte. Evidence (``jobs.jsonl``, ``summary.json``) goes to
-``--out``, which must be outside the repository. The script never creates or
-deletes datasets; the operator removes the dataset afterwards (or lets the
-table expiration do it).
+the run aborts once cumulative billed bytes pass ``--budget-gib``. An executed
+job without an explicit cap is dry-run first (free; an existing dry run is
+reused where the script already makes one) and capped at
+``min(--max-job-mib, max(cap_for(sql), 2 x estimate + 10 MiB per table))``,
+so ``cap_for`` still decides at tiny/default scale. Each BigQueryWarehouse call
+is capped at twice what the raw run of the same pattern billed (at least
+64 MiB and the dry-run estimate the warehouse checks against its cap, at most
+``--max-job-mib``). Any job, raw or BigQueryWarehouse, whose cap exceeds the
+remaining budget is refused before it is submitted. Result timeouts are
+``--job-timeout-s`` plus ``--timeout-s-per-gib`` per GiB of the job's dry-run
+estimate (a warehouse call uses its pattern's); loads and jobs without an
+estimate get ``--job-timeout-s``.
+
+After the latency repeats, one query pattern goes through a BigQueryWarehouse
+with a 1 s job timeout (``--skip-timeout-probe`` skips it): it must time out
+(and cancel) or complete, and its job is waited on until DONE and billed. The
+timeout is not smaller because ``QueryJob.result`` also passes it to each
+``jobs.get`` as the HTTP timeout, and a request timing out there is retried
+for ~40-50 min (google-cloud-bigquery 3.46 DEFAULT_RETRY and DEFAULT_JOB_RETRY).
+``result()`` checks its own deadline only between polls, and each
+``getQueryResults`` poll waits up to ~10 s server-side for the job, so a job
+that finishes within that wait is DONE first: at tiny/default scale expect
+``completed`` (with or without QueryTimeoutError); ``cancelled`` needs a longer
+job. The probe's wall time is recorded.
+
+Clustering is reported per query pattern as executed vs dry-run bytes, OBSERVED
+only for a pattern one of whose tables reaches 64 MiB logical. Processed bytes
+come from the pattern's last latency repeat (the raw run when there are none),
+after ``--cluster-settle-s`` of waiting; ``processed_from`` names the run.
+
+Repo SQL is submitted byte-for-byte. Evidence (``jobs.jsonl``, ``summary.json``)
+goes to ``--out``, which must be outside the repository (by path and by file
+identity). The script never creates or deletes datasets; the operator removes
+the dataset afterwards (or lets the table expiration do it).
 """
 
 from __future__ import annotations
@@ -28,43 +64,88 @@ import os
 import re
 import sys
 import time
-from collections import Counter
-from datetime import UTC, datetime, timedelta
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import pyarrow.parquet as pq
 from google.cloud import bigquery
 
 from research_platform.analytics.bigquery.contracts import build_table_contracts
-from research_platform.analytics.bigquery.sandbox.synthetic import write_synthetic_cycle
+from research_platform.analytics.bigquery.sandbox.live import (
+    BILLING_FLOOR,
+    DATASET,
+    MIB,
+    TABLE_REF,
+    AdapterClient,
+    Run,
+    adc_principal,
+    cap_for,
+    evidence_dir,
+    nearest_rank,
+)
+from research_platform.analytics.bigquery.sandbox.synthetic import (
+    SYNTHETIC_SCALES,
+    write_synthetic_cycle,
+)
 from research_platform.config.models import CloudConfig, WarehouseConfig
 from research_platform.quality.registry import load_quality_registry
 from research_platform.warehouse.bigquery import BigQueryWarehouse
+from research_platform.warehouse.errors import QueryTimeoutError
 
 REPO = Path(__file__).resolve().parents[1]
 SQL = REPO / "sql" / "bigquery" / "openalex"
-DATASET = "openalex"
-MIB = 1024 * 1024
-BILLING_FLOOR = 10 * MIB
-TABLE_REF = re.compile(r"`openalex\.([a-z_]+)`")
 LEGACY_TYPES = {"INTEGER": "INT64", "FLOAT": "FLOAT64", "BOOLEAN": "BOOL"}
 YEAR_BOUNDED = ("publication_trends", "open_access_trends", "publisher_topic_license_year")
+ADAPTER_MIN_CAP = 64 * MIB
+# Below this logical size for every table a pattern reads, pruning differences are noise.
+CLUSTER_MIN_TABLE_BYTES = 64 * MIB
+CLUSTER_OBSERVED = "OBSERVED; dry-run is the unpruned upper bound; cause not isolated"
+# The widest join pattern. The timeout is also each jobs.get HTTP timeout, so it
+# stays well above one round trip (see the module docstring).
+TIMEOUT_PROBE_PATTERN = "publisher_topic_license_year"
+TIMEOUT_PROBE_S = 1.0
+# Text matches for cluster_filters, applied with backticks and -- comments removed.
+TABLE_NAME = re.compile(r"\bopenalex\.([a-z_]+)\b")
+TABLE_ALIAS = re.compile(r"\bopenalex\.([a-z_]+)\s+(?i:AS)\s+(\w+)")
+PARAM_FILTER = re.compile(r"(?:\b(\w+)\.)?\b(\w+)\s*=\s*@")
 
 
-class Run:
-    def __init__(self, client: bigquery.Client, run_id: str, budget_bytes: int, log: Path | None = None) -> None:
-        self.client = client
-        self.run_id = run_id
-        self.budget_bytes = budget_bytes
-        self.billed = 0
-        self.jobs: list[dict[str, Any]] = []
-        self.checks: list[dict[str, Any]] = []
-        self.log = log  # jobs.jsonl, appended per job so a crash keeps the record
+def job_cap(sql: str, estimate: int | None, ceiling: int) -> int:
+    """Twice the dry-run estimate (whole MiB) plus the billing floor per table; at least cap_for(sql), at most ``ceiling``."""
+    tables = len(set(TABLE_REF.findall(sql))) or 1
+    sized = math.ceil(2 * (estimate or 0) / MIB) * MIB + BILLING_FLOOR * tables
+    return min(ceiling, max(cap_for(sql), sized))
 
-    def check(self, name: str, ok: bool, detail: object = "") -> None:
-        self.checks.append({"check": name, "ok": bool(ok), "detail": detail})
-        print(f"{'PASS' if ok else 'FAIL'} {name}{': ' + str(detail) if detail != '' else ''}", flush=True)
+
+def adapter_cap(billed: int, estimate: int, ceiling: int) -> int:
+    """Twice what the raw run billed, at least 64 MiB; never below the dry-run estimate the warehouse refuses above its cap."""
+    return min(ceiling, max(ADAPTER_MIN_CAP, 2 * billed, estimate))
+
+
+def adapter_warehouse(project: str, client: AdapterClient, cap: int, timeout_s: float) -> BigQueryWarehouse:
+    return BigQueryWarehouse(
+        WarehouseConfig(analytical="bigquery", bigquery_dataset=DATASET),
+        CloudConfig(project_id=project),
+        client=client,
+        maximum_bytes_billed=cap,
+        job_timeout_seconds=timeout_s,
+    )
+
+
+class SizedRun(Run):
+    """A ``Run`` whose executed jobs are sized from a dry-run estimate and refused above the remaining budget.
+
+    Without an explicit cap the cap is ``job_cap`` of ``estimate`` (dry-run first
+    when the caller has none); the result timeout is ``sized_timeout`` of it.
+    """
+
+    def __init__(self, *args: Any, max_job_bytes: int = 512 * MIB, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.max_job_bytes = max_job_bytes
+
+    def cap(self, sql: str, estimate: int | None) -> int:
+        return job_cap(sql, estimate, self.max_job_bytes)
 
     def query(
         self,
@@ -73,127 +154,151 @@ class Run:
         *,
         params: list[Any] | None = None,
         cap: int | None = None,
+        estimate: int | None = None,
         dry_run: bool = False,
         expect_error: bool = False,
+        timeout: float | None = None,
     ) -> bigquery.QueryJob:
-        if self.billed > self.budget_bytes:
-            raise SystemExit(f"budget exceeded before {step}: {self.billed} billed bytes")
-        cap = cap if cap is not None else cap_for(sql)
-        config = bigquery.QueryJobConfig(
-            dry_run=dry_run,
-            use_query_cache=False,
-            maximum_bytes_billed=cap,
-            query_parameters=params or [],
-            labels={"run": self.run_id, "step": label(step)},
-        )
-        started = time.perf_counter()
-        job = self.client.query(sql, job_config=config)
-        error = None
-        if not dry_run:
-            try:
-                job.result(timeout=600)
-            except Exception as exc:  # recorded; re-raised unless expected
-                # result() raises from getQueryResults without refreshing the job's
-                # status, so error_result stays None for scripts until a reload.
-                job.reload()
-                error = (job.error_result or {}).get("reason") or type(exc).__name__
-                if not expect_error:
-                    self._record(step, job, cap, dry_run, error, time.perf_counter() - started)
-                    raise
-        self._record(step, job, cap, dry_run, error, time.perf_counter() - started)
-        return job
+        if dry_run:
+            # Free; the ceiling keeps an estimate above cap_for(sql) from being refused.
+            cap = self.max_job_bytes if cap is None else cap
+        else:
+            if cap is None:
+                if estimate is None:
+                    estimate = self.estimate(step, sql, params)  # recorded as <step>-est
+                cap = self.cap(sql, estimate)
+            timeout = self.sized_timeout(estimate) if timeout is None else timeout
+            self.ensure_fits(step, cap)
+        return super().query(step, sql, params=params, cap=cap, dry_run=dry_run, expect_error=expect_error, timeout=timeout)
 
-    def _record(self, step: str, job: bigquery.QueryJob, cap: int, dry_run: bool, error: str | None, wall_s: float | None) -> None:
-        billed = 0 if dry_run else int(job.total_bytes_billed or 0)
-        self.billed += billed
-        dml = job.dml_stats
-        record = {
-            "step": step,
-            "job_id": job.job_id,
-            "dry_run": dry_run,
-            "statement_type": job.statement_type,
-            "cap": cap,
-            "total_bytes_processed": job.total_bytes_processed,
-            "total_bytes_billed": billed,
-            "floor_artifact": billed > 0 and billed % BILLING_FLOOR == 0,
-            "slot_ms": None if dry_run else job.slot_millis,
-            "cache_hit": None if dry_run else job.cache_hit,
-            "ddl_operation_performed": job.ddl_operation_performed,
-            "dml_stats": None if dml is None else {
-                "inserted": dml.inserted_row_count,
-                "updated": dml.updated_row_count,
-                "deleted": dml.deleted_row_count,
-            },
-            "error": error,
-            "started": None if dry_run or job.started is None else job.started.isoformat(),
-            "ended": None if dry_run or job.ended is None else job.ended.isoformat(),
-            "elapsed_ms": None if dry_run or job.started is None or job.ended is None else (job.ended - job.started) / timedelta(milliseconds=1),
-            "wall_ms": None if wall_s is None else round(wall_s * 1000, 1),
+    def rows(self, step: str, sql: str, params: list[Any] | None = None, *, estimate: int | None = None) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.query(step, sql, params=params, estimate=estimate).result()]
+
+
+def cluster_filters(sql: str, clustering: Mapping[str, tuple[str, ...]]) -> list[str]:
+    """``table.column`` for each cluster column of a referenced table that ``sql`` compares with a parameter.
+
+    A text match, not a parser: with backticks and ``--`` comments removed, an
+    ``<alias>.<column> = @`` whose alias is declared ``openalex.<table> AS <alias>``
+    (or is the table name), or an unqualified ``<column> = @`` credited to every
+    referenced table clustered on that column. Only ``=`` counts; ranges,
+    ``IN UNNEST(@...)`` and ``@param = column`` are not detected.
+    """
+    plain = re.sub(r"--[^\n]*", "", sql.replace("`", ""))
+    tables = set(TABLE_NAME.findall(plain))
+    aliases = {table: table for table in tables} | {alias: table for table, alias in TABLE_ALIAS.findall(plain)}
+    found = set()
+    for alias, column in PARAM_FILTER.findall(plain):
+        owners = {aliases[alias]} if alias in aliases else (set() if alias else tables)  # unknown alias: a CTE
+        found |= {f"{table}.{column}" for table in owners if column in clustering.get(table, ())}
+    return sorted(found)
+
+
+def clustering_patterns(
+    cases: dict[str, tuple[str, list[Any]]],
+    measured: dict[str, tuple[int, int, str]],
+    partitions: list[dict[str, Any]],
+    min_table_bytes: int = CLUSTER_MIN_TABLE_BYTES,
+) -> dict[str, dict[str, Any]]:
+    """Per query pattern: its status, dry-run estimate vs executed processed bytes (and which run), the cluster columns it filters, its tables' partitions.
+
+    A pattern is OBSERVED only when one of its own tables reaches ``min_table_bytes`` logical.
+    """
+    clustering = {contract.table_name: contract.clustering.fields for contract in build_table_contracts()}
+    by_table = {row["table_name"]: row for row in partitions}
+    result = {}
+    for stem, (sql, _) in cases.items():
+        estimate, processed, source = measured[stem]
+        tables = sorted(set(TABLE_NAME.findall(sql.replace("`", ""))))
+        largest = max((int(by_table.get(t, {}).get("total_logical_bytes") or 0) for t in tables), default=0)
+        result[stem] = {
+            "status": CLUSTER_OBSERVED if largest >= min_table_bytes else f"NOT MEASURED: its tables are under {min_table_bytes // MIB} MiB logical",
+            "dry_run_bytes": estimate,
+            "processed_bytes": processed,
+            "processed_from": source,
+            "processed_over_estimate": round(processed / estimate, 4) if estimate else None,
+            "cluster_filters": cluster_filters(sql, clustering),
+            "tables": {t: {k: by_table.get(t, {}).get(k) for k in ("partition_count", "total_logical_bytes")} for t in tables},
         }
-        self.jobs.append(record)
-        if self.log is not None:
-            with self.log.open("a") as handle:
-                handle.write(json.dumps(record, default=str) + "\n")
+    return result
 
-    def rows(self, step: str, sql: str, params: list[Any] | None = None) -> list[dict[str, Any]]:
-        return [dict(row) for row in self.query(step, sql, params=params).result()]
 
-    def children(self, job: bigquery.QueryJob) -> list[Any]:
-        return sorted(self.client.list_jobs(parent_job=job.job_id), key=lambda child: child.created)
-
-    def script_dml(self, job: bigquery.QueryJob) -> dict[str, int]:
-        totals = Counter()
-        for child in self.children(job):
-            stats = getattr(child, "dml_stats", None)
-            if stats is not None:
-                totals["inserted"] += stats.inserted_row_count
-                totals["updated"] += stats.updated_row_count
-                totals["deleted"] += stats.deleted_row_count
-        return dict(totals)
-
-    def load(self, table: str, path: Path) -> int:
-        config = bigquery.LoadJobConfig(
-            source_format=bigquery.SourceFormat.PARQUET,
-            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
-            labels={"run": self.run_id, "step": label(f"load-{table}")},
+def clustering_summary(patterns: dict[str, dict[str, Any]], partitions: list[dict[str, Any]], min_table_bytes: int = CLUSTER_MIN_TABLE_BYTES) -> dict[str, Any]:
+    """The per-pattern statuses rolled up; with none OBSERVED the #103 note stands."""
+    largest = max((int(row.get("total_logical_bytes") or 0) for row in partitions), default=0)
+    observed = sorted(stem for stem, pattern in patterns.items() if pattern["status"] == CLUSTER_OBSERVED)
+    if not observed:
+        status = (
+            f"NOT MEASURED (tables of KB-MB): no query pattern reads a table of {min_table_bytes // MIB} MiB logical, "
+            "so clustering effectiveness is not meaningful at this scale"
         )
-        with path.open("rb") as handle:
-            job = self.client.load_table_from_file(handle, f"{self.client.project}.{DATASET}.{table}", job_config=config)
-        job.result(timeout=600)
-        expected = pq.ParquetFile(path).metadata.num_rows
-        self.check(f"load {table}", job.output_rows == expected, f"{job.output_rows}/{expected} rows")
-        return int(job.output_rows or 0)
+    elif len(observed) == len(patterns):
+        status = CLUSTER_OBSERVED
+    else:
+        status = f"OBSERVED for {len(observed)} of {len(patterns)} patterns (observed_patterns); NOT MEASURED for the rest"
+    return {"status": status, "observed_patterns": observed, "largest_table_logical_bytes": largest, "min_table_bytes": min_table_bytes, "patterns": patterns}
 
 
-class AdapterClient:
-    """The real client for an unmodified BigQueryWarehouse, adding the run label so its jobs are logged and billed."""
-
-    def __init__(self, run: Run) -> None:
-        self.run = run
-        self.step = "adapter"
-        self.pending: list[tuple[bigquery.QueryJob, bigquery.QueryJobConfig]] = []
-
-    def query(self, sql: str, job_config: bigquery.QueryJobConfig) -> bigquery.QueryJob:
-        job_config.labels = {"run": self.run.run_id, "step": label(self.step)}
-        job = self.run.client.query(sql, job_config=job_config)
-        self.pending.append((job, job_config))
-        return job
-
-    def flush(self) -> None:
-        """Record the jobs of the last warehouse.query() call once it has returned."""
-        for job, config in self.pending:
-            dry = bool(config.dry_run)
-            self.run._record(self.step + ("-dry" if dry else ""), job, config.maximum_bytes_billed or 0, dry, None, None)
-        self.pending.clear()
+def remeasure(run: Run, measured: dict[str, tuple[int, int, str]], runs: int) -> dict[str, tuple[int, int, str]]:
+    """Processed bytes from each pattern's last latency repeat, which runs well after the MERGEs, where there is one."""
+    by_step = {record["step"]: record for record in run.jobs}
+    result = {}
+    for stem, (estimate, processed, source) in measured.items():
+        last = by_step.get(f"latency-{stem}-{runs - 1:02d}") if runs else None
+        result[stem] = (estimate, int(last["total_bytes_processed"] or 0), last["step"]) if last else (estimate, processed, source)
+    return result
 
 
-def label(value: str) -> str:
-    return re.sub(r"[^a-z0-9_-]", "-", value.lower())[:63]
+def warehouse_query(run: Run, adapter: AdapterClient, warehouse: Any, step: str, sql: str, params: dict[str, Any]) -> Any:
+    """One BigQueryWarehouse call recorded as ``step``, refused like a raw job when its cap exceeds the remaining budget."""
+    run.ensure_fits(step, warehouse.maximum_bytes_billed)
+    with adapter.recording(step):
+        return warehouse.query(sql, params)
 
 
-def cap_for(sql: str) -> int:
-    tables = len(set(TABLE_REF.findall(sql))) or 1
-    return min(512 * MIB, max(64 * MIB, 2 * BILLING_FLOOR * tables))
+def timeout_probe(run: Run, adapter: AdapterClient, warehouse: Any, stem: str, sql: str, params: dict[str, Any]) -> dict[str, Any]:
+    """One query pattern through a BigQueryWarehouse with a short job timeout: QueryTimeoutError or completion.
+
+    ``recording()`` reloads the job until DONE (bounded) before recording it, so
+    what it billed is in the evidence and the run's billed total either way.
+    ``wall_ms`` covers the whole call: dry run, execution and that wait.
+    """
+    step = f"timeout-probe-{stem}"
+    raised = None
+    started = time.perf_counter()
+    try:
+        warehouse_query(run, adapter, warehouse, step, sql, params)
+    except Exception as exc:  # noqa: BLE001 - recorded by recording(); judged below
+        raised = exc
+    wall_ms = round((time.perf_counter() - started) * 1000, 1)
+    executed = [r for r in run.jobs if r["step"] == step]
+    record = executed[-1] if executed else {}
+    # BigQuery reports a job stopped by cancel() as reason "stopped"; recording()
+    # puts the warehouse's exception name on a job that reports no error.
+    if not record:
+        outcome = "not submitted"
+    elif record["state"] != "DONE":
+        outcome = "not DONE after the wait"
+    elif record["error"] == "stopped":
+        outcome = "cancelled"
+    elif record["error"] in (None, "QueryTimeoutError"):
+        outcome = "completed"
+    else:
+        outcome = f"failed: {record['error']}"
+    detail = {
+        "pattern": stem,
+        "timeout_s": getattr(warehouse, "job_timeout_seconds", None),
+        "raised": type(raised).__name__ if raised else None,
+        "outcome": outcome,
+        "wall_ms": wall_ms,
+        "state": record.get("state"),
+        "error": record.get("error"),
+        "billed": record.get("total_bytes_billed"),
+        "slot_ms": record.get("slot_ms"),
+    }
+    expected = raised is None or isinstance(raised, QueryTimeoutError)
+    run.check(f"timeout probe {stem}: QueryTimeoutError or completion, job DONE", expected and outcome in ("cancelled", "completed"), detail)
+    return detail
 
 
 def text(relative: str) -> str:
@@ -220,18 +325,19 @@ def decision_counts(run: Run, step: str) -> dict[str, int]:
     return {row["d"]: int(row["n"]) for row in rows}
 
 
-def nearest_rank(values: list[float], q: float) -> float:
-    ordered = sorted(values)
-    return ordered[max(0, math.ceil(q * len(ordered)) - 1)]
+def measure_latency(run: SizedRun, cases: dict[str, tuple[str, list[Any]]], runs: int, estimates: dict[str, int] | None = None) -> dict[str, dict[str, Any]]:
+    """Cache-off repeats of each query pattern: small-sample nearest-rank p50/p95.
 
-
-def measure_latency(run: Run, cases: dict[str, tuple[str, list[Any]]], runs: int) -> dict[str, dict[str, Any]]:
-    """Cache-off repeats of each query pattern: small-sample nearest-rank p50/p95."""
+    ``estimates`` (pattern -> its earlier dry-run bytes, which size each
+    repeat's cap and timeout) saves a dry run per repeat.
+    """
     latency = {}
     for stem, (sql, params) in cases.items():
         for i in range(runs):
-            run.query(f"latency-{stem}-{i:02d}", sql, params=params)
-        records = run.jobs[-runs:]
+            run.query(f"latency-{stem}-{i:02d}", sql, params=params, estimate=(estimates or {}).get(stem))
+        # Sizing without a cap adds a "-est" dry-run record before each run; keep only the executed runs.
+        steps = {f"latency-{stem}-{i:02d}" for i in range(runs)}
+        records = [r for r in run.jobs if r["step"] in steps]
         elapsed = [r["elapsed_ms"] for r in records]
         wall = [r["wall_ms"] for r in records]
         latency[stem] = {
@@ -263,17 +369,26 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--confirm-project", required=True)
     parser.add_argument("--out", required=True, type=Path)
-    parser.add_argument("--scale", default="default", choices=("tiny", "default"))
+    parser.add_argument("--scale", default="default", choices=sorted(SYNTHETIC_SCALES), help="synthetic preset ('large' takes roughly a day to generate)")
     parser.add_argument("--budget-gib", type=float, default=20.0)
+    parser.add_argument("--max-job-mib", type=int, default=512, help="ceiling on any one job's maximum_bytes_billed")
+    parser.add_argument("--job-timeout-s", type=float, default=600.0, help="base result timeout per query, adapter and load job")
+    parser.add_argument("--timeout-s-per-gib", type=float, default=60.0, help="added to --job-timeout-s per GiB of a job's dry-run estimate")
     parser.add_argument("--latency-runs", type=int, default=21, help="cache-off repeats per query pattern (0 skips)")
+    parser.add_argument("--cluster-settle-s", type=float, default=0.0, help="wait after the raw query runs, before the latency repeats that re-measure clustering")
+    parser.add_argument("--skip-timeout-probe", action="store_true", help=f"skip the BigQueryWarehouse {TIMEOUT_PROBE_S}s timeout/cancellation probe")
+    parser.add_argument("--pricing-model", default="unknown", choices=("on-demand", "editions", "unknown"), help="recorded as evidence only")
     args = parser.parse_args(argv)
+    if args.max_job_mib <= 0 or args.job_timeout_s <= 0:
+        parser.error("--max-job-mib and --job-timeout-s must be positive")
+    if args.timeout_s_per_gib < 0 or args.cluster_settle_s < 0:
+        parser.error("--timeout-s-per-gib and --cluster-settle-s must not be negative")
+    ceiling = args.max_job_mib * MIB
 
     project = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
     if not project or project != args.confirm_project:
         raise SystemExit("GOOGLE_CLOUD_PROJECT must be set and equal --confirm-project")
-    out = args.out.resolve()
-    if out == REPO or REPO in out.parents:
-        raise SystemExit("--out must be outside the repository")
+    out = evidence_dir(args.out, REPO)
     out.mkdir(parents=True, exist_ok=True)
 
     client = bigquery.Client(project=project)
@@ -284,8 +399,25 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("dataset has a default partition expiration; old partitions would vanish")
     log = out / "jobs.jsonl"
     log.write_text("")
-    run = Run(client, "i103-" + datetime.now(UTC).strftime("%Y%m%dt%H%M%S"), int(args.budget_gib * 1024 * MIB), log)
-    print(f"run {run.run_id}: location {dataset.location}, table expiration ms {dataset.default_table_expiration_ms}")
+    run = SizedRun(
+        client,
+        "i103-" + datetime.now(UTC).strftime("%Y%m%dt%H%M%S"),
+        int(args.budget_gib * 1024 * MIB),
+        log,
+        job_timeout_s=args.job_timeout_s,
+        timeout_s_per_gib=args.timeout_s_per_gib,
+        max_job_bytes=ceiling,
+    )
+    principal = adc_principal(client._credentials)
+    print(f"run {run.run_id}: location {dataset.location}, table expiration ms {dataset.default_table_expiration_ms}, ADC {principal['type']}")
+
+    # Generate the synthetic cycle offline before deploying, so a slow or failed
+    # generation (hours at 'large') leaves the dataset empty.
+    print(f"generating the {args.scale} synthetic cycle", flush=True)
+    cycle = out / "cycle"
+    write_synthetic_cycle(cycle, scale=args.scale)
+    expected = json.loads((cycle / "expected_decisions.json").read_text())
+    pub1, pub2 = expected["publication"]["batch1"], expected["publication"]["batch2"]
 
     # Deploy: 15 contract tables, the active_works view, 2 staging tables.
     for path in sorted((SQL / "ddl").glob("*.sql")):
@@ -303,11 +435,7 @@ def main(argv: list[str] | None = None) -> int:
         ok = columns == want_cols and part == contract.partitioning.field and tuple(table.clustering_fields or ()) == contract.clustering.fields
         run.check(f"schema/partition/cluster {contract.table_name}", ok, "" if ok else {"columns": columns != want_cols, "partition": part, "cluster": table.clustering_fields})
 
-    # Data: synthetic cycle through the real Step 12/13 ingest path.
-    cycle = out / "cycle"
-    write_synthetic_cycle(cycle, scale=args.scale)
-    expected = json.loads((cycle / "expected_decisions.json").read_text())
-    pub1, pub2 = expected["publication"]["batch1"], expected["publication"]["batch2"]
+    # Data: the synthetic cycle, generated through the real Step 12/13 ingest path.
     for path in sorted((cycle / "batch1").glob("*.parquet")):
         target = {"works": "works_staging", "work_topics": "work_topics_staging"}.get(path.stem, path.stem)
         run.load(target, path)
@@ -373,8 +501,8 @@ def main(argv: list[str] | None = None) -> int:
     for folder in ("gold", "quality"):
         for path in sorted((SQL / folder).glob("*.sql")):
             sql = path.read_bytes().decode("utf-8")
-            run.query(f"{folder}-{path.stem}-dry", sql, dry_run=True)
-            result = run.rows(f"{folder}-{path.stem}", sql)
+            estimate = int(run.query(f"{folder}-{path.stem}-dry", sql, dry_run=True).total_bytes_processed or 0)
+            result = run.rows(f"{folder}-{path.stem}", sql, estimate=estimate)
             if folder == "quality":
                 run.checks.append({"check": f"quality {path.stem}", "ok": True, "detail": result[:3]})
     not_run = [c.check_id for c in load_quality_registry() if not c.sql_path]
@@ -401,18 +529,23 @@ def main(argv: list[str] | None = None) -> int:
     year_from = int(pick["year_max"]) - 1
     values = {**{k: pick[k] for k in ("work_id", "doi", "publisher_id", "source_id", "institution_id")}, "year_from": year_from, "year_to": int(pick["year_max"])}
     adapter_client = AdapterClient(run)
-    warehouse = BigQueryWarehouse(WarehouseConfig(analytical="bigquery", bigquery_dataset=DATASET), CloudConfig(project_id=project), client=adapter_client, maximum_bytes_billed=64 * MIB)
     cases: dict[str, tuple[str, list[Any]]] = {}
+    estimates: dict[str, int] = {}
+    adapter_caps: dict[str, int] = {}
+    measured: dict[str, tuple[int, int, str]] = {}  # pattern -> (dry-run estimate, executed processed bytes, measuring step)
     for path in sorted((SQL / "queries").glob("*.sql")):
         sql = path.read_bytes().decode("utf-8")
         names = sorted(set(re.findall(r"@([a-z_]+)", sql)))
         params = [bigquery.ScalarQueryParameter(n, "INT64" if n.startswith("year_") else "STRING", values[n]) for n in names]
         cases[path.stem] = (sql, params)
-        run.query(f"query-{path.stem}-dry", sql, params=params, dry_run=True)
-        result = run.rows(f"query-{path.stem}", sql, params)
-        adapter_client.step = f"adapter-{path.stem}"
-        adapter = warehouse.query(sql, {n: values[n] for n in names})
-        adapter_client.flush()
+        estimate = int(run.query(f"query-{path.stem}-dry", sql, params=params, dry_run=True).total_bytes_processed or 0)
+        estimates[path.stem] = estimate
+        raw =run.query(f"query-{path.stem}", sql, params=params, estimate=estimate)
+        result = [dict(row) for row in raw.result()]
+        measured[path.stem] = (estimate, int(raw.total_bytes_processed or 0), f"query-{path.stem}")
+        adapter_caps[path.stem] = adapter_cap(int(raw.total_bytes_billed or 0), estimate, ceiling)
+        warehouse = adapter_warehouse(project, adapter_client, adapter_caps[path.stem], run.sized_timeout(estimate))
+        adapter = warehouse_query(run, adapter_client, warehouse, f"adapter-{path.stem}", sql, {n: values[n] for n in names})
         run.check(f"query {path.stem} runs (raw + adapter)", adapter.num_rows == len(result), f"{len(result)} rows")
         if path.stem in YEAR_BOUNDED:
             variants = {
@@ -424,14 +557,44 @@ def main(argv: list[str] | None = None) -> int:
             pruning["literal"] = run.query(f"prune-{path.stem}-literal", literal, params=[p for p in params if not p.name.startswith("year_")], dry_run=True).total_bytes_processed
             run.checks.append({"check": f"pruning {path.stem}", "ok": True, "detail": pruning})
 
-    latency = measure_latency(run, cases, args.latency_runs) if args.latency_runs else {}
+    if args.cluster_settle_s:
+        print(f"waiting {args.cluster_settle_s}s for re-clustering before the latency repeats", flush=True)
+        run.sleep(args.cluster_settle_s)
+    latency = measure_latency(run, cases, args.latency_runs, estimates) if args.latency_runs else {}
+    measured = remeasure(run, measured, args.latency_runs)
+    probe = None
+    if not args.skip_timeout_probe:
+        sql, params = cases[TIMEOUT_PROBE_PATTERN]
+        warehouse = adapter_warehouse(project, adapter_client, adapter_caps[TIMEOUT_PROBE_PATTERN], TIMEOUT_PROBE_S)
+        probe = timeout_probe(run, adapter_client, warehouse, TIMEOUT_PROBE_PATTERN, sql, {p.name: p.value for p in params})
     # ROWS is a reserved keyword in BigQuery, so it cannot be a bare alias.
-    partitions = run.rows("partitions", "SELECT table_name, COUNT(*) AS partition_count, SUM(total_rows) AS row_count FROM `openalex.INFORMATION_SCHEMA.PARTITIONS` GROUP BY table_name ORDER BY table_name")
+    partitions = run.rows("partitions", """
+        SELECT table_name, COUNT(*) AS partition_count, SUM(total_rows) AS row_count,
+               SUM(total_logical_bytes) AS total_logical_bytes,
+               MIN(total_logical_bytes) AS min_partition_bytes,
+               APPROX_QUANTILES(total_logical_bytes, 2)[OFFSET(1)] AS median_partition_bytes,
+               MAX(total_logical_bytes) AS max_partition_bytes
+        FROM `openalex.INFORMATION_SCHEMA.PARTITIONS` GROUP BY table_name ORDER BY table_name
+    """)
+    clustering = clustering_summary(clustering_patterns(cases, measured, partitions), partitions)
 
     failed_checks = [c for c in run.checks if not c["ok"]]
     summary = {
         "run_id": run.run_id,
         "scale": expected["dataset_scale"],
+        "scale_preset": args.scale,
+        "adc_principal": principal,
+        "user_emails": sorted({j["user_email"] for j in run.jobs if j.get("user_email")}),
+        "pricing_model": args.pricing_model,
+        "caps": {
+            "job": "min(max_job_bytes, max(cap_for(sql), 2 x dry-run estimate rounded up to MiB + 10 MiB per table))",
+            "adapter": "min(max_job_bytes, max(64 MiB, 2 x raw-run billed bytes, dry-run estimate))",
+            "refused": "any raw or BigQueryWarehouse job whose cap exceeds the remaining budget, before submission",
+            "max_job_bytes": ceiling,
+            "timeout": "job_timeout_s + timeout_s_per_gib x dry-run estimate in GiB (adapter calls: their pattern's); job_timeout_s for loads and jobs without an estimate",
+            "job_timeout_s": args.job_timeout_s,
+            "timeout_s_per_gib": args.timeout_s_per_gib,
+        },
         "location": dataset.location,
         "jobs": len(run.jobs),
         "billed_bytes": run.billed,
@@ -440,7 +603,15 @@ def main(argv: list[str] | None = None) -> int:
         "not_run": not_run,
         "params": {k: (v if k.startswith("year_") else "<chosen from data>") for k, v in values.items()},
         "latency": latency,
-        "clustering": "NOT MEASURED (tables of KB-MB)",
+        "clustering": {
+            "method": (
+                "per pattern: executed total_bytes_processed of its last latency repeat (the raw run without repeats; processed_from) "
+                "vs its dry-run estimate (dry runs apply no block pruning); status from the pattern's own tables; cluster_filters is a text match"
+            ),
+            "settle_s": args.cluster_settle_s,
+            **clustering,
+        },
+        "timeout_probe": probe,
         "partitions": partitions,
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
