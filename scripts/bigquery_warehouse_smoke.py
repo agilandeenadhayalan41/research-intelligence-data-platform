@@ -329,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
     log = out / "jobs.jsonl"
     log.write_text("")
     run = Run(client, run_id, int(args.budget_mib * MIB), log)
-    openalex = args.dataset.lower() == DATASET
+    openalex = args.dataset == DATASET  # dataset names are case-sensitive
     facts: dict[str, Any] = {"least_privilege": args.least_privilege, "dataset_is_openalex": openalex, "dataset_access": DATASET_ACCESS}
     try:
         dataset = client.get_dataset(f"{project}.{args.dataset}")  # must exist already; never created here
