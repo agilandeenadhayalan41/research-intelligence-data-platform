@@ -241,13 +241,16 @@ def _sandbox_entries() -> tuple[ReadinessEntry, ...]:
                 "mapped to QueryBudgetExceededError), bounded execute, typed @parameter "
                 "binding, empty/null Arrow results. Step 15-16 models deployed and MEASURED "
                 "(#103, synthetic-10k-works): DDL matches contracts, all six publication "
-                "decisions, MERGE precedence, REPLACE rollback under failure injection, "
-                "below-floor cap rejected, publication_year pruning observed; operator-owned "
+                "decisions, works MERGE precedence, work_topics REPLACE rollback under "
+                "failure injection, below-floor cap rejected, publication_year pruning "
+                "observed; operator-owned "
                 "sandbox project and dataset (identifiers redacted)",
                 (
                     "MEASURED on synthetic-10k-works only (#103): production-scale cost/latency, "
                     "clustering effectiveness, concurrent publication and Gold "
                     "refresh/materialization unverified; billed bytes are billing-floor artifacts",
+                    "MERGE/REPLACE exercised for works and work_topics only; the other "
+                    "relationship tables and dimensions were direct-loaded",
                     "Operator-owned project and user ADC, not an enterprise project or "
                     "least-privilege runtime identity",
                     "Job timeout/cancellation under load unverified",
@@ -441,7 +444,8 @@ def _cloud_placeholder_matrix(
         ),
         ReadinessDomain.DATA_QUALITY: (
             EvidenceLevel.CLOUD_UNVERIFIED,
-            "DQ logic demonstrated locally (SEMANTIC_ONLY); BigQuery-executed DQ unverified",
+            "DQ logic demonstrated locally (SEMANTIC_ONLY); the BigQuery DQ SQL ran once on "
+            "synthetic data in GCP_SANDBOX only (#103); BigQuery DQ gating/alerting unverified",
             ("No production alerting/on-call", "DuckDB success ≠ BigQuery validation"),
             "Execute DQ against BigQuery and define alerting after runtime exists",
             (EvidenceLabel.SEMANTIC_ONLY, EvidenceLabel.CLOUD_UNVERIFIED),

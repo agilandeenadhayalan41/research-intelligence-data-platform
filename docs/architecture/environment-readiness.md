@@ -147,7 +147,7 @@ separation, and access logging.
 | `BigQueryWarehouse` adapter | implemented (#10) — dry-run + `maximum_bytes_billed`, fake-client tests |
 | Live ADC / real dataset jobs | **not** executed in default CI |
 | Live sandbox smoke (#92) | **passed** in GCP_SANDBOX: dry-run budget rejection, provider-enforced `maximum_bytes_billed`, bounded execute, typed `@parameter` binding, empty/null Arrow results ([details](bigquery-analytical-models.md#recorded-run-92)) |
-| Model deploy and MEASURE (#103) | **MEASURED** in GCP_SANDBOX on synthetic-10k-works: DDL matches contracts, all six publication decisions, MERGE precedence, REPLACE rollback under failure injection, below-floor cap rejected, `publication_year` pruning, small-sample latency ([details](bigquery-analytical-models.md#recorded-run-103)) |
+| Model deploy and MEASURE (#103) | **MEASURED** in GCP_SANDBOX on synthetic-10k-works: DDL matches contracts, all six publication decisions, `works` MERGE precedence, `work_topics` REPLACE rollback under failure injection (other relationship tables and dimensions were direct-loaded), below-floor cap rejected, `publication_year` pruning, small-sample latency ([details](bigquery-analytical-models.md#recorded-run-103)) |
 
 Therefore `BIGQUERY_ANALYTICAL` is `VERIFIED` for **GCP_SANDBOX only** (the
 adapter contract, plus the models MEASURED at synthetic scale), and
@@ -176,7 +176,9 @@ readiness.
 ## Data quality / Gold / Data Service
 
 - DQ & Gold logic: `DEMONSTRATED_LOCAL` / `SEMANTIC_ONLY`
-- BigQuery-executed DQ/Gold: `CLOUD_UNVERIFIED`
+- BigQuery-executed DQ/Gold: `CLOUD_UNVERIFIED`. The DQ and Gold SQL ran once on
+  synthetic data in GCP_SANDBOX only (#103); DQ gating/alerting and Gold
+  deployment remain unverified.
 - Production alerting/on-call: not implemented
 - Data Service: domain contract + local in-memory demo; no HTTP/auth/scale/cache
 

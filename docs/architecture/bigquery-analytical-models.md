@@ -54,7 +54,9 @@ through the Step 12/13 ingest path. Status: **MEASURED (GCP_SANDBOX,
 synthetic-10k-works)**.
 
 - Deploy: all 15 DDL statements reported `CREATE`. Columns, types, modes,
-  partitioning and clustering equal `build_table_contracts()`.
+  partition column and clustering equal `build_table_contracts()`. The integer
+  range spec is covered by the offline DDL checks, and the DDL was submitted
+  byte-for-byte.
 - Publication: batch-2 decisions (`INSERT` 200, `IDENTICAL` 200, `APPLY_UPDATE`
   300, `STALE` 110, `CONFLICT` 110, `RESTORE_REQUIRED` 100) equal
   `decide_analytical_works_merge`. `merge_works` and `merge_work_topics` DML
@@ -375,6 +377,9 @@ Before treating these contracts as production-ready:
 6. Confirm `maximum_bytes_billed` policy behavior.
 7. Only then consider Step 16 materializations from measured reuse.
 
-Items 1–6 were run once in GCP_SANDBOX on synthetic-10k-works (#103,
-[recorded run](#recorded-run-103)). Repeat them at representative scale in an
-enterprise-managed project with a least-privilege identity before item 7.
+Items 1, 4, 5 and 6 were run once in GCP_SANDBOX on synthetic-10k-works (#103,
+[recorded run](#recorded-run-103)), and so was item 3 for bytes, slot time and
+latency. Two parts remain open: item 2, a representative slice rather than
+synthetic data, and the cost part of item 3 (billed bytes were floor
+artifacts). Repeat the run at representative scale in an enterprise-managed
+project with a least-privilege identity before item 7.

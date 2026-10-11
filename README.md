@@ -57,8 +57,9 @@ smoke, so `GCS_RAW_LANDING` is `VERIFIED` for GCP_SANDBOX only.
 `BigQueryWarehouse` is implemented behind the existing `Warehouse` contract
 (dry-run + `maximum_bytes_billed`; default tests use an injected fake client —
 no live credentials/network/paid queries). Live dataset validation is
-separately approved and is not part of default CI; #92 recorded a passing live
-sandbox smoke of the adapter contract (models not deployed or measured).
+separately approved and is not part of default CI. #92 recorded a passing live
+sandbox smoke of the adapter contract, and #103 deployed and MEASURED the models
+in the sandbox on synthetic data only.
 
 `DuckDBWarehouse` implements local `Warehouse.query` for `:memory:` or an
 explicit DuckDB file path. Construction does not open a connection or create a
