@@ -1,6 +1,7 @@
 """OpenAlex-specific portable canonical model contracts."""
 
 from research_platform.canonical.openalex.errors import (
+    CanonicalExportError,
     CanonicalModelError,
     IdentifierError,
     MappingError,
@@ -55,6 +56,7 @@ __all__ = [
     "Author",
     "CANONICAL_SCHEMAS",
     "CanonicalActivityState",
+    "CanonicalExportError",
     "CanonicalLineage",
     "CanonicalModelError",
     "CanonicalWorkBundle",

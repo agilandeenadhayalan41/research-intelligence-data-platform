@@ -11,3 +11,7 @@ class IdentifierError(CanonicalModelError, ValueError):
 
 class MappingError(CanonicalModelError, ValueError):
     """A source record cannot be mapped into the canonical model."""
+
+
+class CanonicalExportError(CanonicalModelError):
+    """Canonical rows cannot be exported to the Arrow/Parquet interchange contract."""
