@@ -57,8 +57,9 @@ smoke, so `GCS_RAW_LANDING` is `VERIFIED` for GCP_SANDBOX only.
 `BigQueryWarehouse` is implemented behind the existing `Warehouse` contract
 (dry-run + `maximum_bytes_billed`; default tests use an injected fake client —
 no live credentials/network/paid queries). Live dataset validation is
-separately approved and is not part of default CI; #92 recorded a passing live
-sandbox smoke of the adapter contract (models not deployed or measured).
+separately approved and is not part of default CI. #92 recorded a passing live
+sandbox smoke of the adapter contract, and #103 deployed and MEASURED the models
+in the sandbox on synthetic data only.
 
 `DuckDBWarehouse` implements local `Warehouse.query` for `:memory:` or an
 explicit DuckDB file path. Construction does not open a connection or create a
@@ -106,8 +107,8 @@ LOCAL (evidence only) → GCP_SANDBOX → DEV → QA → PROD
 Today Sandbox/DEV/QA/PROD are all `NOT_READY`. GCS (#9) and the BigQuery
 adapter (#10) are `VERIFIED` in GCP_SANDBOX only (#91/#92 live smokes;
 operator-owned project, user ADC), `READY_TO_VALIDATE` for DEV/QA, and
-`BLOCKED` in PROD. The BigQuery evidence covers the adapter contract only; the
-Step 15–16 models are not deployed or MEASURED.
+`BLOCKED` in PROD. The Step 15–16 BigQuery models were deployed and MEASURED in
+GCP_SANDBOX on synthetic-10k-works only (#103), not at production scale.
 IAM / Composer / HTTP deploy gaps remain. Do not equate YAML presence or
 adapter code with production readiness.
 

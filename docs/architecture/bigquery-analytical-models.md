@@ -9,7 +9,8 @@ cost-safety rules, and local DuckDB semantic checks.
 | Status | What |
 | --- | --- |
 | **DEFINED IN STEP 15** | Table DDL contracts, query SQL files, pattern mappings, grains, partition/cluster decisions, MERGE/refresh design, cost rules, DuckDB `SEMANTIC_ONLY` fixtures, static offline checks |
-| **NOT YET DEPLOYED / MEASURED** | Step 15–16 datasets/tables, model query jobs, partition pruning proof, clustering effectiveness, real cost/latency (the #92 adapter smoke used only an empty scratch dataset and literal/public-table queries) |
+| **MEASURED IN GCP_SANDBOX (#103)** | Step 15–16 DDL, publication/MERGE/REPLACE models, Gold/quality/query SQL and `publication_year` pruning on synthetic-10k-works; small-sample latency ([recorded run](#recorded-run-103)) |
+| **NOT YET MEASURED** | Production-scale cost/latency/concurrency, clustering effectiveness, Gold refresh/materialization, DEV/QA/PROD |
 | **RUNTIME ADAPTER (#10)** | `BigQueryWarehouse` — dry-run + `maximum_bytes_billed`, typed `@params`, Arrow results; offline fake-client tests plus a live sandbox smoke (#92) |
 
 No cloud deployment, service accounts, Terraform, or paid queries are included
@@ -40,12 +41,71 @@ Environment: the operator-owned sandbox project used for #91 and an empty
 dataset created for the run with operator approval; user ADC; CPython 3.14.4
 and `google-cloud-bigquery` 3.46.1. No tables were created.
 
-`BIGQUERY_ANALYTICAL` is therefore `VERIFIED` for **GCP_SANDBOX only**, for the
-adapter contract. It is not evidence that the Step 15–16 models deploy, that
-MERGE/partition pruning/clustering behave as designed, of MEASURED cost or
-latency, of job timeout/cancellation under load, of an enterprise-managed
-project or least-privilege runtime identity, or of DEV/QA/PROD, which stay
-`READY_TO_VALIDATE` / `BLOCKED`.
+#92 on its own covered the adapter contract only; the Step 15–16 models were
+deployed and MEASURED later, in #103 (below).
+
+#### Recorded run (#103)
+
+On 2026-10-11 (`main` @ `0979223`, `scripts/bigquery_sandbox_103.py`, repo SQL
+submitted byte-for-byte, unmodified `BigQueryWarehouse`) the Step 15–16 models
+were deployed to an empty `openalex` dataset in the operator-owned sandbox
+project. They were exercised with a synthetic cycle of about 10k works generated
+through the Step 12/13 ingest path. Status: **MEASURED (GCP_SANDBOX,
+synthetic-10k-works)**.
+
+- Deploy: all 15 DDL statements reported `CREATE`. Columns, types, modes,
+  partition column and clustering equal `build_table_contracts()`. The integer
+  range spec is covered by the offline DDL checks, and the DDL was submitted
+  byte-for-byte.
+- Publication: batch-2 decisions (`INSERT` 200, `IDENTICAL` 200, `APPLY_UPDATE`
+  300, `STALE` 110, `CONFLICT` 110, `RESTORE_REQUIRED` 100) equal
+  `decide_analytical_works_merge`. `merge_works` and `merge_work_topics` DML
+  counts reconcile, the 320 STALE/CONFLICT/RESTORE_REQUIRED rows are unchanged,
+  and `canonical_work_id_not_null` / `_unique` return 0.
+- Failure injection: a NULL `topic_id` made `merge_work_topics.sql` fail
+  (`Required field topic_id cannot be null`). BigQuery rolled back the 395-row
+  DELETE already made inside the transaction, and `work_topics` was unchanged.
+  A 1 MiB cap was rejected (`bytesBilledLimitExceeded`, 0 bytes billed).
+- Gold, quality, queries: all 9 Gold SELECTs, the 12 quality files and the 11
+  IMPLEMENTED query patterns executed (raw client and `BigQueryWarehouse`, equal
+  row counts). `issn-source-lookup` stays UNRESOLVED.
+  `reconciliation.decode_balance` and
+  `reconciliation.publication_decision_balance` have no BigQuery SQL
+  (NOT_RUN).
+- Pruning (dry-run `total_bytes_processed`; bounded / typed-NULL /
+  literal-year control): `publication-trends` 42,584 / 162,086 / 42,584;
+  `open-access-trends` 62,271 / 237,968 / 62,271;
+  `publisher-topic-license-year` 965,757 / 1,307,643 / 965,757.
+- Latency (21 cache-off runs per pattern, 0 cache hits): server-side elapsed
+  p50 166–256 ms and p95 207–696 ms across the 11 patterns; client wall-clock
+  p50 1.03–1.25 s and p95 1.25–2.26 s. Small sample on KB–MB tables, not a
+  production latency.
+- Cost: 350 jobs (331 query, 19 free Parquet loads) billed 6,018,826,240 bytes
+  (5.61 GiB). Query caps were 64–200 MiB, apart from the deliberate 1 MiB
+  injection, and no job was billed above its cap. Every billed query job was
+  billed at a multiple of the 10 MiB per-table floor, so these are floor
+  artifacts, not workload cost. Clustering is NOT MEASURED (tables of KB–MB).
+
+The run hit two script defects, fixed in #107. A failed script job was read
+before its status was refreshed, and a reserved `rows` alias crashed the final
+query before the evidence files were written. The job record was rebuilt from
+BigQuery job history, including the 11 unlabelled `BigQueryWarehouse` jobs,
+found by time window. Then, against the unchanged dataset:
+
+- the lost dry-run estimates were re-measured: the pruning variants with #106's
+  `Run`, the per-file estimates with #107's;
+- the partitions summary was run with #106's `Run`;
+- the 21-run latency measurement, new in #107, was added with #107's code.
+
+Evidence: [#103](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/103) (identifiers redacted).
+
+This is not evidence of production, DEV or QA cost, latency or concurrency. It
+also does not cover clustering effectiveness, Gold refresh or materialization,
+REPLACE/MERGE for the other relationship tables and dimensions, concurrent
+publication, job timeout/cancellation under load, or an enterprise-managed
+project or least-privilege runtime identity. `BIGQUERY_ANALYTICAL` stays
+`VERIFIED` for **GCP_SANDBOX only**. DEV/QA stay `READY_TO_VALIDATE`, PROD stays
+`BLOCKED`, and no Gold mart is `MATERIALIZED`.
 
 ## Separation of validation kinds
 
@@ -134,8 +194,11 @@ Why this key:
   BigQuery NULL partition.
 
 **Partition-pruning requirement (contract):** year-bounded analytical query
-SQL must predicate on `publication_year`. This repository defines that contract;
-actual pruning effectiveness is **NOT YET MEASURED** on deployed BigQuery.
+SQL must predicate on `publication_year`. On deployed BigQuery (#103,
+synthetic-10k-works) the three year-bounded patterns with `@year_from` /
+`@year_to` set processed the same bytes as a literal-year control, and fewer
+than with typed-NULL bounds ([recorded run](#recorded-run-103)). Pruning at
+production scale is **NOT YET MEASURED**.
 
 Relationship tables partition on `lineage_source_updated_date` (source/asset
 freshness, including deletion dates) — **not** publication time.
@@ -314,3 +377,10 @@ Before treating these contracts as production-ready:
 5. Verify MERGE precedence and transactional REPLACE under failure injection.
 6. Confirm `maximum_bytes_billed` policy behavior.
 7. Only then consider Step 16 materializations from measured reuse.
+
+Items 1, 4, 5 and 6 were run once in GCP_SANDBOX on synthetic-10k-works (#103,
+[recorded run](#recorded-run-103)), and so was item 3 for bytes, slot time and
+latency. Two parts remain open: item 2, a representative slice rather than
+synthetic data, and the cost part of item 3 (billed bytes were floor
+artifacts). Repeat the run at representative scale in an enterprise-managed
+project with a least-privilege identity before item 7.

@@ -64,7 +64,7 @@ Additional labels: `LOCAL_TESTED`, `SEMANTIC_ONLY`, `PLACEHOLDER_CONFIG`,
 |---|---|---|---|---|---|
 | CONFIGURATION | DEMONSTRATED_LOCAL | CONTRACT_DEFINED (yaml shape) | PLACEHOLDER | PLACEHOLDER | BLOCKED / NOT READY |
 | GCS_RAW_LANDING | LocalObjectStore + GCSObjectStore (fake tests); no live bucket | VERIFIED (#91 live smoke; sandbox only) | READY_TO_VALIDATE | READY_TO_VALIDATE | BLOCKED (PROD) |
-| BIGQUERY_ANALYTICAL | CONTRACT + SEMANTIC_ONLY + offline adapter (#10) | VERIFIED (#92 adapter smoke; sandbox only; models not MEASURED) | READY_TO_VALIDATE | READY_TO_VALIDATE | BLOCKED (PROD) |
+| BIGQUERY_ANALYTICAL | CONTRACT + SEMANTIC_ONLY + offline adapter (#10) | VERIFIED (#92 adapter smoke; #103 models MEASURED on synthetic-10k-works; sandbox only) | READY_TO_VALIDATE | READY_TO_VALIDATE | BLOCKED (PROD) |
 | PUBLICATION_CONCURRENCY | CONTRACT (TEMP_TABLES) | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
 | ORCHESTRATION | CONTRACT_ONLY (Step 20) | CLOUD_UNVERIFIED (no Composer) | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
 | DATA_QUALITY | DEMONSTRATED_LOCAL / SEMANTIC_ONLY | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
@@ -147,13 +147,15 @@ separation, and access logging.
 | `BigQueryWarehouse` adapter | implemented (#10) — dry-run + `maximum_bytes_billed`, fake-client tests |
 | Live ADC / real dataset jobs | **not** executed in default CI |
 | Live sandbox smoke (#92) | **passed** in GCP_SANDBOX: dry-run budget rejection, provider-enforced `maximum_bytes_billed`, bounded execute, typed `@parameter` binding, empty/null Arrow results ([details](bigquery-analytical-models.md#recorded-run-92)) |
+| Model deploy and MEASURE (#103) | **MEASURED** in GCP_SANDBOX on synthetic-10k-works: DDL matches contracts, all six publication decisions, `works` MERGE precedence, `work_topics` REPLACE rollback under failure injection (other relationship tables and dimensions were direct-loaded), below-floor cap rejected, `publication_year` pruning, small-sample latency ([details](bigquery-analytical-models.md#recorded-run-103)) |
 
-Therefore `BIGQUERY_ANALYTICAL` is `VERIFIED` for **GCP_SANDBOX only**, for the
-adapter contract, and `READY_TO_VALIDATE` for DEV/QA; PROD remains BLOCKED.
-The evidence used an operator-owned project and user ADC, deployed no tables,
-and does not cover MERGE/partition/cluster behaviour, MEASURED cost/latency,
-job timeout/cancellation under load, an enterprise-managed project, or a
-least-privilege runtime identity. GCP_SANDBOX
+Therefore `BIGQUERY_ANALYTICAL` is `VERIFIED` for **GCP_SANDBOX only** (the
+adapter contract, plus the models MEASURED at synthetic scale), and
+`READY_TO_VALIDATE` for DEV/QA; PROD remains BLOCKED.
+The evidence used an operator-owned project and user ADC on synthetic-10k-works.
+It does not cover production-scale cost/latency/concurrency, clustering
+effectiveness, job timeout/cancellation under load, an enterprise-managed
+project, or a least-privilege runtime identity. GCP_SANDBOX
 stays `NOT_READY` while other mandatory domains are unverified.
 
 **Do not run paid queries from this readiness step.**
@@ -174,7 +176,9 @@ readiness.
 ## Data quality / Gold / Data Service
 
 - DQ & Gold logic: `DEMONSTRATED_LOCAL` / `SEMANTIC_ONLY`
-- BigQuery-executed DQ/Gold: `CLOUD_UNVERIFIED`
+- BigQuery-executed DQ/Gold: `CLOUD_UNVERIFIED`. The DQ and Gold SQL ran once on
+  synthetic data in GCP_SANDBOX only (#103); DQ gating/alerting and Gold
+  deployment remain unverified.
 - Production alerting/on-call: not implemented
 - Data Service: domain contract + local in-memory demo; no HTTP/auth/scale/cache
 
@@ -263,8 +267,8 @@ No cloud calls. Results derive from the static readiness registry.
 ## Known gaps (blocking cloud readiness today)
 
 1. GCS beyond the sandbox (#91 verified GCP_SANDBOX only): DEV/QA, enterprise project, least-privilege identity  
-2. BigQuery beyond the adapter smoke (#92 verified GCP_SANDBOX only): deploy/MEASURE
-   models, DEV/QA, enterprise project, least-privilege identity  
+2. BigQuery beyond GCP_SANDBOX (#92 adapter, #103 models on synthetic-10k-works):
+   production-scale MEASURE, clustering, DEV/QA, enterprise project, least-privilege identity  
 3. No cloud IAM / WIF / secrets wiring  
 4. No Composer/Airflow deployment  
 5. No HTTP Data Service deploy  

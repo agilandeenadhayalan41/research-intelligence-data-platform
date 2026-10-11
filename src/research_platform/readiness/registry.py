@@ -89,9 +89,9 @@ def _local_entries() -> tuple[ReadinessEntry, ...]:
             EvidenceLevel.CONTRACT_DEFINED,
             "Step 15–16 BigQuery SQL/contracts + DuckDB SEMANTIC_ONLY; "
             "BigQueryWarehouse adapter offline-tested (#10); no live job in LOCAL; "
-            "live sandbox adapter evidence is GCP_SANDBOX (#92)",
-            gaps=("No paid/MEASURED BigQuery model execution evidence",),
-            next_action="Keep LOCAL offline; see GCP_SANDBOX for live-job evidence (#92)",
+            "live sandbox adapter and model evidence is GCP_SANDBOX (#92, #103)",
+            gaps=("No MEASURED BigQuery model execution evidence in LOCAL",),
+            next_action="Keep LOCAL offline; see GCP_SANDBOX for live-job evidence (#92, #103)",
             labels=(EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.SEMANTIC_ONLY),
             blocking=False,
         ),
@@ -239,17 +239,24 @@ def _sandbox_entries() -> tuple[ReadinessEntry, ...]:
                 "BigQueryWarehouse (#10) live sandbox smoke passed (#92): dry-run budget "
                 "rejection, provider-enforced maximum_bytes_billed (bytesBilledLimitExceeded "
                 "mapped to QueryBudgetExceededError), bounded execute, typed @parameter "
-                "binding, empty/null Arrow results; operator-owned sandbox project and "
-                "dataset (identifiers redacted)",
+                "binding, empty/null Arrow results. Step 15-16 models deployed and MEASURED "
+                "(#103, synthetic-10k-works): DDL matches contracts, all six publication "
+                "decisions, works MERGE precedence, work_topics REPLACE rollback under "
+                "failure injection, below-floor cap rejected, publication_year pruning "
+                "observed; operator-owned "
+                "sandbox project and dataset (identifiers redacted)",
                 (
-                    "Adapter contract only: no Step 15-16 tables deployed; MERGE/partition/"
-                    "cluster behaviour and MEASURED cost/latency unverified",
+                    "MEASURED on synthetic-10k-works only (#103): production-scale cost/latency, "
+                    "clustering effectiveness, concurrent publication and Gold "
+                    "refresh/materialization unverified; billed bytes are billing-floor artifacts",
+                    "MERGE/REPLACE exercised for works and work_topics only; the other "
+                    "relationship tables and dimensions were direct-loaded",
                     "Operator-owned project and user ADC, not an enterprise project or "
                     "least-privilege runtime identity",
                     "Job timeout/cancellation under load unverified",
                 ),
-                "Deploy and MEASURE the Step 15-16 models in an enterprise-managed project "
-                "with a least-privilege runtime identity before DEV promotion",
+                "Repeat the #103 deploy/MEASURE in an enterprise-managed project with a "
+                "least-privilege runtime identity before DEV promotion",
                 (EvidenceLabel.CONTRACT_DEFINED,),
             ),
             ReadinessDomain.GCS_RAW_LANDING: (
@@ -437,7 +444,8 @@ def _cloud_placeholder_matrix(
         ),
         ReadinessDomain.DATA_QUALITY: (
             EvidenceLevel.CLOUD_UNVERIFIED,
-            "DQ logic demonstrated locally (SEMANTIC_ONLY); BigQuery-executed DQ unverified",
+            "DQ logic demonstrated locally (SEMANTIC_ONLY); the BigQuery DQ SQL ran once on "
+            "synthetic data in GCP_SANDBOX only (#103); BigQuery DQ gating/alerting unverified",
             ("No production alerting/on-call", "DuckDB success ≠ BigQuery validation"),
             "Execute DQ against BigQuery and define alerting after runtime exists",
             (EvidenceLabel.SEMANTIC_ONLY, EvidenceLabel.CLOUD_UNVERIFIED),
