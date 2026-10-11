@@ -562,6 +562,11 @@ def main(argv: list[str] | None = None) -> int:
         run.sleep(args.cluster_settle_s)
     latency = measure_latency(run, cases, args.latency_runs, estimates) if args.latency_runs else {}
     measured = remeasure(run, measured, args.latency_runs)
+    if args.cluster_settle_s and not args.latency_runs:
+        # No repeats to re-measure from: run each pattern once more, after the wait.
+        for stem, (sql, params) in cases.items():
+            job = run.query(f"cluster-{stem}", sql, params=params, estimate=estimates[stem])
+            measured[stem] = (measured[stem][0], int(job.total_bytes_processed or 0), f"cluster-{stem}")
     probe = None
     if not args.skip_timeout_probe:
         sql, params = cases[TIMEOUT_PROBE_PATTERN]

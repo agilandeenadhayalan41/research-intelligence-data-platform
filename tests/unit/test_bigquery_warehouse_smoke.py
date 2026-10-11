@@ -275,14 +275,20 @@ def test_budget_abort_still_writes_the_summary(tmp_path: Path, fake: FakeBigQuer
     assert jobs[-1]["step"] == "bounded-execute"
 
 
-@pytest.mark.parametrize("name", ["openalex", "OpenAlex"])
-def test_empty_openalex_is_refused_with_evidence_and_no_jobs(tmp_path: Path, fake: FakeBigQuery, name: str) -> None:
+def test_empty_openalex_is_refused_with_evidence_and_no_jobs(tmp_path: Path, fake: FakeBigQuery) -> None:
     out = tmp_path / "out"
     with pytest.raises(SystemExit, match="--dataset openalex is empty"):
-        smoke.main([a if a != "scratch" else name for a in argv(out)])
+        smoke.main([a if a != "scratch" else "openalex" for a in argv(out)])
     summary, jobs = evidence(out)
     assert (summary["aborted"], summary["dataset_is_openalex"], summary["checks"], jobs) == ("SystemExit", True, [], [])
     assert fake.configs == []
+
+
+def test_dataset_names_are_case_sensitive(tmp_path: Path, fake: FakeBigQuery) -> None:
+    out = tmp_path / "out"
+    assert smoke.main([a if a != "scratch" else "OpenAlex" for a in argv(out)]) == 0  # a different, empty dataset
+    summary, _ = evidence(out)
+    assert summary["dataset_is_openalex"] is False
 
 
 def test_openalex_after_the_103_run_is_used_in_place(tmp_path: Path, fake: FakeBigQuery) -> None:
