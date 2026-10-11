@@ -29,6 +29,11 @@ from research_platform.analytics.bigquery.registry import (
     BigQueryAnalyticalRegistry,
     load_bigquery_analytical_registry,
     repo_path,
+    sql_root,
+)
+from research_platform.analytics.bigquery.staging import (
+    build_staging_table_contracts,
+    render_staging_ddl,
 )
 
 _MIN_MAX_LICENSE = re.compile(
@@ -40,10 +45,103 @@ _ACTIVE_PREDICATE = re.compile(
 )
 _SQL_LINE_COMMENT = re.compile(r"--.*?$", re.MULTILINE)
 
+# Folders whose CREATE statements produce tables that other repo SQL reads:
+# canonical DDL, #103 staging DDL, the #103 staged Gold audit build, and model
+# CREATE OR REPLACE TABLE/VIEW (CTAS decision tables, active_works view).
+SQL_TABLE_PRODUCER_DIRS: tuple[str, ...] = ("ddl", "staging", "gold_audit", "models")
+# Folders whose dataset-qualified table references must resolve to a producer.
+SQL_TABLE_CONSUMER_DIRS: tuple[str, ...] = (
+    "models",
+    "quality",
+    "gold",
+    "queries",
+    "staging",
+    "gold_audit",
+)
+
 
 def _strip_sql_comments(text: str) -> str:
     """Remove `--` line comments before structural pattern checks."""
     return _SQL_LINE_COMMENT.sub("", text)
+
+
+@dataclass(frozen=True)
+class SqlTableCoverage:
+    """Which repo SQL files create and which read each ``<dataset>.<table>``.
+
+    Paths are relative to the SQL root (``ddl/works.sql``). Only backtick-quoted
+    two-part names are recognised; ``unrecognized_references`` lists files that
+    mention the dataset any other way, so the check cannot be bypassed silently.
+    """
+
+    dataset: str
+    producers: dict[str, tuple[str, ...]]
+    references: dict[str, tuple[str, ...]]
+    unrecognized_references: tuple[str, ...]
+
+    @property
+    def unproduced(self) -> dict[str, tuple[str, ...]]:
+        """Referenced tables no producer folder creates, with their readers."""
+        return {
+            table: files
+            for table, files in self.references.items()
+            if table not in self.producers
+        }
+
+    @property
+    def multiply_produced(self) -> dict[str, tuple[str, ...]]:
+        return {table: files for table, files in self.producers.items() if len(files) > 1}
+
+
+def sql_table_coverage(
+    root: Path | None = None,
+    *,
+    dataset: str = "openalex",
+) -> SqlTableCoverage:
+    """Map every dataset table that repo SQL reads to the file(s) that create it.
+
+    A text scan, not a SQL parser: ``--`` comments are stripped, then
+    ``CREATE [OR REPLACE] TABLE|VIEW [IF NOT EXISTS] `<dataset>.<t>``` in a
+    producer folder counts as creating ``t`` and any `` `<dataset>.<t>` `` in a
+    consumer folder counts as reading it.
+    """
+    base = root or sql_root()
+    qualified = re.escape(dataset)
+    create = re.compile(
+        r"\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+        rf"`{qualified}\.(\w+)`",
+        re.IGNORECASE,
+    )
+    reference = re.compile(rf"`{qualified}\.(\w+)`")
+    mention = re.compile(rf"\b{qualified}\.\w")
+
+    producers: dict[str, list[str]] = {}
+    references: dict[str, list[str]] = {}
+    unrecognized: list[str] = []
+
+    def sql_files(folder: str) -> list[Path]:
+        return sorted((base / folder).glob("*.sql"))
+
+    for folder in SQL_TABLE_PRODUCER_DIRS:
+        for path in sql_files(folder):
+            code = _strip_sql_comments(path.read_text(encoding="utf-8"))
+            relative = path.relative_to(base).as_posix()
+            for table in dict.fromkeys(create.findall(code)):
+                producers.setdefault(table, []).append(relative)
+    for folder in SQL_TABLE_CONSUMER_DIRS:
+        for path in sql_files(folder):
+            code = _strip_sql_comments(path.read_text(encoding="utf-8"))
+            relative = path.relative_to(base).as_posix()
+            for table in dict.fromkeys(reference.findall(code)):
+                references.setdefault(table, []).append(relative)
+            if mention.search(reference.sub("", code)):
+                unrecognized.append(relative)
+    return SqlTableCoverage(
+        dataset=dataset,
+        producers={table: tuple(files) for table, files in sorted(producers.items())},
+        references={table: tuple(files) for table, files in sorted(references.items())},
+        unrecognized_references=tuple(unrecognized),
+    )
 
 
 @dataclass(frozen=True)
@@ -370,6 +468,45 @@ def validate_static_contracts(
                 "@year_from" in text and "@year_to" in text,
                 f"{query.sql_path} must expose year_from/year_to bounds",
             )
+
+    # #103 staging DDL: rendered from the target contracts, byte-identical on disk.
+    for staging in build_staging_table_contracts(registry.tables):
+        path = repo_path(staging.ddl_path)
+        ok(path.is_file(), f"missing staging DDL: {staging.ddl_path}")
+        if path.is_file():
+            ok(
+                path.read_text(encoding="utf-8")
+                == render_staging_ddl(staging, dataset=registry.dataset),
+                f"{staging.ddl_path} differs from render_staging_ddl",
+            )
+
+    # #103: every table that models/, quality/, gold/ (and queries/, staging/,
+    # gold_audit/) SQL reads must be created by ddl/, staging/, gold_audit/ or
+    # a model CREATE OR REPLACE TABLE/VIEW.
+    coverage = sql_table_coverage(dataset=registry.dataset)
+    for table, readers in coverage.references.items():
+        ok(
+            table in coverage.producers,
+            f"`{registry.dataset}.{table}` has no DDL or creating SQL "
+            f"(read by {', '.join(readers)})",
+        )
+    for table, files in coverage.producers.items():
+        ok(
+            len(files) == 1,
+            f"`{registry.dataset}.{table}` is created by more than one file: "
+            f"{', '.join(files)}",
+        )
+    ok(
+        not coverage.unrecognized_references,
+        "dataset references must be backtick-quoted two-part names: "
+        f"{', '.join(coverage.unrecognized_references)}",
+    )
+    for table in registry.tables:
+        ddl = repo_path(table.ddl_path).relative_to(sql_root()).as_posix()
+        ok(
+            coverage.producers.get(table.table_name) == (ddl,),
+            f"{table.table_name} must be created only by {table.ddl_path}",
+        )
 
     ok(registry.maximum_bytes_billed > 0, "maximum_bytes_billed must be positive")
     return StaticValidationReport(

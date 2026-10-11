@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,9 +19,18 @@ from research_platform.analytics.bigquery.contracts import ValidationLabel
 from research_platform.analytics.bigquery.registry import (
     load_bigquery_analytical_registry,
 )
+from research_platform.analytics.gold.bigquery_audit import (
+    GOLD_EXCLUSION_QUALITY_SQL,
+    GoldAuditError,
+    gold_audit_sql_path,
+    gold_select_statement,
+    mart_ids_in_unnest_sql,
+    render_gold_audit_sql,
+)
 from research_platform.analytics.gold.contracts import (
     MATERIALIZATION_PROMOTION_RULE,
     EvidenceStatus,
+    GoldMartContract,
     MaterializationMode,
 )
 from research_platform.analytics.gold.registry import (
@@ -197,11 +207,67 @@ def validate_static_gold_contracts(
     ]
     ok(not materialized, f"unsupported MATERIALIZED marts: {materialized}")
 
+    _validate_gold_audit_build(marts, root=root, ok=ok)
+
     return StaticValidationReport(
         label=ValidationLabel.BIGQUERY_SQL_CONTRACT,
         errors=tuple(errors),
         checks_passed=passed,
     )
+
+
+def _validate_gold_audit_build(
+    marts: tuple[GoldMartContract, ...],
+    *,
+    root: Path,
+    ok: Callable[[bool, str], None],
+) -> None:
+    """#103 BigQuery staged Gold audit build: rendered, on disk, registry-exact."""
+    for mart in marts:
+        if not gold_sql_path(mart, repo_root=root).is_file():
+            continue
+        try:
+            gold_select_statement(mart, repo_root=root)
+        except GoldAuditError as exc:
+            ok(False, f"{mart.mart_id}: {exc}")
+        else:
+            ok(True, "")
+
+    try:
+        rendered = render_gold_audit_sql(marts, repo_root=root)
+    except GoldAuditError as exc:
+        ok(False, f"staged Gold audit build cannot render: {exc}")
+        return
+    for table_name, text in rendered.items():
+        relative = gold_audit_sql_path(table_name)
+        path = root / relative
+        ok(path.is_file(), f"missing staged Gold audit build: {relative}")
+        if path.is_file():
+            ok(
+                path.read_text(encoding="utf-8") == text,
+                f"{relative} differs from render_gold_audit_sql",
+            )
+
+    expected = tuple(m.mart_id for m in marts)
+    for relative, ordered in (
+        (gold_audit_sql_path("staged_gold_mart_manifest"), True),
+        (GOLD_EXCLUSION_QUALITY_SQL, False),
+    ):
+        path = root / relative
+        if not path.is_file():
+            ok(False, f"missing {relative}")
+            continue
+        try:
+            found = mart_ids_in_unnest_sql(path.read_text(encoding="utf-8"))
+        except GoldAuditError as exc:
+            ok(False, f"{relative}: {exc}")
+            continue
+        matches = (
+            found == expected
+            if ordered
+            else len(found) == len(set(found)) and set(found) == set(expected)
+        )
+        ok(matches, f"{relative}: mart_ids {found} differ from load_gold_registry()")
 
 
 def _seed_gold_semantic_fixture(conn: duckdb.DuckDBPyConnection) -> None:
