@@ -236,11 +236,11 @@ def test_bigquery_verified_only_in_sandbox_with_evidence_and_honest_gaps() -> No
     sandbox = levels[EnvironmentName.GCP_SANDBOX]
     assert sandbox.evidence_level is EvidenceLevel.VERIFIED
     assert sandbox.blocking is False
-    assert "#92" in sandbox.evidence
+    assert "#92" in sandbox.evidence and "#103" in sandbox.evidence
     assert EvidenceLabel.CLOUD_UNVERIFIED not in sandbox.evidence_labels
     gaps = " ".join(sandbox.gaps)
-    # Adapter-contract evidence only: the analytical models stay unmeasured.
-    assert "MERGE/partition/" in gaps and "MEASURED" in gaps
+    # #103 MEASURED the models on synthetic data only; scale and clustering stay open.
+    assert "synthetic-10k-works only" in gaps and "clustering" in gaps
     assert "least-privilege" in gaps
     assert "enterprise" in gaps
     assert levels[EnvironmentName.DEV].evidence_level is EvidenceLevel.READY_TO_VALIDATE

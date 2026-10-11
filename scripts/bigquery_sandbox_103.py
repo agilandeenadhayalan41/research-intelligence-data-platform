@@ -23,11 +23,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
+import time
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +39,7 @@ from google.cloud import bigquery
 from research_platform.analytics.bigquery.contracts import build_table_contracts
 from research_platform.analytics.bigquery.sandbox.synthetic import write_synthetic_cycle
 from research_platform.config.models import CloudConfig, WarehouseConfig
+from research_platform.quality.registry import load_quality_registry
 from research_platform.warehouse.bigquery import BigQueryWarehouse
 
 REPO = Path(__file__).resolve().parents[1]
@@ -50,13 +53,14 @@ YEAR_BOUNDED = ("publication_trends", "open_access_trends", "publisher_topic_lic
 
 
 class Run:
-    def __init__(self, client: bigquery.Client, run_id: str, budget_bytes: int) -> None:
+    def __init__(self, client: bigquery.Client, run_id: str, budget_bytes: int, log: Path | None = None) -> None:
         self.client = client
         self.run_id = run_id
         self.budget_bytes = budget_bytes
         self.billed = 0
         self.jobs: list[dict[str, Any]] = []
         self.checks: list[dict[str, Any]] = []
+        self.log = log  # jobs.jsonl, appended per job so a crash keeps the record
 
     def check(self, name: str, ok: bool, detail: object = "") -> None:
         self.checks.append({"check": name, "ok": bool(ok), "detail": detail})
@@ -82,53 +86,64 @@ class Run:
             query_parameters=params or [],
             labels={"run": self.run_id, "step": label(step)},
         )
+        started = time.perf_counter()
         job = self.client.query(sql, job_config=config)
         error = None
         if not dry_run:
             try:
                 job.result(timeout=600)
-            except Exception as exc:  # noqa: BLE001 - recorded, re-raised unless expected
+            except Exception as exc:  # recorded; re-raised unless expected
+                # result() raises from getQueryResults without refreshing the job's
+                # status, so error_result stays None for scripts until a reload.
+                job.reload()
                 error = (job.error_result or {}).get("reason") or type(exc).__name__
                 if not expect_error:
-                    self._record(step, job, cap, dry_run, error)
+                    self._record(step, job, cap, dry_run, error, time.perf_counter() - started)
                     raise
-        self._record(step, job, cap, dry_run, error)
+        self._record(step, job, cap, dry_run, error, time.perf_counter() - started)
         return job
 
-    def _record(self, step: str, job: bigquery.QueryJob, cap: int, dry_run: bool, error: str | None) -> None:
+    def _record(self, step: str, job: bigquery.QueryJob, cap: int, dry_run: bool, error: str | None, wall_s: float | None) -> None:
         billed = 0 if dry_run else int(job.total_bytes_billed or 0)
         self.billed += billed
         dml = job.dml_stats
-        self.jobs.append(
-            {
-                "step": step,
-                "job_id": job.job_id,
-                "dry_run": dry_run,
-                "statement_type": job.statement_type,
-                "cap": cap,
-                "total_bytes_processed": job.total_bytes_processed,
-                "total_bytes_billed": billed,
-                "floor_artifact": billed > 0 and billed % BILLING_FLOOR == 0,
-                "slot_ms": None if dry_run else job.slot_millis,
-                "cache_hit": None if dry_run else job.cache_hit,
-                "ddl_operation_performed": job.ddl_operation_performed,
-                "dml_stats": None if dml is None else {
-                    "inserted": dml.inserted_row_count,
-                    "updated": dml.updated_row_count,
-                    "deleted": dml.deleted_row_count,
-                },
-                "error": error,
-                "started": None if dry_run or job.started is None else job.started.isoformat(),
-                "ended": None if dry_run or job.ended is None else job.ended.isoformat(),
-            }
-        )
+        record = {
+            "step": step,
+            "job_id": job.job_id,
+            "dry_run": dry_run,
+            "statement_type": job.statement_type,
+            "cap": cap,
+            "total_bytes_processed": job.total_bytes_processed,
+            "total_bytes_billed": billed,
+            "floor_artifact": billed > 0 and billed % BILLING_FLOOR == 0,
+            "slot_ms": None if dry_run else job.slot_millis,
+            "cache_hit": None if dry_run else job.cache_hit,
+            "ddl_operation_performed": job.ddl_operation_performed,
+            "dml_stats": None if dml is None else {
+                "inserted": dml.inserted_row_count,
+                "updated": dml.updated_row_count,
+                "deleted": dml.deleted_row_count,
+            },
+            "error": error,
+            "started": None if dry_run or job.started is None else job.started.isoformat(),
+            "ended": None if dry_run or job.ended is None else job.ended.isoformat(),
+            "elapsed_ms": None if dry_run or job.started is None or job.ended is None else (job.ended - job.started) / timedelta(milliseconds=1),
+            "wall_ms": None if wall_s is None else round(wall_s * 1000, 1),
+        }
+        self.jobs.append(record)
+        if self.log is not None:
+            with self.log.open("a") as handle:
+                handle.write(json.dumps(record, default=str) + "\n")
 
     def rows(self, step: str, sql: str, params: list[Any] | None = None) -> list[dict[str, Any]]:
         return [dict(row) for row in self.query(step, sql, params=params).result()]
 
+    def children(self, job: bigquery.QueryJob) -> list[Any]:
+        return sorted(self.client.list_jobs(parent_job=job.job_id), key=lambda child: child.created)
+
     def script_dml(self, job: bigquery.QueryJob) -> dict[str, int]:
         totals = Counter()
-        for child in self.client.list_jobs(parent_job=job.job_id):
+        for child in self.children(job):
             stats = getattr(child, "dml_stats", None)
             if stats is not None:
                 totals["inserted"] += stats.inserted_row_count
@@ -148,6 +163,28 @@ class Run:
         expected = pq.ParquetFile(path).metadata.num_rows
         self.check(f"load {table}", job.output_rows == expected, f"{job.output_rows}/{expected} rows")
         return int(job.output_rows or 0)
+
+
+class AdapterClient:
+    """The real client for an unmodified BigQueryWarehouse, adding the run label so its jobs are logged and billed."""
+
+    def __init__(self, run: Run) -> None:
+        self.run = run
+        self.step = "adapter"
+        self.pending: list[tuple[bigquery.QueryJob, bigquery.QueryJobConfig]] = []
+
+    def query(self, sql: str, job_config: bigquery.QueryJobConfig) -> bigquery.QueryJob:
+        job_config.labels = {"run": self.run.run_id, "step": label(self.step)}
+        job = self.run.client.query(sql, job_config=job_config)
+        self.pending.append((job, job_config))
+        return job
+
+    def flush(self) -> None:
+        """Record the jobs of the last warehouse.query() call once it has returned."""
+        for job, config in self.pending:
+            dry = bool(config.dry_run)
+            self.run._record(self.step + ("-dry" if dry else ""), job, config.maximum_bytes_billed or 0, dry, None, None)
+        self.pending.clear()
 
 
 def label(value: str) -> str:
@@ -183,6 +220,34 @@ def decision_counts(run: Run, step: str) -> dict[str, int]:
     return {row["d"]: int(row["n"]) for row in rows}
 
 
+def nearest_rank(values: list[float], q: float) -> float:
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(q * len(ordered)) - 1)]
+
+
+def measure_latency(run: Run, cases: dict[str, tuple[str, list[Any]]], runs: int) -> dict[str, dict[str, Any]]:
+    """Cache-off repeats of each query pattern: small-sample nearest-rank p50/p95."""
+    latency = {}
+    for stem, (sql, params) in cases.items():
+        for i in range(runs):
+            run.query(f"latency-{stem}-{i:02d}", sql, params=params)
+        records = run.jobs[-runs:]
+        elapsed = [r["elapsed_ms"] for r in records]
+        wall = [r["wall_ms"] for r in records]
+        latency[stem] = {
+            "runs": runs,
+            "any_cache_hit": any(r["cache_hit"] for r in records),
+            "elapsed_ms_p50": nearest_rank(elapsed, 0.5),
+            "elapsed_ms_p95": nearest_rank(elapsed, 0.95),
+            "wall_ms_p50": nearest_rank(wall, 0.5),
+            "wall_ms_p95": nearest_rank(wall, 0.95),
+            "slot_ms_p50": nearest_rank([r["slot_ms"] or 0 for r in records], 0.5),
+            "processed_bytes": records[0]["total_bytes_processed"],
+            "billed_bytes_per_run": records[0]["total_bytes_billed"],
+        }
+    return latency
+
+
 def publish(run: Run, batch: str, expected: dict[str, Any]) -> None:
     run.query(f"{batch}-decisions", text("models/work_publication_decisions.sql"))
     got = decision_counts(run, f"{batch}-decision-counts")
@@ -200,6 +265,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--scale", default="default", choices=("tiny", "default"))
     parser.add_argument("--budget-gib", type=float, default=20.0)
+    parser.add_argument("--latency-runs", type=int, default=21, help="cache-off repeats per query pattern (0 skips)")
     args = parser.parse_args(argv)
 
     project = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
@@ -216,7 +282,9 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("dataset openalex must be empty; refusing to deploy")
     if dataset.default_partition_expiration_ms:
         raise SystemExit("dataset has a default partition expiration; old partitions would vanish")
-    run = Run(client, "i103-" + datetime.now(UTC).strftime("%Y%m%dt%H%M%S"), int(args.budget_gib * 1024 * MIB))
+    log = out / "jobs.jsonl"
+    log.write_text("")
+    run = Run(client, "i103-" + datetime.now(UTC).strftime("%Y%m%dt%H%M%S"), int(args.budget_gib * 1024 * MIB), log)
     print(f"run {run.run_id}: location {dataset.location}, table expiration ms {dataset.default_table_expiration_ms}")
 
     # Deploy: 15 contract tables, the active_works view, 2 staging tables.
@@ -283,7 +351,12 @@ def main(argv: list[str] | None = None) -> int:
     run.query("inject-truncate", "TRUNCATE TABLE `openalex.work_topics_staging`")
     run.load("work_topics_staging", cycle / expected["injection"]["path"])
     failed = run.query("inject-merge_work_topics", text("models/merge_work_topics.sql"), expect_error=True)
-    run.check("NULL topic_id merge fails", failed.error_result is not None, (failed.error_result or {}).get("reason"))
+    steps = [(child.statement_type, (child.error_result or {}).get("reason")) for child in run.children(failed)]
+    run.check(
+        "NULL topic_id merge fails and rolls back",
+        failed.error_result is not None and "ROLLBACK_TRANSACTION" in [s for s, _ in steps],
+        {"reason": (failed.error_result or {}).get("reason"), "children": steps, "rolled_back_dml": run.script_dml(failed)},
+    )
     run.check("failed merge left work_topics unchanged", fingerprint(run, "inject-after", "work_topics") == topics_before)
     run.query("b2-restage-topics", "TRUNCATE TABLE `openalex.work_topics_staging`")
     run.load("work_topics_staging", cycle / "batch2" / "work_topics_staging.parquet")
@@ -304,6 +377,8 @@ def main(argv: list[str] | None = None) -> int:
             result = run.rows(f"{folder}-{path.stem}", sql)
             if folder == "quality":
                 run.checks.append({"check": f"quality {path.stem}", "ok": True, "detail": result[:3]})
+    not_run = [c.check_id for c in load_quality_registry() if not c.sql_path]
+    print(f"NOT_RUN quality checks without BigQuery SQL: {not_run}")
     for mart, column in (("research_discovery", "work_id"), ("citation_edges", "source_work_id")):
         body = select_body(text(f"gold/{mart}.sql"))
         leaked = run.rows(f"exclusion-{mart}", f"SELECT COUNT(*) AS n FROM ({body}) AS g JOIN `openalex.works` AS w ON g.{column} = w.work_id WHERE w.activity_state = 'DELETED'")[0]["n"]
@@ -325,14 +400,19 @@ def main(argv: list[str] | None = None) -> int:
     """)[0]
     year_from = int(pick["year_max"]) - 1
     values = {**{k: pick[k] for k in ("work_id", "doi", "publisher_id", "source_id", "institution_id")}, "year_from": year_from, "year_to": int(pick["year_max"])}
-    warehouse = BigQueryWarehouse(WarehouseConfig(analytical="bigquery", bigquery_dataset=DATASET), CloudConfig(project_id=project), client=client, maximum_bytes_billed=64 * MIB)
+    adapter_client = AdapterClient(run)
+    warehouse = BigQueryWarehouse(WarehouseConfig(analytical="bigquery", bigquery_dataset=DATASET), CloudConfig(project_id=project), client=adapter_client, maximum_bytes_billed=64 * MIB)
+    cases: dict[str, tuple[str, list[Any]]] = {}
     for path in sorted((SQL / "queries").glob("*.sql")):
         sql = path.read_bytes().decode("utf-8")
         names = sorted(set(re.findall(r"@([a-z_]+)", sql)))
         params = [bigquery.ScalarQueryParameter(n, "INT64" if n.startswith("year_") else "STRING", values[n]) for n in names]
+        cases[path.stem] = (sql, params)
         run.query(f"query-{path.stem}-dry", sql, params=params, dry_run=True)
         result = run.rows(f"query-{path.stem}", sql, params)
+        adapter_client.step = f"adapter-{path.stem}"
         adapter = warehouse.query(sql, {n: values[n] for n in names})
+        adapter_client.flush()
         run.check(f"query {path.stem} runs (raw + adapter)", adapter.num_rows == len(result), f"{len(result)} rows")
         if path.stem in YEAR_BOUNDED:
             variants = {
@@ -344,7 +424,9 @@ def main(argv: list[str] | None = None) -> int:
             pruning["literal"] = run.query(f"prune-{path.stem}-literal", literal, params=[p for p in params if not p.name.startswith("year_")], dry_run=True).total_bytes_processed
             run.checks.append({"check": f"pruning {path.stem}", "ok": True, "detail": pruning})
 
-    partitions = run.rows("partitions", "SELECT table_name, COUNT(*) AS partitions, SUM(total_rows) AS rows FROM `openalex.INFORMATION_SCHEMA.PARTITIONS` GROUP BY table_name ORDER BY table_name")
+    latency = measure_latency(run, cases, args.latency_runs) if args.latency_runs else {}
+    # ROWS is a reserved keyword in BigQuery, so it cannot be a bare alias.
+    partitions = run.rows("partitions", "SELECT table_name, COUNT(*) AS partition_count, SUM(total_rows) AS row_count FROM `openalex.INFORMATION_SCHEMA.PARTITIONS` GROUP BY table_name ORDER BY table_name")
 
     failed_checks = [c for c in run.checks if not c["ok"]]
     summary = {
@@ -355,10 +437,12 @@ def main(argv: list[str] | None = None) -> int:
         "billed_bytes": run.billed,
         "checks": run.checks,
         "failed": len(failed_checks),
+        "not_run": not_run,
         "params": {k: (v if k.startswith("year_") else "<chosen from data>") for k, v in values.items()},
+        "latency": latency,
+        "clustering": "NOT MEASURED (tables of KB-MB)",
         "partitions": partitions,
     }
-    (out / "jobs.jsonl").write_text("".join(json.dumps(j, default=str) + "\n" for j in run.jobs))
     (out / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
     print(f"\n{len(run.checks) - len(failed_checks)}/{len(run.checks)} checks passed; {len(run.jobs)} jobs; {run.billed} bytes billed")
     return 1 if failed_checks else 0

@@ -106,8 +106,8 @@ LOCAL (evidence only) → GCP_SANDBOX → DEV → QA → PROD
 Today Sandbox/DEV/QA/PROD are all `NOT_READY`. GCS (#9) and the BigQuery
 adapter (#10) are `VERIFIED` in GCP_SANDBOX only (#91/#92 live smokes;
 operator-owned project, user ADC), `READY_TO_VALIDATE` for DEV/QA, and
-`BLOCKED` in PROD. The BigQuery evidence covers the adapter contract only; the
-Step 15–16 models are not deployed or MEASURED.
+`BLOCKED` in PROD. The Step 15–16 BigQuery models were deployed and MEASURED in
+GCP_SANDBOX on synthetic-10k-works only (#103), not at production scale.
 IAM / Composer / HTTP deploy gaps remain. Do not equate YAML presence or
 adapter code with production readiness.
 
