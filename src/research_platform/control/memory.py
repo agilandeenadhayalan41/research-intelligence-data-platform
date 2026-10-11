@@ -40,6 +40,13 @@ from research_platform.control.reconciliation import (
 from research_platform.control.store import ControlStore
 from research_platform.provenance.models import IngestionProvenance
 
+# record_provenance idempotency key: (record_id, asset_id, checksum, run_id).
+_ProvenanceKey = tuple[str, str, str, UUID]
+
+
+def _provenance_key(row: RecordProvenance) -> _ProvenanceKey:
+    return (row.record_id, row.asset_id, row.source_checksum_sha256, row.run_id)
+
 
 class InMemoryControlStore(ControlStore):
     """Thread-safe in-memory control plane with atomic claim semantics."""
@@ -49,6 +56,9 @@ class InMemoryControlStore(ControlStore):
         self._runs: dict[UUID, PipelineRun] = {}
         self._files: dict[str, SourceFileControl] = {}
         self._provenance: list[RecordProvenance] = []
+        # Position in _provenance of each idempotency key, so record_provenance
+        # does not scan the list. Rebind both only through _restore_provenance.
+        self._provenance_index: dict[_ProvenanceKey, int] = {}
 
     def get_pipeline_run(self, run_id: UUID) -> PipelineRun | None:
         with self._lock:
@@ -232,17 +242,24 @@ class InMemoryControlStore(ControlStore):
         with self._lock:
             stored = RecordProvenance.model_validate(record.model_dump(mode="python"))
             # Idempotent on (record_id, asset_id, checksum, run_id)
-            for index, existing in enumerate(self._provenance):
-                if (
-                    existing.record_id == stored.record_id
-                    and existing.asset_id == stored.asset_id
-                    and existing.source_checksum_sha256 == stored.source_checksum_sha256
-                    and existing.run_id == stored.run_id
-                ):
-                    self._provenance[index] = stored
-                    return stored
+            key = _provenance_key(stored)
+            index = self._provenance_index.get(key)
+            if index is not None:
+                self._provenance[index] = stored
+                return stored
+            self._provenance_index[key] = len(self._provenance)
             self._provenance.append(stored)
             return stored
+
+    def _restore_provenance(self, rows: list[RecordProvenance]) -> None:
+        """Rebind provenance to ``rows`` (unit-of-work rollback) and re-index it."""
+        with self._lock:
+            index: dict[_ProvenanceKey, int] = {}
+            for position, row in enumerate(rows):
+                # First match wins, as the list scan this index replaces did.
+                index.setdefault(_provenance_key(row), position)
+            self._provenance = rows
+            self._provenance_index = index
 
     def _require_run(self, run_id: UUID) -> PipelineRun:
         run = self._runs.get(run_id)

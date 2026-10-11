@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from dataclasses import dataclass
 
 from research_platform.canonical.memory import InMemoryCanonicalStore
@@ -69,27 +68,31 @@ def publish_claimed_asset_memory(
         return AssetPublishResult(source_file=succeeded, counters=counters)
     except Exception:
         _restore_canonical(canonical, snap)
-        control._provenance = provenance_before  # noqa: SLF001
+        control._restore_provenance(provenance_before)  # noqa: SLF001
         raise
 
 
 def _snapshot_canonical(store: InMemoryCanonicalStore) -> _CanonicalSnapshot:
+    # Shallow copies are enough: every stored value is a frozen model whose
+    # fields are scalars or a frozen CanonicalLineage, and the store replaces
+    # relationship inner dicts (work_id -> rows) instead of mutating them.
+    # A deep copy cost one model copy per stored row on every published asset.
     return _CanonicalSnapshot(
-        works=copy.deepcopy(store._works),  # noqa: SLF001
-        authors=copy.deepcopy(store._authors),  # noqa: SLF001
-        institutions=copy.deepcopy(store._institutions),  # noqa: SLF001
-        sources=copy.deepcopy(store._sources),  # noqa: SLF001
-        publishers=copy.deepcopy(store._publishers),  # noqa: SLF001
-        topics=copy.deepcopy(store._topics),  # noqa: SLF001
-        funders=copy.deepcopy(store._funders),  # noqa: SLF001
-        work_authors=copy.deepcopy(store._work_authors),  # noqa: SLF001
-        work_author_institutions=copy.deepcopy(store._work_author_institutions),  # noqa: SLF001
-        work_topics=copy.deepcopy(store._work_topics),  # noqa: SLF001
-        work_keywords=copy.deepcopy(store._work_keywords),  # noqa: SLF001
-        work_references=copy.deepcopy(store._work_references),  # noqa: SLF001
-        work_mesh=copy.deepcopy(store._work_mesh),  # noqa: SLF001
-        work_locations=copy.deepcopy(store._work_locations),  # noqa: SLF001
-        work_grants=copy.deepcopy(store._work_grants),  # noqa: SLF001
+        works=dict(store._works),  # noqa: SLF001
+        authors=dict(store._authors),  # noqa: SLF001
+        institutions=dict(store._institutions),  # noqa: SLF001
+        sources=dict(store._sources),  # noqa: SLF001
+        publishers=dict(store._publishers),  # noqa: SLF001
+        topics=dict(store._topics),  # noqa: SLF001
+        funders=dict(store._funders),  # noqa: SLF001
+        work_authors=dict(store._work_authors),  # noqa: SLF001
+        work_author_institutions=dict(store._work_author_institutions),  # noqa: SLF001
+        work_topics=dict(store._work_topics),  # noqa: SLF001
+        work_keywords=dict(store._work_keywords),  # noqa: SLF001
+        work_references=dict(store._work_references),  # noqa: SLF001
+        work_mesh=dict(store._work_mesh),  # noqa: SLF001
+        work_locations=dict(store._work_locations),  # noqa: SLF001
+        work_grants=dict(store._work_grants),  # noqa: SLF001
     )
 
 

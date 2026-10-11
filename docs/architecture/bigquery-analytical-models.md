@@ -390,7 +390,13 @@ preset (`scripts/bigquery_sandbox_103.py --scale large`, 100,100 batch-1 works).
 Its results will be labelled MEASURED (synthetic-<N>), and item 2 (a
 representative slice) stays open. No public-slice path is built.
 
-Generating the `large` cycle locally currently takes an estimated 20 hours,
-extrapolated from 746 s for `default`. The cause is in `InMemoryCanonicalStore`:
-it rebuilds every relationship map on each work upsert, so ingestion time grows
-with the square of the corpus.
+Generating the `large` cycle locally was estimated at 20 hours, because
+`InMemoryCanonicalStore` rebuilt every relationship map on each work upsert.
+With that fixed (relationship rows nested by work, an indexed provenance list
+and shallow rollback snapshots), generation time grows linearly with the corpus.
+Measured on 2026-10-11 (WSL, 4 cores, 7.7 GiB RAM): `large` took 288 s and
+379 s in two runs, which wrote identical manifests, and `default` took 21-30 s
+(723 s before the fix). Memory is now the limit. Peak RSS was 5.3-5.4 GiB at
+`large` (0.7 GiB at `default`), reached in `export_snapshot_to_parquet`, which
+builds all 15 tables before writing any of them; free memory on that VM fell
+to 0.3-0.4 GB. Run `--scale large` on a host with at least 6 GB free.
