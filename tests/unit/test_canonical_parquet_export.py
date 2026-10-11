@@ -6,11 +6,14 @@ No network, cloud or BigQuery calls. Every file is written under ``tmp_path``.
 from __future__ import annotations
 
 import dataclasses
+import fnmatch
 import gzip
 import hashlib
 import io
 import json
+import os
 import re
+import stat
 from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -20,6 +23,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from research_platform.analytics.bigquery.contracts import (
     build_table_contracts,
@@ -36,8 +40,10 @@ from research_platform.canonical.openalex.export import (
     CANONICAL_TABLE_MODELS,
     CANONICAL_TABLE_NAMES,
     PARQUET_COMPRESSION,
+    PARQUET_TEMP_SUFFIX,
     CanonicalExportError,
     CanonicalParquetExport,
+    CanonicalParquetFile,
     canonical_parquet_path,
     canonical_row,
     canonical_table_to_arrow,
@@ -517,6 +523,130 @@ def test_export_refuses_existing_files_without_overwrite(tmp_path: Path) -> None
     table = canonical_table_to_arrow("works", ())
     with pytest.raises(CanonicalExportError, match="refusing to overwrite"):
         write_canonical_parquet("works", table, canonical_parquet_path(tmp_path, "works"))
+
+
+def test_export_refuses_before_writing_when_only_the_last_target_exists(tmp_path: Path) -> None:
+    # Without the up-front check, the first 14 tables would be written before the
+    # per-file refusal on work_grants, leaving a mixed export.
+    last = canonical_parquet_path(tmp_path, CANONICAL_TABLE_NAMES[-1])
+    assert last.name == "work_grants.parquet"
+    last.write_bytes(b"stale")
+    with pytest.raises(CanonicalExportError, match=r"refusing to overwrite .*\['work_grants'\]"):
+        export_snapshot_to_parquet(_snapshot(), tmp_path)
+    assert [path.name for path in tmp_path.iterdir()] == ["work_grants.parquet"]
+    assert last.read_bytes() == b"stale"
+
+
+@pytest.mark.parametrize(
+    "failure", [OSError("disk full"), KeyboardInterrupt()], ids=["oserror", "interrupt"]
+)
+def test_failed_write_keeps_target_intact_and_removes_temp_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: BaseException
+) -> None:
+    table = canonical_table_to_arrow("works", _snapshot().works)
+    fresh = tmp_path / "fresh" / "works.parquet"
+    existing = write_canonical_parquet(
+        "works", canonical_table_to_arrow("works", ()), tmp_path / "existing" / "works.parquet"
+    )
+    attempted: list[Path] = []
+
+    def partial_then_fail(_: pa.Table, where: Any, **__: Any) -> None:
+        path = Path(where)
+        attempted.append(path)
+        path.write_bytes(b"PAR1 partial")
+        raise failure
+
+    monkeypatch.setattr(
+        "research_platform.canonical.openalex.export.pq.write_table", partial_then_fail
+    )
+    with pytest.raises(type(failure)):
+        write_canonical_parquet("works", table, fresh)
+    assert not fresh.exists()
+    with pytest.raises(type(failure)):
+        write_canonical_parquet("works", table, existing.path, overwrite=True)
+    assert _sha256(existing.path) == existing.sha256
+
+    # Both attempts went to hidden, git-ignored temp siblings, never the target.
+    assert [path.parent for path in attempted] == [fresh.parent, existing.path.parent]
+    for path in attempted:
+        assert path.name.startswith(".works.") and path.name.endswith(PARQUET_TEMP_SUFFIX)
+        assert not path.exists()
+    assert list(fresh.parent.iterdir()) == []
+    assert [path.name for path in existing.path.parent.iterdir()] == ["works.parquet"]
+
+
+def test_temp_file_suffix_is_git_ignored_and_never_matches_parquet_globs(
+    repo_root: Path,
+) -> None:
+    patterns = (repo_root / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert f"*{PARQUET_TEMP_SUFFIX}" in patterns
+    temp_name = f".works.{'0' * 32}{PARQUET_TEMP_SUFFIX}"
+    assert fnmatch.fnmatch(temp_name, f"*{PARQUET_TEMP_SUFFIX}")
+    assert not fnmatch.fnmatch(temp_name, "*.parquet")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+@pytest.mark.parametrize("umask", [0o022, 0o027])
+def test_exported_files_get_the_umask_default_mode(tmp_path: Path, umask: int) -> None:
+    # tempfile.mkstemp would leave 0600, unreadable to a separate load user.
+    previous = os.umask(umask)
+    try:
+        export = export_snapshot_to_parquet(InMemoryCanonicalStore().snapshot(), tmp_path)
+    finally:
+        os.umask(previous)
+    modes = {stat.S_IMODE(item.path.stat().st_mode) for item in export.files}
+    assert modes == {0o666 & ~umask}
+
+
+def test_read_rejects_parquet_that_differs_from_the_interchange_schema(tmp_path: Path) -> None:
+    authors = canonical_table_to_arrow("authors", _snapshot().authors)
+    relaxed = pa.schema([field.with_nullable(True) for field in authors.schema])
+    hand_written = tmp_path / "authors.parquet"
+    pq.write_table(authors.cast(relaxed), hand_written)
+    assert pq.read_table(hand_written).num_rows == authors.num_rows
+    with pytest.raises(CanonicalExportError, match="Arrow schema differs"):
+        read_canonical_parquet("authors", hand_written)
+
+    valid = write_canonical_parquet("authors", authors, tmp_path / "valid" / "authors.parquet")
+    with pytest.raises(CanonicalExportError, match=r"CANONICAL_SCHEMAS\['works'\]"):
+        read_canonical_parquet("works", valid.path)
+    with pytest.raises(CanonicalExportError, match="unknown canonical table"):
+        read_canonical_parquet("works_staging", valid.path)
+
+
+def test_export_manifest_rejects_missing_reordered_duplicate_or_unknown_tables(
+    tmp_path: Path,
+) -> None:
+    export = export_snapshot_to_parquet(_snapshot(), tmp_path)
+    files = export.files
+    assert CanonicalParquetExport(output_dir=tmp_path, files=files) == export
+    for bad in (files[:-1], (files[1], files[0], *files[2:]), (*files, files[0])):
+        with pytest.raises(ValidationError, match="every canonical table once"):
+            CanonicalParquetExport(output_dir=tmp_path, files=bad)
+    with pytest.raises(ValidationError, match="unknown canonical table"):
+        CanonicalParquetFile.model_validate(
+            {**files[0].model_dump(), "table_name": "works_staging"}
+        )
+
+
+def test_redacted_summary_carries_evidence_without_local_paths(tmp_path: Path) -> None:
+    export = export_snapshot_to_parquet(_snapshot(), tmp_path / "export")
+    summary = export.redacted_summary()
+    assert summary == tuple(
+        {
+            "table_name": item.table_name,
+            "file_name": f"{item.table_name}.parquet",
+            "row_count": item.row_count,
+            "byte_size": item.byte_size,
+            "sha256": item.sha256,
+        }
+        for item in export.files
+    )
+    # The model dump embeds the absolute output path; the summary must not.
+    assert export.model_dump(mode="json")["output_dir"] == str(tmp_path / "export")
+    strings = [value for row in summary for value in row.values() if isinstance(value, str)]
+    assert not [value for value in strings if "/" in value or "\\" in value]
+    assert json.loads(json.dumps(summary)) == list(summary)
 
 
 def test_empty_snapshot_exports_schema_only_files(tmp_path: Path) -> None:

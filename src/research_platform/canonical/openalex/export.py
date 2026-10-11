@@ -26,11 +26,10 @@ from __future__ import annotations
 
 import hashlib
 import os
-import tempfile
 from enum import Enum
 from pathlib import Path
 from typing import Any, Final, Iterable, Mapping
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -68,6 +67,7 @@ __all__ = [
     "CanonicalParquetFile",
     "PARQUET_COMPRESSION",
     "PARQUET_FORMAT_VERSION",
+    "PARQUET_TEMP_SUFFIX",
     "canonical_parquet_path",
     "canonical_row",
     "canonical_table_to_arrow",
@@ -136,6 +136,10 @@ _PARQUET_WRITE_OPTIONS: Final[Mapping[str, Any]] = {
 
 _HASH_CHUNK_BYTES = 1024 * 1024
 
+# In-flight writes go to ``.<table>.<hex>.parquet.tmp`` siblings: git-ignored
+# (``*.parquet.tmp``) and never matched by a ``*.parquet`` glob or load wildcard.
+PARQUET_TEMP_SUFFIX: Final = ".parquet.tmp"
+
 
 class CanonicalParquetFile(SettingsModel):
     """One written canonical Parquet file and its content identity."""
@@ -177,6 +181,22 @@ class CanonicalParquetExport(SettingsModel):
 
     def row_counts(self) -> dict[str, int]:
         return {item.table_name: item.row_count for item in self.files}
+
+    def redacted_summary(self) -> tuple[dict[str, object], ...]:
+        """Per-file evidence without local paths (they can embed an account name).
+
+        Use this, not ``model_dump``, for anything posted outside the machine.
+        """
+        return tuple(
+            {
+                "table_name": item.table_name,
+                "file_name": item.path.name,
+                "row_count": item.row_count,
+                "byte_size": item.byte_size,
+                "sha256": item.sha256,
+            }
+            for item in self.files
+        )
 
 
 def _schema_for(table_name: str) -> pa.Schema:
@@ -299,6 +319,18 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _create_temp_sibling(target: Path) -> Path:
+    """Exclusively create an empty temp file next to ``target``.
+
+    Unlike ``tempfile.mkstemp`` (always 0600), ``os.open`` with 0o666 applies
+    the process umask, so the renamed export stays readable by a separate load
+    process or user exactly like any other file written there.
+    """
+    candidate = target.with_name(f".{target.stem}.{uuid4().hex}{PARQUET_TEMP_SUFFIX}")
+    os.close(os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666))
+    return candidate
+
+
 def write_canonical_parquet(
     table_name: str,
     table: pa.Table,
@@ -309,18 +341,16 @@ def write_canonical_parquet(
     """Validate and write one canonical table with pinned Parquet options.
 
     The file is written to a temporary sibling and renamed into place, so a
-    failed write never leaves a partial file at ``path``.
+    failed write never leaves a partial file at ``path`` (an existing file is
+    left untouched) and the temporary file is removed. The final file gets the
+    umask-default mode, not ``mkstemp``'s 0600.
     """
     validate_canonical_arrow_table(table_name, table)
     target = Path(path)
     if target.exists() and not overwrite:
         raise CanonicalExportError(f"{table_name}: refusing to overwrite {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
-    )
-    os.close(fd)
-    tmp_path = Path(tmp_name)
+    tmp_path = _create_temp_sibling(target)
     try:
         pq.write_table(table, tmp_path, **_PARQUET_WRITE_OPTIONS)
         os.replace(tmp_path, target)

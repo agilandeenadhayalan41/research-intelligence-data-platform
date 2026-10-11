@@ -235,6 +235,7 @@ data/manifests/*
 data/sample/*
 !data/sample/.gitkeep
 *.parquet
+*.parquet.tmp
 *.arrow
 *.duckdb
 *.duckdb.wal
