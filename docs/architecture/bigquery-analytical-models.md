@@ -90,11 +90,12 @@ The run hit two script defects, fixed in #107. A failed script job was read
 before its status was refreshed, and a reserved `rows` alias crashed the final
 query before the evidence files were written. The job record was rebuilt from
 BigQuery job history, including the 11 unlabelled `BigQueryWarehouse` jobs,
-found by time window. Then, against the unchanged dataset and with #107's code:
+found by time window. Then, against the unchanged dataset:
 
-- the lost dry-run estimates were re-measured;
-- the partitions summary was run;
-- the 21-run latency measurement, new in #107, was added.
+- the lost dry-run estimates were re-measured: the pruning variants with #106's
+  `Run`, the per-file estimates with #107's;
+- the partitions summary was run with #106's `Run`;
+- the 21-run latency measurement, new in #107, was added with #107's code.
 
 Evidence: [#103](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/103) (identifiers redacted).
 
