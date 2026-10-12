@@ -330,8 +330,10 @@ does not implement PostgreSQL persistence or make operational serving mandatory.
 `GCSObjectStore` and `BigQueryWarehouse` are available with injectable clients
 for offline tests. `DuckDBWarehouse` executes local queries only.
 `PostgreSQLWarehouse` implements read `Warehouse.query` (offline by default;
-local PostgreSQL integration is separate and recorded by #90). Issue #23 serving projections are
-not implemented.
+local PostgreSQL integration is separate and recorded by #90). Issue #23 has only a local
+PROTOTYPE work lookup projection (gate not met; see
+[Work lookup projection](docs/architecture/serving-work-lookup-projection.md)); no serving
+projection is approved or deployed.
 `ControlStore` is a fail-fast protocol only. Configuration alignment and
 runtime persistence require separately scoped work.
 
