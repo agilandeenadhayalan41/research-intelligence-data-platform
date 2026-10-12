@@ -179,10 +179,19 @@ def test_job_cap_is_cap_for_at_small_scale_then_twice_the_estimate_plus_floor() 
 
 def test_adapter_cap_is_twice_the_raw_billed_bytes_within_bounds() -> None:
     ceiling = 512 * MIB
-    assert s103.adapter_cap(10 * MIB, 1 * MIB, ceiling) == 64 * MIB  # floor-billed lookup: the old fixed cap
-    assert s103.adapter_cap(100 * MIB, 90 * MIB, ceiling) == 200 * MIB
-    assert s103.adapter_cap(10 * MIB, 150 * MIB, ceiling) == 150 * MIB  # pruned raw run: the warehouse dry-run check still passes
-    assert s103.adapter_cap(400 * MIB, 0, ceiling) == ceiling
+    one, two = "SELECT 1 FROM `openalex.works`", "SELECT 1 FROM `openalex.works` JOIN `openalex.work_references` USING (work_id)"
+    assert s103.adapter_cap(10 * MIB, 1 * MIB, ceiling, one) == 64 * MIB  # floor-billed lookup: the old fixed cap
+    assert s103.adapter_cap(100 * MIB, 90 * MIB, ceiling, one) == 200 * MIB
+    # Pruned raw run: the estimate, rounded up plus the per-table floor, still decides.
+    assert s103.adapter_cap(10 * MIB, 150 * MIB, ceiling, two) == 150 * MIB + 2 * s103.BILLING_FLOOR
+    assert s103.adapter_cap(400 * MIB, 0, ceiling, one) == ceiling
+
+
+def test_adapter_cap_covers_billing_rounding_above_the_estimate() -> None:
+    # #108 Stage 2: an adapter capped at the bare estimate was refused by BigQuery.
+    sql = "SELECT 1 FROM `openalex.work_references` JOIN `openalex.works` USING (work_id)"
+    cap = s103.adapter_cap(31 * MIB, 77_364_146, 2048 * MIB, sql)
+    assert cap >= 77_594_624
 
 
 class TimedJob(DoneJob):

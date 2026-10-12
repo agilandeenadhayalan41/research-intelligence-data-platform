@@ -118,9 +118,17 @@ def job_cap(sql: str, estimate: int | None, ceiling: int) -> int:
     return min(ceiling, max(cap_for(sql), sized))
 
 
-def adapter_cap(billed: int, estimate: int, ceiling: int) -> int:
-    """Twice what the raw run billed, at least 64 MiB; never below the dry-run estimate the warehouse refuses above its cap."""
-    return min(ceiling, max(ADAPTER_MIN_CAP, 2 * billed, estimate))
+def adapter_cap(billed: int, estimate: int, ceiling: int, sql: str) -> int:
+    """Twice what the raw run billed, at least 64 MiB, at most ``ceiling``.
+
+    Never below the dry-run estimate rounded up to a MiB plus the 10 MiB
+    per-table billing floor: the warehouse refuses a cap under the estimate, and
+    BigQuery bills whole MiB per table read, so a cap of the bare estimate can
+    fall just short (#108 Stage 2: 77,364,146 capped, 77,594,624 required).
+    """
+    tables = len(set(TABLE_REF.findall(sql))) or 1
+    billable = math.ceil(estimate / MIB) * MIB + BILLING_FLOOR * tables
+    return min(ceiling, max(ADAPTER_MIN_CAP, 2 * billed, billable))
 
 
 def adapter_warehouse(project: str, client: AdapterClient, cap: int, timeout_s: float) -> BigQueryWarehouse:
@@ -543,7 +551,7 @@ def main(argv: list[str] | None = None) -> int:
         raw =run.query(f"query-{path.stem}", sql, params=params, estimate=estimate)
         result = [dict(row) for row in raw.result()]
         measured[path.stem] = (estimate, int(raw.total_bytes_processed or 0), f"query-{path.stem}")
-        adapter_caps[path.stem] = adapter_cap(int(raw.total_bytes_billed or 0), estimate, ceiling)
+        adapter_caps[path.stem] = adapter_cap(int(raw.total_bytes_billed or 0), estimate, ceiling, sql)
         warehouse = adapter_warehouse(project, adapter_client, adapter_caps[path.stem], run.sized_timeout(estimate))
         adapter = warehouse_query(run, adapter_client, warehouse, f"adapter-{path.stem}", sql, {n: values[n] for n in names})
         run.check(f"query {path.stem} runs (raw + adapter)", adapter.num_rows == len(result), f"{len(result)} rows")
@@ -593,7 +601,7 @@ def main(argv: list[str] | None = None) -> int:
         "pricing_model": args.pricing_model,
         "caps": {
             "job": "min(max_job_bytes, max(cap_for(sql), 2 x dry-run estimate rounded up to MiB + 10 MiB per table))",
-            "adapter": "min(max_job_bytes, max(64 MiB, 2 x raw-run billed bytes, dry-run estimate))",
+            "adapter": "min(max_job_bytes, max(64 MiB, 2 x raw-run billed bytes, dry-run estimate rounded up to MiB + 10 MiB per table))",
             "refused": "any raw or BigQueryWarehouse job whose cap exceeds the remaining budget, before submission",
             "max_job_bytes": ceiling,
             "timeout": "job_timeout_s + timeout_s_per_gib x dry-run estimate in GiB (adapter calls: their pattern's); job_timeout_s for loads and jobs without an estimate",
