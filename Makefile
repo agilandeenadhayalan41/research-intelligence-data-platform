@@ -1,6 +1,6 @@
 PYTHON ?= python
 
-.PHONY: install test test-unit test-orchestration test-postgres-ingestion test-postgres-warehouse check build postgres-up postgres-down
+.PHONY: install test test-unit test-orchestration test-postgres-ingestion test-postgres-warehouse test-postgres-serving check build postgres-up postgres-down
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"
@@ -21,6 +21,10 @@ test-postgres-ingestion:
 test-postgres-warehouse:
 	$(PYTHON) -m pip install -e ".[dev,postgres]"
 	$(PYTHON) -m pytest tests/integration/test_postgres_warehouse_integration.py -m postgres
+
+test-postgres-serving:
+	$(PYTHON) -m pip install -e ".[dev,postgres]"
+	$(PYTHON) -m pytest tests/integration/test_postgres_work_lookup_integration.py -m postgres
 
 check:
 	$(PYTHON) -m compileall -q src tests
