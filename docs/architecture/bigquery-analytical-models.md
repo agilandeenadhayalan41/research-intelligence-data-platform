@@ -191,6 +191,24 @@ Evidence: [#108](https://github.com/agilandeenadhayalan41/research-intelligence-
 This is still synthetic data, so item 2 below (a representative slice) stays
 open, as does the cost part of item 3.
 
+#### Recorded run (#108 Stage 3, DEV)
+
+**Environment.** On 2026-10-12 the #92 smoke and the #103 run were repeated in
+**DEV**. DEV is a personal project labelled DEV, not an enterprise-managed DEV
+environment, set up with the same grants as Stage 1 and the same kind of
+least-privilege service account, reached by impersonation.
+
+**Results.**
+- `bigquery_warehouse_smoke.py --least-privilege` passed **10/10**.
+- `bigquery_sandbox_103.py --scale default` (run `i103-20261012t193514`) passed
+  **95/95** and matched Stage 1 exactly: 10,210 works (350 DELETED), 19,032
+  work_topics, the same pruning bytes and 5.63 GiB billed.
+- Every executed job's `user_email` was the DEV service account.
+
+**Readiness.** `BIGQUERY_ANALYTICAL` is `VERIFIED` for DEV. DEV stays
+`NOT_READY` overall and no promotion is claimed. Evidence: [#108](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/108#issuecomment-6131598666)
+(identifiers redacted).
+
 ## Separation of validation kinds
 
 1. **BigQuery SQL correctness (contract)** — Standard SQL files use backtick
