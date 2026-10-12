@@ -240,7 +240,7 @@ def test_bigquery_verified_only_in_sandbox_with_evidence_and_honest_gaps() -> No
     assert EvidenceLabel.CLOUD_UNVERIFIED not in sandbox.evidence_labels
     gaps = " ".join(sandbox.gaps)
     # #103 MEASURED the models on synthetic data only; scale and clustering stay open.
-    assert "synthetic-10k-works only" in gaps and "clustering" in gaps
+    assert "synthetic data only" in gaps and "Clustering" in gaps
     assert "least-privilege" in gaps
     assert "enterprise" in gaps
     assert levels[EnvironmentName.DEV].evidence_level is EvidenceLevel.READY_TO_VALIDATE

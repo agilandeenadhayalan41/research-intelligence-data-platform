@@ -143,6 +143,54 @@ No job ran as the operator.
 Evidence: [interim, smokes](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/108#issuecomment-6114407084),
 [#103 re-run](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/108#issuecomment-6117277287) (identifiers redacted).
 
+#### Recorded run (#108 Stage 2)
+
+**Run.** On 2026-10-12, `scripts/bigquery_sandbox_103.py --scale large` (run
+`i103-20261012t180931`, `main` @ `2bb693d`) re-ran the #103 deploy and MEASURE
+at about 10× the Stage 1 scale. It used the same POC project and least-privilege
+service account as Stage 1. Status: **MEASURED (GCP_SANDBOX,
+synthetic-100100-works)**.
+
+**Identity.** The `user_email` of all 350 executed jobs is the service account.
+
+**An earlier attempt.** The first attempt (`i103-20261012t043457`, 1.51 GiB
+billed) stopped at the first adapter call. Its cap was the bare dry-run
+estimate, below BigQuery's whole-MiB-per-table billing. #114 fixed the adapter
+cap floor.
+
+**Results: 95/95 checks passed.**
+- **Publication:** batch 1 was 100,100 `INSERT`. Final counts: `works` 102,100
+  (3,500 DELETED) and `work_topics` 191,723.
+- **Failure injections:** both held.
+- **Gold, quality and queries:** DELETED-work leakage was 0, and all 11
+  patterns matched between the raw client and `BigQueryWarehouse`.
+- **Pruning:** bounded year parameters equalled the literal-year control. For
+  `publication-trends`: 417,574 bounded, 1,620,636 typed-NULL, 417,574 literal.
+- **Clustering: OBSERVED for 4 of 11 patterns.** Only patterns that read a table
+  of at least 64 MiB logical count: `work_references` 388 MiB, `work_authors`
+  95 MiB, `work_author_institutions` 85 MiB.
+  - The method compares executed `total_bytes_processed` with the dry-run
+    estimate, measured after a 900 s settle wait.
+  - `citation-relationships`, which filters the leading cluster column
+    `work_references.work_id`, processed **0.157** of its estimate.
+  - The three filters on non-leading cluster columns processed 1.000.
+  - The cause was not isolated.
+  - The `works` lookups processed 0.118 but stay NOT MEASURED, because `works`
+    is about 44 MiB.
+- **Latency** (21 runs with the query cache off): server p50 163–266 ms;
+  client wall p50 1.06–1.29 s. `doi-work-lookup`: 221 / 421 ms server and
+  1213 / 1506 ms client (p50 / p95).
+- **Timeout probe:** recorded `completed` (2.7 s), so cancellation was still not
+  exercised.
+- **Cost:** 6.02 GiB billed against a 60 GiB budget, while executed jobs
+  processed only 3.07 GiB. 291 of the 306 billed jobs billed an exact multiple
+  of the 10 MiB per-table minimum, so cost is **still not representative**.
+
+Evidence: [#108](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/108#issuecomment-6130520358) (identifiers redacted).
+
+This is still synthetic data, so item 2 below (a representative slice) stays
+open, as does the cost part of item 3.
+
 ## Separation of validation kinds
 
 1. **BigQuery SQL correctness (contract)** — Standard SQL files use backtick
