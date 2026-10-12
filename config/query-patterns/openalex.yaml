@@ -118,9 +118,9 @@ patterns:
       - "works.activity_state = ACTIVE"
       - "works.doi = :doi"
     active_work_filter: REQUIRED_ACTIVE
-    freshness_requirement: UNKNOWN — prefer near-current snapshot; SLA not measured
-    expected_frequency: UNKNOWN
-    expected_concurrency: null
+    freshness_requirement: daily (operator-stated, #23); not measured
+    expected_frequency: FREQUENT
+    expected_concurrency: 5
     expected_result_size: 0–1 Work payload
     known_scale: UNKNOWN
     assumed_scale: Point lookup over full Works corpus
@@ -134,12 +134,13 @@ patterns:
       is forbidden without MEASURED evidence.
     evidence_status: ASSUMED
     service_level:
-      desired_p95_latency_ms: null
-      max_freshness_lag: null
-      expected_concurrency: null
-      expected_frequency: UNKNOWN
+      desired_p95_latency_ms: 200
+      max_freshness_lag: 24h
+      expected_concurrency: 5
+      expected_frequency: FREQUENT
       expected_result_size: 0-1 work
-      notes: UNKNOWN — no Wiley production SLA invented
+      notes: >-
+        Operator-stated requirement (2026-10-12, #23): interactive app/API consumer, <=200 ms end-to-end p95, <=5 rps peak, daily freshness. Not a measured or product-validated Wiley SLA; Wiley production SLA remains UNKNOWN.
     logical_query_shape: |
       SELECT w.*
       FROM works AS w
@@ -165,9 +166,9 @@ patterns:
       - "works.activity_state = ACTIVE"
       - "works.work_id = :work_id"
     active_work_filter: REQUIRED_ACTIVE
-    freshness_requirement: UNKNOWN
-    expected_frequency: UNKNOWN
-    expected_concurrency: null
+    freshness_requirement: daily (operator-stated, #23); not measured
+    expected_frequency: FREQUENT
+    expected_concurrency: 5
     expected_result_size: 0–1 Work payload
     known_scale: UNKNOWN
     assumed_scale: Point lookup by primary key
@@ -179,6 +180,14 @@ patterns:
       Primary-key style lookup; BigQuery + API/cache is the first path to
       evaluate. Placement remains evidence-honest (ASSUMED), not MEASURED.
     evidence_status: ASSUMED
+    service_level:
+      desired_p95_latency_ms: 200
+      max_freshness_lag: 24h
+      expected_concurrency: 5
+      expected_frequency: FREQUENT
+      expected_result_size: 0-1 work
+      notes: >-
+        Operator-stated requirement (2026-10-12, #23): interactive app/API consumer, <=200 ms end-to-end p95, <=5 rps peak, daily freshness. Not a measured or product-validated Wiley SLA; Wiley production SLA remains UNKNOWN.
     logical_query_shape: |
       SELECT w.*
       FROM works AS w
