@@ -205,7 +205,20 @@ uniform-access bucket.
 
 Evidence: [#108](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/108#issuecomment-6114407084) (identifiers redacted).
 
-`GCS_RAW_LANDING` is therefore `VERIFIED` for **GCP_SANDBOX only**, now also as
+#### Recorded run (#108 Stage 3, DEV)
+
+**Run.** On 2026-10-12, `gcs_object_store_smoke.py --least-privilege` passed
+**17/17** in DEV, a personal project labelled DEV with the Stage 1 grants. It ran
+as a least-privilege service account reached by impersonation.
+- **The #91 checks passed,** with replay and conflict classified as 412 without
+  `objects.delete`.
+- **The overwrite got a 403** naming `storage.objects.delete`.
+- **The out-of-prefix create got a 403** naming `storage.objects.create`.
+
+**Readiness.** `GCS_RAW_LANDING` is `VERIFIED` for DEV too. No promotion is
+claimed. Evidence: [#108](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/108#issuecomment-6131598666) (identifiers redacted).
+
+`GCS_RAW_LANDING` is therefore `VERIFIED` for **GCP_SANDBOX**, now also as
 a least-privilege runtime identity. It is not evidence for an enterprise-managed
 project, separate deploy/runtime identities, concurrent writers, retries,
 large/resumable uploads, CMEK, retention, access logging, or DEV/QA/PROD, which

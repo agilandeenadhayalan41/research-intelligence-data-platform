@@ -310,9 +310,53 @@ def _dev_entries() -> tuple[ReadinessEntry, ...]:
             EvidenceLabel.CLOUD_UNVERIFIED,
         ),
         configuration_gaps=(
-            "No deployed DEV cloud resources",
+            "DEV cloud resources exist only as an operator-provisioned personal project "
+            "(#108 Stage 3), not an enterprise-managed DEV environment; config/dev.yaml "
+            "is still a local-only placeholder",
             "IAM/secrets/runtime unverified",
         ),
+        domain_overrides={
+            ReadinessDomain.GCS_RAW_LANDING: (
+                EvidenceLevel.VERIFIED,
+                "#108 Stage 3: the #91 GCSObjectStore smoke passed (17/17) in DEV as a "
+                "least-privilege service account via impersonation: create via "
+                "if_generation_match=0, identical replay no-op, bytes/provenance conflict "
+                "raises ObjectConflictError with generation unchanged (412 classified without "
+                "objects.delete), open returns original bytes; unconditioned overwrite and "
+                "out-of-prefix create refused with 403 (identifiers redacted)",
+                (
+                    "Personal project labelled DEV, not an enterprise-managed DEV environment",
+                    "One identity for deploy and runtime; separate deploy/runtime identities "
+                    "unverified",
+                    "Concurrent writers, retries, large/resumable uploads unverified",
+                    "Encryption/CMEK, retention, access logging unverified",
+                ),
+                "Record QA evidence (#108 Stage 3) before any QA VERIFIED claim; no promotion",
+                (EvidenceLabel.CONTRACT_DEFINED,),
+            ),
+            ReadinessDomain.BIGQUERY_ANALYTICAL: (
+                EvidenceLevel.VERIFIED,
+                "#108 Stage 3: in DEV, as a least-privilege service account via impersonation, "
+                "the #92 BigQueryWarehouse smoke passed (10/10: dry-run budget rejection, "
+                "provider-enforced maximum_bytes_billed with 0 billed, bounded execute, typed "
+                "@parameter binding, empty/null Arrow results; no datasets.create, other "
+                "dataset refused) and the Step 15-16 models were deployed and MEASURED "
+                "(95/95, synthetic-10k-works); every executed job's user_email was that "
+                "account (identifiers redacted)",
+                (
+                    "Personal project labelled DEV, not an enterprise-managed DEV environment",
+                    "MEASURED on synthetic-10k-works only in DEV: production-scale cost/latency "
+                    "and clustering effectiveness unverified; billed bytes are billing-floor "
+                    "artifacts",
+                    "One identity for deploy and runtime; separate deploy/runtime identities "
+                    "unverified",
+                    "Job timeout/cancellation under load unverified (the 1 s probe completed "
+                    "before a cancel could trigger)",
+                ),
+                "Record QA evidence (#108 Stage 3) before any QA VERIFIED claim; no promotion",
+                (EvidenceLabel.CONTRACT_DEFINED,),
+            ),
+        },
     )
 
 

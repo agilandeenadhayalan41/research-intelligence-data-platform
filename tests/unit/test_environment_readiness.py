@@ -163,8 +163,8 @@ def test_gcs_and_bigquery_runtime_gaps_surfaced() -> None:
     for env in CLOUD_PROMOTION_ORDER:
         report = evaluate_environment_readiness(env)
         by_domain = {e.domain: e for e in report.entries}
-        if env is not EnvironmentName.GCP_SANDBOX:
-            # #91 evidence is sandbox-only; it must not leak into later environments.
+        if env not in {EnvironmentName.GCP_SANDBOX, EnvironmentName.DEV}:
+            # #91 evidence is sandbox- and DEV-only (#108 Stage 3); it must not leak further.
             assert by_domain[ReadinessDomain.GCS_RAW_LANDING].evidence_level in {
                 EvidenceLevel.BLOCKED,
                 EvidenceLevel.CLOUD_UNVERIFIED,
@@ -176,8 +176,8 @@ def test_gcs_and_bigquery_runtime_gaps_surfaced() -> None:
         assert "#9" in by_domain[ReadinessDomain.GCS_RAW_LANDING].evidence or any(
             "#9" in g for g in by_domain[ReadinessDomain.GCS_RAW_LANDING].gaps
         )
-        if env is not EnvironmentName.GCP_SANDBOX:
-            # #92 evidence is sandbox-only; it must not leak into later environments.
+        if env not in {EnvironmentName.GCP_SANDBOX, EnvironmentName.DEV}:
+            # #92 evidence is sandbox- and DEV-only (#108 Stage 3); it must not leak further.
             assert by_domain[ReadinessDomain.BIGQUERY_ANALYTICAL].evidence_level in {
                 EvidenceLevel.CLOUD_UNVERIFIED,
                 EvidenceLevel.BLOCKED,
@@ -209,7 +209,10 @@ def test_gcs_verified_only_in_sandbox_with_evidence_and_honest_gaps() -> None:
     gaps = " ".join(sandbox.gaps)
     assert "least-privilege" in gaps
     assert "enterprise" in gaps
-    assert levels[EnvironmentName.DEV].evidence_level is EvidenceLevel.READY_TO_VALIDATE
+    # #108 Stage 3: DEV verified in a personal project; QA not yet.
+    assert levels[EnvironmentName.DEV].evidence_level is EvidenceLevel.VERIFIED
+    assert "#108" in levels[EnvironmentName.DEV].evidence
+    assert "Personal project" in " ".join(levels[EnvironmentName.DEV].gaps)
     assert levels[EnvironmentName.QA].evidence_level is EvidenceLevel.READY_TO_VALIDATE
     assert levels[EnvironmentName.PROD].evidence_level is EvidenceLevel.BLOCKED
     assert levels[EnvironmentName.LOCAL].evidence_level is EvidenceLevel.DEMONSTRATED_LOCAL
@@ -243,7 +246,10 @@ def test_bigquery_verified_only_in_sandbox_with_evidence_and_honest_gaps() -> No
     assert "synthetic data only" in gaps and "Clustering" in gaps
     assert "least-privilege" in gaps
     assert "enterprise" in gaps
-    assert levels[EnvironmentName.DEV].evidence_level is EvidenceLevel.READY_TO_VALIDATE
+    # #108 Stage 3: DEV verified in a personal project; QA not yet.
+    assert levels[EnvironmentName.DEV].evidence_level is EvidenceLevel.VERIFIED
+    assert "#108" in levels[EnvironmentName.DEV].evidence
+    assert "Personal project" in " ".join(levels[EnvironmentName.DEV].gaps)
     assert levels[EnvironmentName.QA].evidence_level is EvidenceLevel.READY_TO_VALIDATE
     assert levels[EnvironmentName.PROD].evidence_level is EvidenceLevel.BLOCKED
     assert levels[EnvironmentName.LOCAL].evidence_level is EvidenceLevel.CONTRACT_DEFINED
@@ -257,7 +263,7 @@ def test_bigquery_verified_only_in_sandbox_with_evidence_and_honest_gaps() -> No
     )
 
 
-def test_verified_is_confined_to_sandbox_gcs_and_bigquery() -> None:
+def test_verified_is_confined_to_sandbox_and_dev_gcs_and_bigquery() -> None:
     verified = {
         (e.environment, e.domain)
         for e in build_readiness_registry()
@@ -266,6 +272,9 @@ def test_verified_is_confined_to_sandbox_gcs_and_bigquery() -> None:
     assert verified == {
         (EnvironmentName.GCP_SANDBOX, ReadinessDomain.GCS_RAW_LANDING),
         (EnvironmentName.GCP_SANDBOX, ReadinessDomain.BIGQUERY_ANALYTICAL),
+        # #108 Stage 3 DEV evidence (personal project labelled DEV).
+        (EnvironmentName.DEV, ReadinessDomain.GCS_RAW_LANDING),
+        (EnvironmentName.DEV, ReadinessDomain.BIGQUERY_ANALYTICAL),
     }
 
 
