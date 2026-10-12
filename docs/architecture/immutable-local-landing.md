@@ -218,6 +218,18 @@ as a least-privilege service account reached by impersonation.
 **Readiness.** `GCS_RAW_LANDING` is `VERIFIED` for DEV too. No promotion is
 claimed. Evidence: [#108](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/108#issuecomment-6131598666) (identifiers redacted).
 
+#### Recorded run (#108 Stage 3, QA)
+
+**Run.** On 2026-10-12, after DEV, `gcs_object_store_smoke.py --least-privilege`
+passed **17/17** in QA, a separate personal project labelled QA. It ran as a
+separate least-privilege service account.
+- **The #91 checks passed.**
+- **The overwrite got a 403** naming `storage.objects.delete`.
+- **The out-of-prefix create got a 403** naming `storage.objects.create`.
+
+**Readiness.** `GCS_RAW_LANDING` is `VERIFIED` for QA too. No promotion is
+claimed. Evidence: [#108](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/108#issuecomment-6132004917) (identifiers redacted).
+
 `GCS_RAW_LANDING` is therefore `VERIFIED` for **GCP_SANDBOX**, now also as
 a least-privilege runtime identity. It is not evidence for an enterprise-managed
 project, separate deploy/runtime identities, concurrent writers, retries,

@@ -209,6 +209,24 @@ least-privilege service account, reached by impersonation.
 `NOT_READY` overall and no promotion is claimed. Evidence: [#108](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/108#issuecomment-6131598666)
 (identifiers redacted).
 
+#### Recorded run (#108 Stage 3, QA)
+
+**Environment.** On 2026-10-12, after the DEV evidence was recorded (#116), the
+same runs were repeated in **QA**. QA is a separate personal project labelled
+QA, not an enterprise-managed QA environment. The runs used a separate
+least-privilege service account reached by impersonation. The DEV account was
+refused access to the QA dataset.
+
+**Results.**
+- `bigquery_warehouse_smoke.py --least-privilege` passed **10/10**.
+- `bigquery_sandbox_103.py --scale default` (run `i103-20261012t200938`) passed
+  **95/95**, matching Stage 1 and DEV exactly.
+- Every executed job's `user_email` was the QA service account.
+
+**Readiness.** `BIGQUERY_ANALYTICAL` is `VERIFIED` for QA. DEV and QA stay
+`NOT_READY`, `can_promote` is unchanged, and PROD stays `BLOCKED`. Evidence:
+[#108](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/108#issuecomment-6132004917) (identifiers redacted).
+
 ## Separation of validation kinds
 
 1. **BigQuery SQL correctness (contract)** — Standard SQL files use backtick

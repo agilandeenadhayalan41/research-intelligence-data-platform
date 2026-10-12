@@ -370,7 +370,54 @@ def _qa_entries() -> tuple[ReadinessEntry, ...]:
             EvidenceLabel.PLACEHOLDER_CONFIG,
             EvidenceLabel.CLOUD_UNVERIFIED,
         ),
-        configuration_gaps=("No QA cloud deployment", "No promotion evidence from DEV"),
+        configuration_gaps=(
+            "QA cloud resources exist only as an operator-provisioned personal project "
+            "(#108 Stage 3), not an enterprise-managed QA environment; config/qa.yaml is "
+            "still a local-only placeholder",
+            "No promotion evidence from DEV",
+        ),
+        domain_overrides={
+            ReadinessDomain.GCS_RAW_LANDING: (
+                EvidenceLevel.VERIFIED,
+                "#108 Stage 3 (after DEV): the #91 GCSObjectStore smoke passed (17/17) in QA "
+                "as a separate least-privilege service account via impersonation: create via "
+                "if_generation_match=0, identical replay no-op, bytes/provenance conflict "
+                "raises ObjectConflictError with generation unchanged (412 classified without "
+                "objects.delete), open returns original bytes; unconditioned overwrite and "
+                "out-of-prefix create refused with 403 (identifiers redacted)",
+                (
+                    "Personal project labelled QA, not an enterprise-managed QA environment",
+                    "One identity for deploy and runtime; separate deploy/runtime identities "
+                    "unverified",
+                    "Concurrent writers, retries, large/resumable uploads unverified",
+                    "Encryption/CMEK, retention, access logging unverified",
+                ),
+                "No promotion is claimed; PROD stays BLOCKED",
+                (EvidenceLabel.CONTRACT_DEFINED,),
+            ),
+            ReadinessDomain.BIGQUERY_ANALYTICAL: (
+                EvidenceLevel.VERIFIED,
+                "#108 Stage 3 (after DEV): in QA, as a separate least-privilege service account "
+                "via impersonation, the #92 BigQueryWarehouse smoke passed (10/10: dry-run "
+                "budget rejection, provider-enforced maximum_bytes_billed with 0 billed, bounded "
+                "execute, typed @parameter binding, empty/null Arrow results; no "
+                "datasets.create, other dataset refused) and the Step 15-16 models were "
+                "deployed and MEASURED (95/95, synthetic-10k-works); every executed job's "
+                "user_email was that account (identifiers redacted)",
+                (
+                    "Personal project labelled QA, not an enterprise-managed QA environment",
+                    "MEASURED on synthetic-10k-works only in QA: production-scale cost/latency "
+                    "and clustering effectiveness unverified; billed bytes are billing-floor "
+                    "artifacts",
+                    "One identity for deploy and runtime; separate deploy/runtime identities "
+                    "unverified",
+                    "Job timeout/cancellation under load unverified (the 1 s probe completed "
+                    "before a cancel could trigger)",
+                ),
+                "No promotion is claimed; PROD stays BLOCKED",
+                (EvidenceLabel.CONTRACT_DEFINED,),
+            ),
+        },
     )
 
 
