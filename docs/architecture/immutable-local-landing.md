@@ -185,7 +185,28 @@ with operator approval (the original sandbox project's billing was closed);
 uniform bucket-level access and public access prevention enforced; user ADC;
 CPython 3.14.4 and `google-cloud-storage` 3.16.0.
 
-`GCS_RAW_LANDING` is therefore `VERIFIED` for **GCP_SANDBOX only**. It is not
-evidence for an enterprise-managed project, a least-privilege runtime identity,
-concurrent writers, retries, large/resumable uploads, CMEK, retention, access
-logging, or DEV/QA/PROD, which stay `READY_TO_VALIDATE` / `BLOCKED`.
+#### Recorded run (#108 Stage 1)
+
+**Run.** On 2026-10-11, `scripts/gcs_object_store_smoke.py --least-privilege`
+re-ran the #91 checks in the same operator-owned POC project. It ran as a
+least-privilege service account, reached by impersonation, with no key files.
+
+**Grants.** A custom role with only `storage.objects.create` and
+`storage.objects.get`, limited to the test prefix by an IAM condition, on a
+uniform-access bucket.
+
+**Result:** 17/17 PASS.
+- **Every #91 check passed.** Without `storage.objects.delete`, a create-if-absent
+  on an existing object still gets 412, and the adapter classified replay and
+  conflict correctly.
+- **Bucket `testIamPermissions`** holds neither `objects.delete` nor `objects.list`.
+- **A raw overwrite of a throwaway object** got a 403 naming `storage.objects.delete`.
+- **A raw create outside the prefix** got a 403 naming `storage.objects.create`.
+
+Evidence: [#108](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/108#issuecomment-6114407084) (identifiers redacted).
+
+`GCS_RAW_LANDING` is therefore `VERIFIED` for **GCP_SANDBOX only**, now also as
+a least-privilege runtime identity. It is not evidence for an enterprise-managed
+project, separate deploy/runtime identities, concurrent writers, retries,
+large/resumable uploads, CMEK, retention, access logging, or DEV/QA/PROD, which
+stay `READY_TO_VALIDATE` / `BLOCKED`.

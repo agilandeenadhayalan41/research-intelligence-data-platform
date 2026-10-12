@@ -231,7 +231,8 @@ def _sandbox_entries() -> tuple[ReadinessEntry, ...]:
         ),
         configuration_gaps=(
             "No actual GCP project/bucket/dataset provisioned by this repository",
-            "No enterprise-managed sandbox project; #91/#92 used an operator-owned project",
+            "No enterprise-managed sandbox project; #91/#92/#103 and the #108 Stage 1 "
+            "re-runs used an operator-owned project",
         ),
         domain_overrides={
             ReadinessDomain.BIGQUERY_ANALYTICAL: (
@@ -244,19 +245,27 @@ def _sandbox_entries() -> tuple[ReadinessEntry, ...]:
                 "decisions, works MERGE precedence, work_topics REPLACE rollback under "
                 "failure injection, below-floor cap rejected, publication_year pruning "
                 "observed; operator-owned "
-                "sandbox project and dataset (identifiers redacted)",
+                "sandbox project and dataset (identifiers redacted). #108 Stage 1 re-ran "
+                "the #92 smoke (10/10) and the #103 run (95/95) as a least-privilege "
+                "service account via impersonation; every executed job's user_email was "
+                "that account",
                 (
                     "MEASURED on synthetic-10k-works only (#103): production-scale cost/latency, "
                     "clustering effectiveness, concurrent publication and Gold "
                     "refresh/materialization unverified; billed bytes are billing-floor artifacts",
                     "MERGE/REPLACE exercised for works and work_topics only; the other "
                     "relationship tables and dimensions were direct-loaded",
-                    "Operator-owned project and user ADC, not an enterprise project or "
-                    "least-privilege runtime identity",
-                    "Job timeout/cancellation under load unverified",
+                    "Operator-owned project, not an enterprise-managed project: #92/#103 "
+                    "ran as user ADC; the #108 Stage 1 re-runs ran as a least-privilege "
+                    "service account",
+                    "One identity for deploy and runtime (#108 Stage 1); separate "
+                    "deploy/runtime identities unverified",
+                    "Job timeout/cancellation under load unverified (the #108 Stage 1 "
+                    "1 s probe completed before a cancel could trigger)",
                 ),
-                "Repeat the #103 deploy/MEASURE in an enterprise-managed project with a "
-                "least-privilege runtime identity before DEV promotion",
+                "Repeat the #103 deploy/MEASURE at representative scale (#108 Stage 2) "
+                "and in an enterprise-managed project with separate deploy/runtime "
+                "identities before DEV promotion",
                 (EvidenceLabel.CONTRACT_DEFINED,),
             ),
             ReadinessDomain.GCS_RAW_LANDING: (
@@ -264,15 +273,19 @@ def _sandbox_entries() -> tuple[ReadinessEntry, ...]:
                 "GCSObjectStore (#9) live sandbox smoke passed (#91): create via "
                 "if_generation_match=0, identical replay no-op, bytes/provenance conflict "
                 "raises ObjectConflictError with generation unchanged, open returns original "
-                "bytes; operator-owned sandbox project and bucket (identifiers redacted)",
+                "bytes; operator-owned sandbox project and bucket (identifiers redacted). "
+                "#108 Stage 1 re-ran it (17/17) as a least-privilege service account: "
+                "replay/conflict still classified (412) without objects.delete, and "
+                "out-of-prefix create and unconditioned overwrite refused with 403",
                 (
-                    "Operator-owned project and user ADC, not an enterprise project or "
-                    "least-privilege runtime identity",
+                    "Operator-owned project, not an enterprise-managed project: #91 ran as "
+                    "user ADC; the #108 Stage 1 re-run ran as a least-privilege service "
+                    "account",
                     "Concurrent writers, retries, large/resumable uploads unverified",
                     "Encryption/CMEK, retention, access logging, environment separation unverified",
                 ),
-                "Repeat the #91 smoke in an enterprise-managed project with a "
-                "least-privilege runtime identity before DEV promotion",
+                "Repeat the #91 smoke in an enterprise-managed project with separate "
+                "deploy/runtime identities before DEV promotion",
                 (EvidenceLabel.CONTRACT_DEFINED,),
             ),
         },

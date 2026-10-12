@@ -107,6 +107,42 @@ project or least-privilege runtime identity. `BIGQUERY_ANALYTICAL` stays
 `VERIFIED` for **GCP_SANDBOX only**. DEV/QA stay `READY_TO_VALIDATE`, PROD stays
 `BLOCKED`, and no Gold mart is `MATERIALIZED`.
 
+#### Recorded run (#108 Stage 1)
+
+**Run.** On 2026-10-11/12 the #92 and #103 checks were re-run in the same
+operator-owned POC project, this time as a **least-privilege service account**.
+The operator reached it by service-account impersonation; it has no key files.
+
+**Grants.**
+- a custom project role with only `bigquery.jobs.create` and `bigquery.jobs.list`;
+- WRITER (dataEditor) on `openalex` only;
+- no `bigquery.datasets.create`.
+
+**Results.**
+- `scripts/bigquery_warehouse_smoke.py --least-privilege` passed 10/10:
+  - the #92 checks, on a self-expiring synthetic table rather than public data;
+  - `bigquery.datasets.create` absent, checked with Resource Manager `testIamPermissions`;
+  - a 403 Access Denied on a dry-run read of a dataset the account cannot access.
+- `scripts/bigquery_sandbox_103.py --scale default` (run `i103-20261012t031724`,
+  `main` @ `3b6aff0`) passed **95/95**:
+  - it reproduced every #103 model result: decision mix, final row counts, both
+    failure injections, Gold exclusion, query parity and pruning bytes;
+  - latency was comparable: server p50 152–208 ms, client p50 0.99–1.12 s;
+  - 5.63 GiB billed, again billing-floor artifacts.
+
+**Identity.** The `user_email` of all 350 executed jobs is the service account.
+No job ran as the operator.
+
+**Not covered.**
+- The 1 s timeout probe completed before a cancel could trigger, so
+  cancellation was not exercised.
+- Clustering stays NOT MEASURED.
+- The same identity deployed and ran.
+- This is still not an enterprise-managed project.
+
+Evidence: [interim, smokes](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/108#issuecomment-6114407084),
+[#103 re-run](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/108#issuecomment-6117277287) (identifiers redacted).
+
 ## Separation of validation kinds
 
 1. **BigQuery SQL correctness (contract)** — Standard SQL files use backtick
