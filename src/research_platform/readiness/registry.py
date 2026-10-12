@@ -248,11 +248,17 @@ def _sandbox_entries() -> tuple[ReadinessEntry, ...]:
                 "sandbox project and dataset (identifiers redacted). #108 Stage 1 re-ran "
                 "the #92 smoke (10/10) and the #103 run (95/95) as a least-privilege "
                 "service account via impersonation; every executed job's user_email was "
-                "that account",
+                "that account. #108 Stage 2 MEASURED the models at synthetic-100100-works "
+                "(95/95, same identity): clustering OBSERVED for 4 of 11 patterns",
                 (
-                    "MEASURED on synthetic-10k-works only (#103): production-scale cost/latency, "
-                    "clustering effectiveness, concurrent publication and Gold "
-                    "refresh/materialization unverified; billed bytes are billing-floor artifacts",
+                    "MEASURED on synthetic data only (#103 synthetic-10k-works; #108 Stage 2 "
+                    "synthetic-100100-works): production-scale cost/latency, concurrent "
+                    "publication and Gold refresh/materialization unverified; billed bytes are "
+                    "still mostly billing-floor artifacts",
+                    "Clustering effectiveness OBSERVED for 4 of 11 patterns only (#108 Stage 2): "
+                    "a leading-column filter cut processed bytes to 0.157 of the dry-run "
+                    "estimate, non-leading filters showed none; works lookups NOT MEASURED "
+                    "(table under 64 MiB)",
                     "MERGE/REPLACE exercised for works and work_topics only; the other "
                     "relationship tables and dimensions were direct-loaded",
                     "Operator-owned project, not an enterprise-managed project: #92/#103 "
@@ -260,12 +266,12 @@ def _sandbox_entries() -> tuple[ReadinessEntry, ...]:
                     "service account",
                     "One identity for deploy and runtime (#108 Stage 1); separate "
                     "deploy/runtime identities unverified",
-                    "Job timeout/cancellation under load unverified (the #108 Stage 1 "
-                    "1 s probe completed before a cancel could trigger)",
+                    "Job timeout/cancellation under load unverified (the #108 Stage 1 and "
+                    "Stage 2 1 s probes completed before a cancel could trigger)",
                 ),
-                "Repeat the #103 deploy/MEASURE at representative scale (#108 Stage 2) "
-                "and in an enterprise-managed project with separate deploy/runtime "
-                "identities before DEV promotion",
+                "Repeat the #103 deploy/MEASURE on a representative slice and in an "
+                "enterprise-managed project with separate deploy/runtime identities before "
+                "DEV promotion",
                 (EvidenceLabel.CONTRACT_DEFINED,),
             ),
             ReadinessDomain.GCS_RAW_LANDING: (
