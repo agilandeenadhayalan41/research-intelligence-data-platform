@@ -141,6 +141,22 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: 'Requirements traceability',
+      items: [
+        {
+          type: 'doc',
+          id: 'requirements/openalex-lead-coverage',
+          label: 'Lead coverage register',
+        },
+        {
+          type: 'doc',
+          id: 'requirements/openalex-lead-coverage-matrices',
+          label: 'Traceability matrices',
+        },
+      ],
+    },
+    {
+      type: 'category',
       label: 'Proposed (next) architecture',
       items: [
         {type: 'doc', id: 'proposed/target-architecture', label: 'Target architecture'},
