@@ -139,6 +139,13 @@ const sidebars: SidebarsConfig = {
         },
       ],
     },
+    {
+      type: 'category',
+      label: 'Proposed (next) architecture',
+      items: [
+        {type: 'doc', id: 'proposed/target-architecture', label: 'Target architecture'},
+      ],
+    },
   ],
 };
 

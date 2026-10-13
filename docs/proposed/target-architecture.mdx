@@ -1,0 +1,33 @@
+---
+title: Proposed target architecture (next)
+sidebar_label: Target architecture
+hide_table_of_contents: true
+description: The proposed next GCP architecture for the OpenAlex platform, as an animated diagram. Proposed, not built.
+---
+
+import AutoHeightFrame from '@site/src/components/AutoHeightFrame';
+
+:::caution Proposed, not built
+
+This is the **proposed next architecture**: a schematic target, not a description of
+what runs today. What exists today, and how strongly it is proven, is on the
+[Status](../overview/status.md) page. Local and synthetic cloud evidence must not be read
+as a production deployment.
+
+:::
+
+The diagram shows the GCP-first target in three bands:
+
+- **Data engineering:** source to published consumer data. That covers OpenAlex ingestion jobs, GCS Bronze, canonical Parquet (Silver), BigQuery Silver and Gold, quality and lineage gates, a published version contract, and the Data API with a cache.
+- **Operations:** managed Airflow, IAM and catalog, monitoring, and CI/CD with Sandbox → DEV → QA acceptance gates.
+- **Downstream products:** analytics and BI, data science, ML/MLOps, a knowledge graph, embeddings and vector search, and grounded RAG. Each is a separate workstream that starts only after the data-engineering gate is passed.
+
+Below the main diagram are three zoom views: the 9-unit Airflow DAG, the BigQuery OLAP publication path, and the downstream data products.
+
+Use the buttons in the diagram to pause the motion, switch layers, or step through the flow.
+Use **Open full screen** to see it on its own, at its native size.
+
+<AutoHeightFrame
+  src="/diagrams/openalex-gcp-target-architecture-v2.html"
+  title="Proposed GCP target architecture for the OpenAlex research intelligence platform (animated diagram)"
+/>
