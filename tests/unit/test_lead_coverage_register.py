@@ -80,6 +80,7 @@ REF_USE_RE = re.compile(r"\[#(\d+)\](?!:)")
 FOLLOW_ON_ITEM_RE = re.compile(r"^DE-(\d{2}) \[#(\d+)\]$")
 BACKTICK_RE = re.compile(r"`([^`]+)`")
 MD_LINK_RE = re.compile(r"\]\((?!https?://|#)([^)\s]+)\)")
+RAW_HTML_RE = re.compile(r"<[A-Za-z/!?]")
 EMPTY = "—"
 
 
@@ -186,6 +187,11 @@ def _document_errors(text: str, repo_root: Path) -> tuple[list[str], dict[int, s
         relative = target.split("#", 1)[0]
         if relative and not (register_dir / relative).resolve().exists():
             errors.append(f"relative link {target} does not resolve")
+    for number, line in enumerate(text.splitlines(), start=1):
+        # GitHub and the docs site both render raw HTML in .md files, so a stray
+        # `<table>` outside a code span would break the surrounding table.
+        if RAW_HTML_RE.search(BACKTICK_RE.sub("", line)):
+            errors.append(f"line {number}: raw HTML outside a code span")
     for span in set(BACKTICK_RE.findall(text)):
         # Code spans that look like repository paths must exist; field names
         # such as `works.doi` or `authorships[].author` have no slash.
@@ -883,7 +889,8 @@ def test_matrices_validator_rejects_bad_pages(fake_repo: Path) -> None:
         "| Item | Where | Evidence |\n|---|---|---|\n"
         "| DOI | `src/missing.py` | PROD_DEPLOYED [#9] |\n"
     )
-    errors = validate_matrices(page, fake_repo)
+    errors = validate_matrices(page + "| SQL | hard-codes openalex.<table> |\n", fake_repo)
+    assert "line 8: raw HTML outside a code span" in errors
     assert "path src/missing.py does not exist" in errors
     assert "PROD_DEPLOYED claimed but no such evidence is recorded" in errors
     assert "[#9] is used but has no link definition" in errors
