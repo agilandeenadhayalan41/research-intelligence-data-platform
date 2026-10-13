@@ -23,6 +23,9 @@ lookup, so no number is chosen after the fact (#118 criterion 1).
 - **Reported:** hit, miss and overall p50/p95 for the measured requests, the
   hit rate, and a **meets / misses** verdict against ``--target-p95-ms``.
 
+``--prewarm`` loads every key once before the warm-up, so measured misses
+come only from expiry or eviction: the warm steady-state case.
+
 **What it does not measure.** The cache is in-process, so a hit costs
 microseconds. A shared cache such as Memorystore would add a network hop that
 this script does not measure; the evidence says so.
@@ -72,6 +75,11 @@ def nearest_rank(values: list[float], q: float) -> float | None:
     return ordered[max(0, math.ceil(q * len(ordered)) - 1)]
 
 
+def prewarm(get: Any, keys: list[str]) -> int:
+    """Load every key once, in key order, before measurement; returns how many loads missed."""
+    return sum(0 if get(key)[1] else 1 for key in keys)
+
+
 def measure(get: Any, keys: list[str], sequence: list[int], warmup: int, clock: Any = time.perf_counter) -> list[dict[str, Any]]:
     """Run ``sequence`` through ``get(key) -> (value, hit)``; records after ``warmup`` are kept."""
     records = []
@@ -114,6 +122,7 @@ def parse(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--distinct-keys", type=int, default=1000)
     parser.add_argument("--requests", type=int, default=2000, help="measured requests, after warm-up")
     parser.add_argument("--warmup", type=int, default=500)
+    parser.add_argument("--prewarm", action="store_true", help="load all --distinct-keys into the cache before the warm-up (the warm steady-state case)")
     parser.add_argument("--zipf-s", type=float, default=1.1)
     parser.add_argument("--seed", type=int, default=118)
     parser.add_argument("--ttl-s", type=float, default=24 * 60 * 60)
@@ -155,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         "distribution": f"Zipf(s={args.zipf_s}) over {args.distinct_keys} ACTIVE works chosen by FARM_FINGERPRINT(work_id)",
         "seed": args.seed,
         "warmup_requests": args.warmup,
+        "prewarm_all_keys": args.prewarm,
         "measured_requests": args.requests,
         "cache": {"kind": "in-process TtlLruCache", "ttl_s": args.ttl_s, "max_entries": args.distinct_keys, "caches_not_found": True},
         "miss_path": "BigQueryWarehouse.query (dry run + execute) of the repo lookup SQL",
@@ -199,7 +209,9 @@ def main(argv: list[str] | None = None) -> int:
 
     prefix = "work:doi:" if param == "doi" else "work:id:"
     sequence = zipf_sequence(args.distinct_keys, args.warmup + args.requests, args.zipf_s, args.seed)
-    records = measure(lambda key: cache.get_or_load(prefix + key, lambda: load(key)), keys, sequence, args.warmup)
+    get = lambda key: cache.get_or_load(prefix + key, lambda: load(key))
+    prewarm_misses = prewarm(get, keys) if args.prewarm else 0
+    records = measure(get, keys, sequence, args.warmup)
     with (out / "requests.jsonl").open("w") as handle:
         for record in records:
             handle.write(json.dumps(record) + "\n")
@@ -208,6 +220,7 @@ def main(argv: list[str] | None = None) -> int:
         "plan": plan,
         **summarize(records, args.target_p95_ms),
         "cache_stats": vars(cache.stats),
+        "prewarm_misses": prewarm_misses,
         "jobs": len(run.jobs),
         "billed_bytes": run.billed,
         "user_emails": sorted({j["user_email"] for j in run.jobs if j.get("user_email")}),

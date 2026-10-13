@@ -180,3 +180,12 @@ def test_plan_is_written_before_measuring_and_never_overwritten(tmp_path: Path, 
     assert plan["distribution"].startswith("Zipf(s=1.3)") and plan["target_p95_ms"] == 200.0
     with pytest.raises(SystemExit, match="exists"):
         m118.main(["--confirm-project", "p1", "--out", str(out)])
+
+
+def test_prewarm_loads_every_key_so_measured_requests_all_hit() -> None:
+    cache = TtlLruCache(max_entries=3)
+    get = lambda key: cache.get_or_load(key, lambda: key)
+    assert m118.prewarm(get, ["a", "b", "c"]) == 3
+    assert m118.prewarm(get, ["a", "b", "c"]) == 0
+    records = m118.measure(get, ["a", "b", "c"], m118.zipf_sequence(3, 50, 1.1, seed=1), warmup=0)
+    assert all(r["hit"] for r in records)
