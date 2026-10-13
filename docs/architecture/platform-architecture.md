@@ -80,3 +80,11 @@ systems remain separate and are not replaced or implemented here.
 See [query routing](query-routing.md), [public data sources](public-data-sources.md),
 [GCP / BigQuery-first guidance](gcp-bigquery-first.md), and the
 [roadmap](roadmap.md).
+
+## Lead requirement coverage
+
+The [lead coverage register](../requirements/openalex-lead-coverage.md) maps
+every atomic requirement of the lead's 30-section *OpenAlex Data Storage, Query,
+and Serving Architecture* to the issues, merged PRs, files and tests behind it,
+the evidence level reached, the remaining gap and the follow-on issue. Use it,
+not this page, to check whether a lead requirement is implemented.
