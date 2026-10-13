@@ -1,0 +1,40 @@
+/*
+ * Site-wide styles. Infima (the classic theme's CSS framework) reads these
+ * variables; see https://docusaurus.io/docs/styling-layout
+ */
+
+:root {
+  --ifm-color-primary: #1f5fa8;
+  --ifm-color-primary-dark: #1c5697;
+  --ifm-color-primary-darker: #1a518f;
+  --ifm-color-primary-darkest: #164376;
+  --ifm-color-primary-light: #2268b9;
+  --ifm-color-primary-lighter: #246dc1;
+  --ifm-color-primary-lightest: #317cd4;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #6fa8e8;
+  --ifm-color-primary-dark: #5398e4;
+  --ifm-color-primary-darker: #4590e2;
+  --ifm-color-primary-darkest: #2177d6;
+  --ifm-color-primary-light: #8bb8ec;
+  --ifm-color-primary-lighter: #99c0ee;
+  --ifm-color-primary-lightest: #c1d9f5;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+/* Wide status and evidence tables scroll inside the article, not the page. */
+.markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* Mermaid diagrams stay centred and never overflow the content column. */
+.docusaurus-mermaid-container {
+  overflow-x: auto;
+  text-align: center;
+}

@@ -242,3 +242,9 @@ data/sample/*
 *.jsonl
 *.jsonl.gz
 node_modules/
+
+# Docusaurus documentation site (docs/site)
+docs/site/node_modules/
+docs/site/build/
+docs/site/.docusaurus/
+docs/site/.cache-loader/

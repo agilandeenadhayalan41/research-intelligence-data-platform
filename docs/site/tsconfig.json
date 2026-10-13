@@ -1,0 +1,12 @@
+// Not used by "docusaurus start/build"; it powers editor type-checking and
+// the "npm run typecheck" script.
+{
+  "extends": "@docusaurus/tsconfig",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
+    "strict": true
+  },
+  "include": ["docusaurus.config.ts", "sidebars.ts", "src"],
+  "exclude": [".docusaurus", "build", "node_modules"]
+}
