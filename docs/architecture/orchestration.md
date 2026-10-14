@@ -237,6 +237,11 @@ Documented only — no cron deployment:
 Composer must use workload identity / secret-managed connections (Step 21).
 No Airflow Variables with secrets and no Connections in source control.
 
+[ADR 0001 D6](../adr/0001-gcp-architecture-and-service-selection.md#d6-orchestration-cloud-workflows-triggered-by-cloud-scheduler)
+proposes Cloud Workflows triggered by Cloud Scheduler instead, with Composer as
+the named alternative under a sign-off condition; DE-21 (#142) updates this
+mapping.
+
 ---
 
 ## Dataform boundary

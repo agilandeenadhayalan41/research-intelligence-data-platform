@@ -37,6 +37,20 @@ const sidebars: SidebarsConfig = {
       ],
     },
     {
+      // ADR files keep their number in the doc id through an `id:` front
+      // matter field; docs/adr/README.md is the index (route /adr/).
+      type: 'category',
+      label: 'Architecture decisions',
+      items: [
+        {type: 'doc', id: 'adr/README', label: 'ADR index'},
+        {
+          type: 'doc',
+          id: 'adr/0001-gcp-architecture-and-service-selection',
+          label: '0001 GCP architecture',
+        },
+      ],
+    },
+    {
       // Roadmap-step order: each page builds on the ones above it.
       type: 'category',
       label: 'Sources and ingestion',

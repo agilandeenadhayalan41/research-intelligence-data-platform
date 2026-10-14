@@ -11,6 +11,15 @@ and nothing is deployed to an enterprise environment or PROD.
 Configure environments explicitly, default to local resources, and do not
 access production or create expensive cloud resources during development.
 
+[ADR 0001](../adr/0001-gcp-architecture-and-service-selection.md) records the
+proposed GCP service selection for this design (issue #124, DE-03): the
+canonical Cloud Storage layout, BigQuery as the analytical engine, US
+multi-region data, the control plane, runtime, orchestration, SQL workflow,
+serving path, identity, data and cost policies, and every option not selected
+with its revisit trigger. The ADR is **Proposed** until the lead architect
+approves and merges the #124 pull request; it creates no cloud resource and
+deploys nothing.
+
 ## Target flow
 
 ```mermaid
@@ -25,7 +34,7 @@ flowchart LR
     Aggregates --> Service["Data Service/API"]
     Service --> Consumers["Research Intelligence and future consumers"]
     Canonical --> DuckDB["DuckDB local tests / prototypes"]
-    Service -. "only after benchmark evidence" .-> Optional["Optional PostgreSQL/AlloyDB or cache"]
+    Service -. "only after benchmark evidence" .-> Optional["Optional PostgreSQL/AlloyDB projection or shared cache"]
 ```
 
 ## Design principles
@@ -34,7 +43,11 @@ flowchart LR
   paths, checksums, and explicit replay/conflict semantics. Do not overwrite raw
   source bytes.
 - Keep canonical schemas portable and independent of BigQuery or PostgreSQL.
-  Use Parquet where genuinely applicable and preserve normalized relationships.
+  Object storage plus Parquet is the canonical data layer (lead §3.1 and §30);
+  [ADR 0001 D1](../adr/0001-gcp-architecture-and-service-selection.md#d1-canonical-gcs-layout-and-release-manifests)
+  proposes the Cloud Storage Parquet release layout, to be built in DE-07
+  (#128). Today canonical Parquet is only a local export. Preserve normalized
+  relationships.
 - Use BigQuery for analytical workloads and high-volume relationships. Base
   partitioning, clustering, and query design on measured workloads; bound queries
   and consider data scanned and cost.
@@ -44,13 +57,20 @@ flowchart LR
 - Expose domain capabilities through a storage-independent Data Service/API.
   Materialize repeated expensive outputs only when usage justifies their
   maintenance and cost.
-- Assess PostgreSQL/AlloyDB only after benchmarking representative point lookups,
-  expected concurrency, and freshness against BigQuery with API/cache. If needed,
-  use it as a selective operational projection; do not copy every analytical
-  relationship by default.
+- Assess PostgreSQL/AlloyDB as a serving store only after benchmarking
+  representative point lookups, expected concurrency, and freshness against
+  BigQuery with API/cache. If needed, use it as a selective operational
+  projection; do not copy every analytical relationship by default.
+  [ADR 0001 D8](../adr/0001-gcp-architecture-and-service-selection.md#d8-serving-one-cloud-run-service-with-a-release-aware-in-process-cache)
+  proposes no operational serving store;
+  [D4](../adr/0001-gcp-architecture-and-service-selection.md#d4-durable-control-plane-cloud-sql-for-postgresql-control-state-only)
+  proposes Cloud SQL for PostgreSQL for pipeline control state only, which is
+  not a serving store.
 - Keep Spark/Dataproc and Iceberg/BigLake optional future choices. Revisit them
   only if measured volume, transformation complexity, ACID/time-travel needs,
   schema evolution, or multi-engine requirements warrant them.
+  [ADR 0001 D10](../adr/0001-gcp-architecture-and-service-selection.md#d10-limits-on-optional-technologies)
+  lists each as not selected, with a measurable revisit trigger.
 
 Runtime code that exists today: `GCSObjectStore` (#9), `BigQueryWarehouse`
 (#10), the `PostgreSQLWarehouse` read adapter (#7), the local PostgreSQL
