@@ -82,6 +82,10 @@ Table `deletion_events` stores:
 - optional file-level `source_updated_date` when known for the asset
 - `run_id`, `source_uri`, `processed_at`
 - `outcome`: `DELETED` | `ALREADY_DELETED` | `UNKNOWN_WORK` | `STALE` | `CONFLICT` | `DUPLICATE`
+  (`CONFLICT` and `DUPLICATE` are allowed by the enum and the SQL `CHECK`, but
+  the Step 13 runner never writes them: duplicate rows are counted and skipped
+  without an event row, and a conflicting `deleted_date` fails the file; see
+  [unknown / duplicate IDs](#unknown--duplicate-ids))
 
 `RecordProvenance` rows with `entity_type=work-deletion` set
 `source_updated_date` to the row’s `deleted_date`. Prior Works ingestion
@@ -152,7 +156,8 @@ ObjectStore + PostgreSQL are not one distributed ACID transaction.
 ## Counters
 
 `rows_seen`, `unique_ids`, `duplicates`, `deleted`, `already_deleted`,
-`unknown`, `stale`, `conflicts`.
+`unknown`, `stale`, `conflicts`. `conflicts` counts `CONFLICT` outcomes, which
+the runner does not emit today, so it stays `0`.
 
 ## Active filtering
 

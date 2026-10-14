@@ -1,6 +1,18 @@
 # OpenAlex Research Intelligence query-pattern registry (Step 14 / #19)
-# Storage-independent workload definitions. No BigQuery deployment or measured
-# cloud evidence is claimed here.
+# Storage-independent workload definitions. No pattern's evidence_status is
+# MEASURED: the recorded BigQuery runs are small synthetic samples, not
+# production-scale placement evidence.
+# - #103 and #108 Stages 1-2 (GCP_SANDBOX, operator-owned project, synthetic
+#   ~10k and ~100k Works) and #108 Stage 3 (personal projects labelled DEV and
+#   QA, synthetic ~10k Works) ran all 11 implemented patterns in BigQuery:
+#   small-sample latency, year-partition pruning for the year-bounded patterns,
+#   clustering OBSERVED for 4 of 11 patterns (Stage 2; a reduction only for
+#   citation-relationships), cost not representative (10 MiB billing-floor
+#   artifacts). issn-source-lookup has no SQL. Records:
+#   docs/architecture/bigquery-analytical-models.md.
+# - #118 (personal DEV, synthetic ~10k Works) timed doi-work-lookup and
+#   openalex-work-id-lookup through an in-process cache; see those patterns.
+# Requirement-level status: docs/requirements/openalex-lead-coverage.md.
 
 version: "1.0.0"
 source: openalex
@@ -130,8 +142,16 @@ patterns:
     placement: BIGQUERY_PLUS_CACHE
     placement_rationale: >-
       Architecture expects analytical warehouse plus API/cache for hot DOI
-      lookups. No measured BigQuery latency yet; OPTIONAL_OPERATIONAL_STORE
-      is forbidden without MEASURED evidence.
+      lookups. BigQuery alone, synthetic data, 21 cache-off runs: GCP_SANDBOX
+      #103 (~10k Works) 199/248 ms server and 1233/1707 ms client p50/p95,
+      #108 Stage 2 (~100k Works) 221/421 ms server and 1213/1506 ms client.
+      #118, operator's personal DEV project, ~10k synthetic Works, in-process
+      cache around BigQueryWarehouse (no DataService or HTTP hop), Zipf(1.1)
+      over 1,000 keys: cold cache MISSED the operator-stated 200 ms p95
+      (2,426 ms), prewarmed MET it (0.006 ms). #23 closed not_planned after
+      the operator chose the BigQuery + API/cache path. Evidence stays
+      ASSUMED: no production-scale, real-traffic, shared-cache or concurrency
+      run. OPTIONAL_OPERATIONAL_STORE is forbidden without MEASURED evidence.
     evidence_status: ASSUMED
     service_level:
       desired_p95_latency_ms: 200
@@ -178,7 +198,13 @@ patterns:
     placement: BIGQUERY_PLUS_CACHE
     placement_rationale: >-
       Primary-key style lookup; BigQuery + API/cache is the first path to
-      evaluate. Placement remains evidence-honest (ASSUMED), not MEASURED.
+      evaluate. BigQuery alone, synthetic data: GCP_SANDBOX #103 (~10k Works)
+      191/353 ms and #108 Stage 2 (~100k Works) 209/598 ms server p50/p95.
+      #118, operator's personal DEV project, ~10k synthetic Works, in-process
+      cache (no DataService): cold MISSED the operator-stated 200 ms p95
+      (2,554 ms), prewarmed MET it (0.010 ms); #23 closed not_planned.
+      Placement remains evidence-honest (ASSUMED), not MEASURED: no
+      production-scale, real-traffic or shared-cache run.
     evidence_status: ASSUMED
     service_level:
       desired_p95_latency_ms: 200
@@ -270,7 +296,12 @@ patterns:
     fanout_risk: NONE
     candidate_materialization: null
     placement: BIGQUERY_PLUS_CACHE
-    placement_rationale: Dimension point lookup via BigQuery + cache until measured.
+    placement_rationale: >-
+      Dimension point lookup via BigQuery + cache until measured. Only BigQuery
+      alone has run, on synthetic data (GCP_SANDBOX #103 ~10k Works 168/260 ms
+      and #108 Stage 2 ~100k Works 163/229 ms server p50/p95; also #108 Stage 3
+      in personal DEV/QA); #118 timed the cache for DOI and Work ID only, and no
+      service-level target exists.
     evidence_status: ASSUMED
     logical_query_shape: |
       SELECT p.*
@@ -319,7 +350,10 @@ patterns:
     placement: MATERIALIZED_AGGREGATE
     placement_rationale: >-
       Repeated expensive distinct-count over relationships; architecture
-      candidate for materialization. Not yet MEASURED on BigQuery.
+      candidate for materialization. The SQL ran in BigQuery on synthetic data
+      only (#103, #108; small-sample latency, billing-floor cost); reuse,
+      refresh cost and production scale are not MEASURED, and no Gold mart is
+      materialized.
     evidence_status: ARCHITECTURE
     logical_query_shape: |
       -- Safe shape: aggregate authorships first, then filter journal.

@@ -1,5 +1,6 @@
 -- BigQuery Standard SQL DDL for `openalex.work_locations`
--- Step 15 / #22 — contract only; NOT DEPLOYED / NOT EXECUTED here.
+-- Step 15 / #22 contract. Executed only by manual scripts on synthetic data
+-- (GCP_SANDBOX, personal DEV/QA); NOT DEPLOYED.
 -- Grain: one row per (work_id, location_index)
 -- Incremental: REPLACE_BY_WORK_ID
 

@@ -99,8 +99,8 @@ are rejected.
   source-record partition date; it is not the snapshot date or a retrieval time.
   Both accept calendar date values (including Python `date` objects) or canonical
   `YYYY-MM-DD` strings, without a time zone. Timestamps and numeric Unix timestamp
-  values are rejected. Future `IngestionProvenance.retrieved_at` remains a
-  separate, timezone-aware retrieval timestamp.
+  values are rejected. `IngestionProvenance.retrieved_at`, written at raw
+  landing, remains a separate, timezone-aware retrieval timestamp.
 - Entity names are lowercase slugs. A file URI must use the `s3` scheme, the
   `openalex` bucket, and the matching
   `data/{content_format}/{entity}/...` namespace. Queries, fragments, whitespace,
@@ -122,8 +122,10 @@ the snapshot date is included so a new snapshot has a distinct identity.
 by identity. If two descriptions have the same identity but differ in any metadata,
 it raises `ValueError` rather than allowing iteration order to pick a winner.
 `asset_id` identifies the source object; it is not a content checksum. The SHA-256
-in future ingestion provenance must be calculated from the bytes actually
-retrieved. Manifest metadata and byte-derived checksums are separate facts. The
+in ingestion provenance (`IngestionProvenance.sha256`) is calculated from the
+bytes actually retrieved, and `put_if_absent` verifies it while landing them
+([immutable landing](immutable-local-landing.md#checksums)). Manifest metadata
+and byte-derived checksums are separate facts. The
 parser does not manufacture checksums, run IDs, retrieval times, or ingestion
 provenance.
 
@@ -271,7 +273,7 @@ flowchart LR
     Parser --> Asset["Validated OpenAlexAssetMetadata"]
     Asset --> Selector["Bounded sample selector"]
     Selector -->|"selected metadata only"| Fetcher["OpenAlexConnector.fetch(): bounded stream"]
-    Fetcher -->|"enforce actual bytes received"| Landing["Future immutable landing"]
+    Fetcher -->|"enforce actual bytes received"| Landing["Immutable landing (ObjectStore)"]
     Selector -->|"unknown, invalid, or unsafe size"| Exclude["Report skipped metadata"]
     Landing --> Checksum["Calculate SHA-256 from retrieved bytes"]
     Checksum --> Provenance["Attach checksum and retrieval provenance"]
@@ -281,4 +283,10 @@ The manifest-to-parser, parser-to-metadata, and metadata-to-selector arrows are
 metadata operations; connector discovery and retrieval implement the
 `SourceConnector` boundary. The existing `SourceAsset(source, identifier, uri)`
 interface is preserved: `to_source_asset()` adapts validated metadata using the
-stable `asset_id`. Landing, storage, and warehouse operations remain future work.
+stable `asset_id`. The connector itself still writes nothing. Landing and
+storage are implemented by the `ObjectStore` adapters (Step 09
+`LocalObjectStore`, #9 `GCSObjectStore`), the Step 12/13 local ingestion
+runners land source bytes through `LocalObjectStore`, and the DuckDB,
+PostgreSQL and BigQuery `Warehouse` adapters (#8, #7, #10) run queries. That
+path has run only on synthetic payloads: no real OpenAlex payload has been
+retrieved or landed by repository code (tracked in #126).

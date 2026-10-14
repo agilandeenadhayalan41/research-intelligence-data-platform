@@ -25,8 +25,8 @@ implemented.
 | --- | --- | --- |
 | 01 | Repository foundation | Python packaging, typed interfaces, structured logging, tests, CI, and optional local PostgreSQL tooling |
 | 02 | Configuration framework | Validated YAML, environment substitution, explicit environment selection, and strict sample limits |
-| 03 | Storage contracts | `ObjectStore` and immutable-write semantics; `GCSObjectStore` adapter (#9) with offline fake-client tests; live sandbox smoke passed (#91, `VERIFIED` for GCP_SANDBOX only) |
-| 04 | Warehouse contracts | Parameterized query/PyArrow interface; `DuckDBWarehouse` local queries (#8); `BigQueryWarehouse` (#10; live sandbox smoke passed in #92, `VERIFIED` for GCP_SANDBOX only); `PostgreSQLWarehouse` query (#7; `LOCAL_POSTGRES_VERIFIED` by #90) |
+| 03 | Storage contracts | `ObjectStore` and immutable-write semantics; `GCSObjectStore` adapter (#9) with offline fake-client tests; live smoke passed in GCP_SANDBOX (#91; least-privilege re-run in #108 Stage 1) and in personal projects labelled DEV and QA (#108 Stage 3), so `VERIFIED` there at domain level only |
+| 04 | Warehouse contracts | Parameterized query/PyArrow interface; `DuckDBWarehouse` local queries (#8); `BigQueryWarehouse` (#10; live smoke passed in GCP_SANDBOX in #92 and #108 Stage 1, and in personal DEV/QA projects in #108 Stage 3, so `VERIFIED` there at domain level only); `PostgreSQLWarehouse` query (#7; `LOCAL_POSTGRES_VERIFIED` by #90) |
 | 05 | Bounded OpenAlex connector | Anonymous manifest discovery and separate caller-owned streaming retrieval |
 | 06 | Works manifest parser | Pure parsing, validated metadata, stable identities, and duplicate/conflict handling |
 | 07 | Development sample selector | Deterministic, metadata-only selection with file-count and byte-size bounds |
@@ -45,21 +45,34 @@ implemented.
 | 20 | Orchestration contracts | Thin DAG + physical ExecutionUnits (REGISTER/INGEST/CANONICALIZE → one `WORKS_INGEST_UNIT`), bounded TaskMessage/XCom, recursive safe metadata, retries, backfill bounds, publication concurrency scope (`TEMP_TABLES` recommended), dry-run plan renderer; no Airflow/Composer/Dataform/GCP deploy ([#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25)) |
 | 21 | Environment readiness | Truthful Sandbox→DEV→QA→PROD readiness registry, evidence levels, promotion gates, IAM/WIF/secrets/GCS/BigQuery gaps documented; no cloud provisioning ([#28](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/28)) |
 
+The boundary column records what each step itself delivered. Later validation
+issues (#91, #92, #103, #108, #118) ran some of this code against GCP in
+operator-run checks on synthetic or public sample data; see the paragraphs below
+and [Roadmap completion status](#roadmap-completion-status).
+
 Constructing adapters or loading configuration does not connect to services.
 `LocalObjectStore` writes only under the configured local landing path. Default
 ingestion tests stay offline (fake connector + in-memory control/canonical).
 `GCSObjectStore` is implemented behind the existing `ObjectStore` contract
 (create-only generation preconditions; default tests use an injected fake
 client — no live credentials/network). Live bucket validation is separately
-approved and is not part of default CI; #91 recorded a passing live sandbox
-smoke, so `GCS_RAW_LANDING` is `VERIFIED` for GCP_SANDBOX only.
+approved and is not part of default CI. #91 recorded a passing live sandbox
+smoke, and #108 re-ran it as a least-privilege service account in GCP_SANDBOX
+(Stage 1) and in operator-controlled personal projects labelled DEV and QA
+(Stage 3). `GCS_RAW_LANDING` is therefore `VERIFIED` for GCP_SANDBOX, DEV and QA
+at the domain level only; those environments stay `NOT_READY` overall, and the
+personal projects are not enterprise-managed environments.
 
 `BigQueryWarehouse` is implemented behind the existing `Warehouse` contract
 (dry-run + `maximum_bytes_billed`; default tests use an injected fake client —
 no live credentials/network/paid queries). Live dataset validation is
 separately approved and is not part of default CI. #92 recorded a passing live
 sandbox smoke of the adapter contract, and #103 deployed and MEASURED the models
-in the sandbox on synthetic data only.
+in the sandbox on synthetic data only. #108 repeated both as a least-privilege
+service account in GCP_SANDBOX (Stage 1) and in the personal DEV and QA projects
+(Stage 3, synthetic-10k-works), and Stage 2 MEASURED the models in GCP_SANDBOX
+at synthetic-100100-works. `BIGQUERY_ANALYTICAL` is therefore `VERIFIED` for
+GCP_SANDBOX, DEV and QA at the domain level only.
 
 `DuckDBWarehouse` implements local `Warehouse.query` for `:memory:` or an
 explicit DuckDB file path. Construction does not open a connection or create a
@@ -77,13 +90,15 @@ is not the BigQuery analytical engine and does not implement issue #23
 (PostgreSQL/AlloyDB serving). See
 [PostgreSQL Warehouse](docs/architecture/postgres-warehouse.md).
 
-**Still planned:** deploying and measuring the Step 15–16 BigQuery models, HTTP
-consumer deployment, Composer provisioning, and Dataform runtime. There is no
-deployed BigQuery dataset/table estate or production pipeline. Steps 15–18
-define BigQuery/Gold/quality/Data Service contracts; runtime adapters are
-offline-tested only, except `GCSObjectStore` (live sandbox smoke, #91),
-`BigQueryWarehouse` (live sandbox smoke, #92) and `PostgreSQLWarehouse`
-(local PostgreSQL, #90). Step 20 adds orchestration
+**Still planned:** HTTP consumer deployment, Composer provisioning, and Dataform
+runtime. The Step 15–16 BigQuery models were deployed and MEASURED on synthetic
+data only, by the operator-run `scripts/bigquery_sandbox_103.py` (#103, #108).
+Beyond those manual runs, the repository provisions no BigQuery dataset/table
+estate, and there is no production pipeline. Steps 15–18 define
+BigQuery/Gold/quality/Data Service contracts; default CI tests the runtime
+adapters offline only. Separate runs outside default CI cover `GCSObjectStore`
+(#91, #108), `BigQueryWarehouse` (#92, #103, #108, #118) and
+`PostgreSQLWarehouse` (local PostgreSQL, #90). Step 20 adds orchestration
 **contracts** only (no scheduler deploy). Step 18 adds no HTTP service and no
 Postgres serving.
 
@@ -104,22 +119,36 @@ gaps remain explicitly documented; this does not mean production-ready.
 LOCAL (evidence only) → GCP_SANDBOX → DEV → QA → PROD
 ```
 
-Today Sandbox/DEV/QA/PROD are all `NOT_READY`. GCS (#9) and the BigQuery
-adapter (#10) are `VERIFIED` in GCP_SANDBOX only (#91/#92 live smokes;
-operator-owned project, user ADC), `READY_TO_VALIDATE` for DEV/QA, and
-`BLOCKED` in PROD. The Step 15–16 BigQuery models were deployed and MEASURED in
-GCP_SANDBOX on synthetic-10k-works only (#103), not at production scale.
-IAM / Composer / HTTP deploy gaps remain. Do not equate YAML presence or
-adapter code with production readiness.
+Today Sandbox/DEV/QA/PROD are all `NOT_READY` overall, and promotion is denied
+at every step. GCS (#9) and the BigQuery adapter (#10) are `VERIFIED` at the
+domain level in GCP_SANDBOX (#91/#92 live smokes as user ADC in an
+operator-owned project; #108 Stage 1 re-ran them as a least-privilege service
+account) and in operator-controlled personal projects labelled DEV and QA
+(#108 Stage 3), and `BLOCKED` in PROD. The personal DEV/QA projects are not
+enterprise-managed environments. The Step 15–16 BigQuery models were deployed
+and MEASURED in GCP_SANDBOX on synthetic-10k-works (#103) and
+synthetic-100100-works (#108 Stage 2), and in the personal DEV/QA projects on
+synthetic-10k-works (#108 Stage 3); not at production scale and not on real
+OpenAlex data. IAM / Composer / HTTP deploy gaps remain. Do not equate YAML
+presence or adapter code with production readiness. For requirement-level
+status against the lead architecture, see the
+[OpenAlex lead coverage register](docs/requirements/openalex-lead-coverage.md).
 
-Keep
-[issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
-as the open umbrella for deferred/runtime work and live-validation tracking.
+[Issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2),
+the roadmap umbrella, was closed as completed on 2026-10-13; new work needs its
+own issue, and the Data Engineering follow-ups are tracked under
+[#157](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/157).
 **#9** (GCS) and **#10** (BigQuery) adapter implementations are complete
-(both closed); their live sandbox smokes passed in #91 and #92 (sandbox only). **#7** (PostgreSQL)
+(both closed); their live smokes passed in GCP_SANDBOX (#91, #92) and in the
+personal DEV/QA projects (#108). **#7** (PostgreSQL)
 and **#8** (DuckDB) query adapters are implemented; #7 is locally validated
-against PostgreSQL by #90. Neither is cloud or production evidence. Do not
-automatically start #23 or claim production readiness.
+against PostgreSQL by #90. Neither is cloud or production evidence.
+[#23](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/23)
+(optional PostgreSQL/AlloyDB serving) was closed as not planned on 2026-10-13:
+after #118 the operator chose BigQuery + API/cache for DOI and Work-ID lookups.
+Its local Work lookup projection stays an unapproved, undeployed PROTOTYPE; reopen
+#23 only under the criteria in its closing comment. Do not claim production
+readiness.
 
 ## Target architecture
 
@@ -243,9 +272,11 @@ evidence classes, bounds, verified representations, and format recommendation.
 
 Requires **Python 3.12+ and Make**. Docker Compose is optional and is not needed
 for the default test suite. Dependencies and package metadata are defined in
-[`pyproject.toml`](pyproject.toml): Pydantic, PyYAML, and PyArrow at runtime, with
-pytest and DuckDB for development. Direct dependencies are pinned; a complete
-transitive lockfile is not provided.
+[`pyproject.toml`](pyproject.toml): Pydantic, PyYAML, PyArrow,
+`google-cloud-storage`, and `google-cloud-bigquery` at runtime, with pytest and
+DuckDB for development and an optional `postgres` extra (psycopg) for the local
+PostgreSQL checks. Direct dependencies are pinned; a complete transitive
+lockfile is not provided.
 
 From the repository root, create a virtual environment. In PowerShell:
 
@@ -272,6 +303,7 @@ make build
 | `make test-orchestration` | Focused Step 20 orchestration contract tests (also covered by `make test`) |
 | `make test-postgres-ingestion` | Separately invoked local PostgreSQL Steps 12–13 transaction tests |
 | `make test-postgres-warehouse` | Separately invoked local PostgreSQL `Warehouse.query` tests (#7) |
+| `make test-postgres-serving` | Separately invoked local PostgreSQL tests for the #23 Work lookup projection PROTOTYPE |
 | `make check` | Compile Python sources/tests and check installed dependency consistency |
 | `make build` | Build a wheel into the ignored `dist` directory without building dependency wheels |
 | `make postgres-up` / `make postgres-down` | Explicitly start/stop the optional local Compose service |
@@ -322,23 +354,47 @@ working directory. Python does not automatically load `.env`.
 | Configuration | Current meaning |
 | --- | --- |
 | [`config/local.yaml`](config/local.yaml) | Local storage settings, in-memory DuckDB settings, and bounded sample defaults |
-| [`config/gcp-sandbox.yaml`](config/gcp-sandbox.yaml) | Future GCS/BigQuery identifiers from environment variables; no resources created |
-| [`config/dev.yaml`](config/dev.yaml), [`config/qa.yaml`](config/qa.yaml), [`config/prod.yaml`](config/prod.yaml) | Local-only placeholders, not verified deployments |
+| [`config/gcp-sandbox.yaml`](config/gcp-sandbox.yaml) | GCS/BigQuery identifier shape from environment variables; no resources created |
+| [`config/dev.yaml`](config/dev.yaml), [`config/qa.yaml`](config/qa.yaml), [`config/prod.yaml`](config/prod.yaml) | Local-only placeholders (local storage, DuckDB), not verified deployments |
 
-The scaffold still includes `warehouse.transactional: postgres`; that setting
-does not implement PostgreSQL persistence or make operational serving mandatory.
+No runtime factory selects a storage or warehouse engine from these files. The
+recorded #103, #108 and #118 cloud runs (GCP_SANDBOX and the personal DEV/QA
+projects) were driven by operator-run scripts in `scripts/` with their own
+flags and `GOOGLE_CLOUD_PROJECT`, not by loading these YAML files.
+
+The scaffold still includes `warehouse.transactional: postgres`; no runtime code
+reads that setting, and it does not make operational serving mandatory.
 `GCSObjectStore` and `BigQueryWarehouse` are available with injectable clients
-for offline tests. `DuckDBWarehouse` executes local queries only.
-`PostgreSQLWarehouse` implements read `Warehouse.query` (offline by default;
-local PostgreSQL integration is separate and recorded by #90). Issue #23 has only a local
-PROTOTYPE work lookup projection (gate not met; see
-[Work lookup projection](docs/architecture/serving-work-lookup-projection.md)); no serving
-projection is approved or deployed.
-`ControlStore` is a fail-fast protocol only. Configuration alignment and
-runtime persistence require separately scoped work.
+for offline tests. `DuckDBWarehouse` executes local queries only. Configuration
+alignment and cloud runtime persistence require separately scoped work.
+
+PostgreSQL has three separate roles here, each exercised only against local
+PostgreSQL. None is a production control plane or an approved serving store:
+
+- **Pipeline control and canonical state.** `ControlStore` has a fail-fast
+  `UnimplementedControlStore`, an `InMemoryControlStore`, and the durable
+  `PostgresControlStore` (with `PostgresCanonicalStore`) that the Step 12–13
+  local pipelines use with `--backend postgres`. The production durable control
+  state is undecided (tracked in
+  [#133](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/133)).
+- **Read queries.** `PostgreSQLWarehouse` implements read `Warehouse.query`
+  (offline by default; local PostgreSQL integration is separate and recorded by #90).
+- **Optional serving.** Issue #23 has only a local PROTOTYPE work lookup
+  projection (gate not met; see
+  [Work lookup projection](docs/architecture/serving-work-lookup-projection.md)).
+  No serving projection is approved or deployed, and #23 is closed as not planned.
+
+#118 measured an in-process TTL/LRU cache (`serving/lookup_cache.py`) around
+`BigQueryWarehouse.query` in the operator's personal DEV project on synthetic
+~10k-Works tables. Against the operator-stated 200 ms p95 lookup target (not an
+SLA), cold-cache DOI and Work-ID runs missed it (overall p95 2,426 ms and
+2,554 ms) and prewarmed runs met it (0.006 ms and 0.010 ms). That is
+measurement code, not a deployed cache or API; a production lookup cache is
+tracked in
+[#151](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/151).
 
 The sandbox template references `GOOGLE_CLOUD_PROJECT`, `GCS_BUCKET`, and
-`BIGQUERY_DATASET`. Future cloud adapters must obtain credentials through approved
+`BIGQUERY_DATASET`. Cloud adapters and scripts must obtain credentials through approved
 environment/ADC or workload-identity mechanisms, never tracked credential files.
 Sandbox -> DEV -> QA -> PROD is a future readiness path, not deployed infrastructure.
 
@@ -381,6 +437,7 @@ tracked YAML or logs.
 | [OpenAlex canonical model](docs/architecture/openalex-canonical-model.md) | Normalized entities/relationships, IDs, mapping, PyArrow contracts |
 | [OpenAlex deletions](docs/architecture/openalex-deletions.md) | Tombstones, precedence/restore, deletion lineage, transaction boundary |
 | [21-step roadmap](docs/architecture/roadmap.md) | Completed stages and separately scoped future work |
+| [OpenAlex lead coverage register](docs/requirements/openalex-lead-coverage.md) | Requirement-level status of the lead architecture (Sections 1–30): implementing files, tests, evidence strength, gaps, and owning follow-on issues |
 | [Copilot instructions](.github/copilot-instructions.md) | Engineering rules, phase boundaries, and required validation |
 
 ```text
@@ -391,37 +448,47 @@ src\research_platform\
   config\                     Validated models and explicit YAML loading
   sources\openalex\            Metadata, parser, selector, connector, profiler, connectivity/profile CLIs
   storage\                    ObjectStore contract; LocalObjectStore; GCSObjectStore
-  control\                    Pipeline-control models, lifecycle, ControlStore protocol
+  control\                    Pipeline-control models, lifecycle, ControlStore protocol, in-memory store
   canonical\openalex\         Portable OpenAlex canonical models, schemas, mapping
+  persistence\                Unit-of-work boundaries; local durable PostgresControlStore/PostgresCanonicalStore
+  ingestion\                  Step 12–13 local Works ingestion and deletions pipelines and CLIs
   benchmarks\                 Query-pattern registry models, fan-out fixtures, FIXTURE_ONLY harness
   analytics\bigquery\         Step 15 BigQuery table/query contracts + offline validation
   analytics\gold\             Step 16 Gold mart contracts + SEMANTIC_ONLY validation
   quality\                    Step 17 data-quality gates, metrics, SEMANTIC_ONLY runner
+  service\                    Step 18 Data Service domain layer, in-memory repository (no HTTP)
   e2e\                        Step 19 bounded SEMANTIC_ONLY composition runner
   orchestration\              Step 20 thin DAG / TaskMessage / retry / publication-scope contracts
   readiness\                  Step 21 environment readiness registry + promotion gates
   warehouse\                  Warehouse contract; BigQueryWarehouse; DuckDBWarehouse; PostgreSQLWarehouse
   provenance\                 Immutable retrieval-provenance model
-  ingestion\ serving\         Reserved runtime areas
+  serving\                    #118 in-process lookup cache; #23 Work lookup PROTOTYPE (unapproved, not deployed)
 tests\                        Offline unit/integration tests and synthetic fixtures
 docs\architecture\            Architecture, contracts, source strategy, roadmap
-sql\control\                  Versioned PostgreSQL control DDL specs (not auto-applied)
-sql\canonical\                Versioned PostgreSQL canonical DDL specs (not BigQuery)
-sql\bigquery\openalex\        BigQuery Standard SQL DDL, MERGE models, pattern queries, gold marts, quality (not deployed)
-scripts\ dags\                Reserved operational tools and later orchestration
+docs\overview\                Overview pages: introduction, getting started, how it works, status, glossary
+docs\requirements\            OpenAlex lead coverage register and traceability matrices
+docs\site\                    Docusaurus project that renders docs\ (PRs #158/#159)
+sql\control\                  Versioned PostgreSQL control DDL (applied by --backend postgres local ingestion)
+sql\canonical\                Versioned PostgreSQL canonical DDL (applied by --backend postgres; not BigQuery)
+sql\serving\postgres\         #23 PROTOTYPE Work lookup projection DDL (local only)
+sql\bigquery\openalex\        BigQuery Standard SQL DDL, MERGE models, pattern queries, gold marts, quality (deployed and run only by operator scripts, on synthetic data: GCP_SANDBOX, personal DEV/QA)
+scripts\                      Manual, operator-run cloud smoke and measurement scripts (offline tests use fakes; live runs are never part of make test or CI)
+dags\                         Reserved for later orchestration; empty
 infrastructure\terraform\     Reserved infrastructure; no provisioned resources
 data\                         Ignored runtime-data locations; no committed datasets
 ```
 
-Reserved directories are not delivered workloads. Docusaurus publication,
-Airflow/Composer, Dataform coordination, Terraform resources, and deployed APIs
-remain future work.
+Reserved directories are not delivered workloads. The Docusaurus site source is
+in `docs/site/` (PRs #158/#159). Airflow/Composer, Dataform coordination,
+Terraform resources, and deployed APIs remain future work.
 
 ## Public-data and delivery boundaries
 
-OpenAlex is the only implemented source connector. AACT/ClinicalTrials is the
-next planned source; OpenFDA, grants, patents, news/releases, and other public
-datasets remain future extensions. Each needs its own verified source contract
+OpenAlex is the only implemented source connector. AACT/ClinicalTrials is next
+in the [source priority](docs/architecture/public-data-sources.md), but no open
+issue tracks it, and the Data Engineering issues (#122–#156) are OpenAlex-only;
+OpenFDA, grants, patents, news/releases, and other public datasets remain future
+extensions. Each needs its own verified source contract
 and normalization; the OpenAlex schema must not be imposed on other sources.
 
 - Work in small, explicitly selected phases. For code changes, run `make test`,

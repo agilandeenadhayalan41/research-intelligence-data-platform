@@ -1,5 +1,6 @@
 -- pattern_id: unique-authors-per-journal
--- BigQuery Standard SQL — Step 15 / #22 (NOT YET DEPLOYED)
+-- BigQuery Standard SQL — Step 15 / #22. Executed only by manual scripts on
+-- synthetic data (GCP_SANDBOX, personal DEV/QA); NOT DEPLOYED.
 -- Safe shape: identify journal works first, then aggregate authors independently.
 -- Do NOT join authors × topics in this query.
 

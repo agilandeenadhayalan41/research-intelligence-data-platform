@@ -77,9 +77,15 @@ def _local_entries() -> tuple[ReadinessEntry, ...]:
             env,
             EvidenceLevel.DEMONSTRATED_LOCAL,
             "LocalObjectStore + GCSObjectStore (fake-client contract tests) demonstrated; "
-            "no live GCS bucket in LOCAL (#9); live sandbox evidence is GCP_SANDBOX (#91)",
-            gaps=("LOCAL never uses a live bucket; cloud evidence lives in GCP_SANDBOX",),
-            next_action="Keep LOCAL offline; see GCP_SANDBOX for live-bucket evidence (#91)",
+            "no live GCS bucket in LOCAL (#9); live-bucket evidence is in GCP_SANDBOX "
+            "(#91, #108 Stage 1) and the personal DEV and QA projects (#108 Stage 3)",
+            gaps=(
+                "LOCAL never uses a live bucket; cloud evidence lives in GCP_SANDBOX, DEV and QA",
+            ),
+            next_action=(
+                "Keep LOCAL offline; see GCP_SANDBOX, DEV and QA for live-bucket evidence "
+                "(#91, #108)"
+            ),
             labels=(EvidenceLabel.LOCAL_TESTED, EvidenceLabel.CONTRACT_DEFINED),
             blocking=False,
         ),
@@ -89,9 +95,13 @@ def _local_entries() -> tuple[ReadinessEntry, ...]:
             EvidenceLevel.CONTRACT_DEFINED,
             "Step 15–16 BigQuery SQL/contracts + DuckDB SEMANTIC_ONLY; "
             "BigQueryWarehouse adapter offline-tested (#10); no live job in LOCAL; "
-            "live sandbox adapter and model evidence is GCP_SANDBOX (#92, #103)",
+            "live adapter and model evidence is in GCP_SANDBOX (#92, #103, #108 Stages 1-2) "
+            "and the personal DEV and QA projects (#108 Stage 3)",
             gaps=("No MEASURED BigQuery model execution evidence in LOCAL",),
-            next_action="Keep LOCAL offline; see GCP_SANDBOX for live-job evidence (#92, #103)",
+            next_action=(
+                "Keep LOCAL offline; see GCP_SANDBOX, DEV and QA for live-job evidence "
+                "(#92, #103, #108)"
+            ),
             labels=(EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.SEMANTIC_ONLY),
             blocking=False,
         ),
@@ -111,7 +121,10 @@ def _local_entries() -> tuple[ReadinessEntry, ...]:
             EvidenceLevel.CONTRACT_DEFINED,
             "Step 20 orchestration contracts + dry-run plan renderer (CONTRACT_ONLY)",
             gaps=("No Airflow/Composer runtime",),
-            next_action="Map ExecutionUnits to a future scheduler after cloud adapters exist",
+            next_action=(
+                "Map ExecutionUnits to a future scheduler; the #9/#10 cloud adapters exist, "
+                "no scheduler is deployed"
+            ),
             labels=(EvidenceLabel.CONTRACT_DEFINED,),
             blocking=False,
         ),
@@ -121,7 +134,10 @@ def _local_entries() -> tuple[ReadinessEntry, ...]:
             EvidenceLevel.DEMONSTRATED_LOCAL,
             "Step 17/19 DQ gates demonstrated locally (DuckDB SEMANTIC_ONLY)",
             gaps=("BigQuery-executed DQ unverified", "Production alerting absent"),
-            next_action="Re-run DQ against BigQuery when runtime exists; add alerting later",
+            next_action=(
+                "Keep LOCAL offline; ad hoc BigQuery DQ SQL runs are recorded for "
+                "GCP_SANDBOX, DEV and QA (#103, #108); gating/alerting still absent"
+            ),
             labels=(EvidenceLabel.LOCAL_TESTED, EvidenceLabel.SEMANTIC_ONLY),
             blocking=False,
         ),
@@ -131,7 +147,10 @@ def _local_entries() -> tuple[ReadinessEntry, ...]:
             EvidenceLevel.DEMONSTRATED_LOCAL,
             "Step 16/19 Gold marts built locally via shared semantic builder",
             gaps=("No BigQuery Gold deployment",),
-            next_action="Deploy/validate Gold SQL in BigQuery after #10",
+            next_action=(
+                "Keep LOCAL offline; ad hoc BigQuery Gold SELECT runs are recorded for "
+                "GCP_SANDBOX, DEV and QA (#103, #108); no materialization or refresh"
+            ),
             labels=(EvidenceLabel.LOCAL_TESTED, EvidenceLabel.SEMANTIC_ONLY),
             blocking=False,
         ),
@@ -189,11 +208,16 @@ def _local_entries() -> tuple[ReadinessEntry, ...]:
             ReadinessDomain.OPERATIONAL_STORE_OPTIONAL,
             env,
             EvidenceLevel.CONTRACT_DEFINED,
-            "PostgreSQL/AlloyDB serving remains CONDITIONAL (#23); not a readiness prerequisite",
+            "PostgreSQL/AlloyDB serving is not adopted: #23 closed not_planned (operator chose "
+            "BigQuery + API/cache); the local #112 lookup projection is an unapproved "
+            "PROTOTYPE; not a readiness prerequisite",
             gaps=(
-                "No measured BigQuery+API/cache failure justifying operational store",
+                "#118 (personal DEV, synthetic data): cold-cache runs missed the operator-stated "
+                "200 ms p95 and prewarmed runs met it; the operator judged the #23 gate not met",
             ),
-            next_action="Only consider if benchmarks prove BigQuery+API/cache insufficient",
+            next_action=(
+                "Reopen #23 only under its closing criteria; never a promotion prerequisite"
+            ),
             labels=(EvidenceLabel.OPTIONAL, EvidenceLabel.OPTIONAL_NOT_REQUIRED),
             blocking=False,
         ),
@@ -231,8 +255,8 @@ def _sandbox_entries() -> tuple[ReadinessEntry, ...]:
         ),
         configuration_gaps=(
             "No actual GCP project/bucket/dataset provisioned by this repository",
-            "No enterprise-managed sandbox project; #91/#92/#103 and the #108 Stage 1 "
-            "re-runs used an operator-owned project",
+            "No enterprise-managed sandbox project; #91/#92/#103 and the #108 Stage 1-2 "
+            "runs used an operator-owned project",
         ),
         domain_overrides={
             ReadinessDomain.BIGQUERY_ANALYTICAL: (
@@ -331,7 +355,8 @@ def _dev_entries() -> tuple[ReadinessEntry, ...]:
                     "Concurrent writers, retries, large/resumable uploads unverified",
                     "Encryption/CMEK, retention, access logging unverified",
                 ),
-                "Record QA evidence (#108 Stage 3) before any QA VERIFIED claim; no promotion",
+                "No promotion is claimed (QA evidence was recorded after DEV, #108 Stage 3); "
+                "PROD stays BLOCKED",
                 (EvidenceLabel.CONTRACT_DEFINED,),
             ),
             ReadinessDomain.BIGQUERY_ANALYTICAL: (
@@ -353,7 +378,8 @@ def _dev_entries() -> tuple[ReadinessEntry, ...]:
                     "Job timeout/cancellation under load unverified (the 1 s probe completed "
                     "before a cancel could trigger)",
                 ),
-                "Record QA evidence (#108 Stage 3) before any QA VERIFIED claim; no promotion",
+                "No promotion is claimed (QA evidence was recorded after DEV, #108 Stage 3); "
+                "PROD stays BLOCKED",
                 (EvidenceLabel.CONTRACT_DEFINED,),
             ),
         },
@@ -440,22 +466,34 @@ def _prod_entries() -> tuple[ReadinessEntry, ...]:
         domain_overrides={
             ReadinessDomain.GCS_RAW_LANDING: (
                 EvidenceLevel.BLOCKED,
-                "GCSObjectStore adapter implemented (#9); live smoke passed only in "
-                "GCP_SANDBOX (#91); PROD has no access",
-                ("No PROD access", "No DEV/QA live-bucket evidence to promote from"),
-                "Do not run smoke in PROD; verify in DEV and QA first, then promote",
+                "GCSObjectStore adapter implemented (#9); live smoke passed in GCP_SANDBOX "
+                "(#91, #108 Stage 1) and in the personal DEV and QA projects (#108 Stage 3), "
+                "never in PROD; PROD has no access",
+                (
+                    "No PROD access",
+                    "Nothing to promote from: DEV and QA are personal projects, not "
+                    "enterprise-managed environments, and stay NOT_READY overall",
+                ),
+                "Do not run smoke in PROD; promote only from a READY QA (enterprise-managed "
+                "DEV and QA evidence first)",
                 (EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.CLOUD_UNVERIFIED),
             ),
             ReadinessDomain.BIGQUERY_ANALYTICAL: (
                 EvidenceLevel.BLOCKED,
-                "BigQueryWarehouse adapter implemented (#10); live smoke passed only in "
-                "GCP_SANDBOX (#92); PROD has no access",
+                "BigQueryWarehouse adapter implemented (#10); live smoke passed and the models "
+                "were MEASURED on synthetic data in GCP_SANDBOX (#92, #103, #108 Stages 1-2) "
+                "and in the personal DEV and QA projects (#108 Stage 3), never in PROD; PROD "
+                "has no access",
                 (
                     "No PROD access",
-                    "No DEV/QA live-dataset evidence to promote from",
-                    "No MERGE/partition/cluster MEASURED evidence",
+                    "Nothing to promote from: DEV and QA are personal projects, not "
+                    "enterprise-managed environments, and stay NOT_READY overall",
+                    "No MEASURED evidence in PROD; elsewhere MEASURED on synthetic data only "
+                    "(works/work_topics MERGE and REPLACE, publication_year pruning; clustering "
+                    "OBSERVED for 4 of 11 patterns)",
                 ),
-                "Do not run smoke in PROD; verify in DEV and QA first, then promote",
+                "Do not run smoke in PROD; promote only from a READY QA (enterprise-managed "
+                "DEV and QA evidence first)",
                 (EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.CLOUD_UNVERIFIED),
             ),
         },
@@ -496,8 +534,14 @@ def _cloud_placeholder_matrix(
         ),
         ReadinessDomain.IDENTITY_IAM: (
             EvidenceLevel.CLOUD_UNVERIFIED,
-            "Least-privilege IAM capabilities documented; no bindings created",
-            ("No runtime/deployment identities verified", "No environment isolation evidence"),
+            "Least-privilege IAM capabilities documented; this repository creates no bindings "
+            "(the #108 least-privilege service accounts were set up outside it by the operator)",
+            (
+                "Separate runtime and deployment identities unverified (each #108 project used "
+                "one identity for both)",
+                "Environment isolation unverified beyond #108 Stage 3 (the DEV account was "
+                "refused access to the QA dataset, in personal projects)",
+            ),
             "Design least-privilege roles and separate deploy vs runtime identities",
             (EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.CLOUD_UNVERIFIED),
         ),
@@ -505,7 +549,8 @@ def _cloud_placeholder_matrix(
             EvidenceLevel.CLOUD_UNVERIFIED,
             "Prefer workload identity / short-lived credentials for future GCP runtime",
             ("No WIF pools/providers", "No Composer/runtime attached identity"),
-            "Configure workload identity federation outside this repository when adapters exist",
+            "Configure workload identity federation outside this repository for a future "
+            "managed runtime",
             (EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.CLOUD_UNVERIFIED),
         ),
         ReadinessDomain.SECRETS: (
@@ -518,7 +563,7 @@ def _cloud_placeholder_matrix(
         ReadinessDomain.GCS_RAW_LANDING: (
             EvidenceLevel.READY_TO_VALIDATE,
             "GCSObjectStore adapter implemented (#9) with create-only if_generation_match=0; "
-            "live smoke passed only in GCP_SANDBOX (#91) — not live-bucket VERIFIED here",
+            "no live smoke recorded for this environment — not live-bucket VERIFIED here",
             (
                 "No approved ADC/bucket execution evidence in this environment",
                 "Immutable GCS write/precondition behavior unverified in this environment",
@@ -529,7 +574,7 @@ def _cloud_placeholder_matrix(
         ReadinessDomain.BIGQUERY_ANALYTICAL: (
             EvidenceLevel.READY_TO_VALIDATE,
             "BigQueryWarehouse adapter implemented (#10) with dry-run + maximum_bytes_billed; "
-            "live smoke passed only in GCP_SANDBOX (#92) — not live-job VERIFIED here",
+            "no live smoke recorded for this environment — not live-job VERIFIED here",
             (
                 "No approved ADC/dataset execution evidence in this environment",
                 "No MERGE/partition/cluster MEASURED evidence",
@@ -542,7 +587,8 @@ def _cloud_placeholder_matrix(
             EvidenceLevel.CLOUD_UNVERIFIED,
             "Step 20 recommends TEMP_TABLES; RUN_SCOPED/SINGLE_WRITER documented — not cloud-verified",
             ("No BigQuery script/session concurrency proof",),
-            "Exercise PublicationScope strategy in BigQuery after analytical runtime exists",
+            "Exercise the PublicationScope strategy with overlapping BigQuery publications "
+            "(tracked in #143)",
             (EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.CLOUD_UNVERIFIED),
         ),
         ReadinessDomain.ORCHESTRATION: (
@@ -554,17 +600,22 @@ def _cloud_placeholder_matrix(
         ),
         ReadinessDomain.DATA_QUALITY: (
             EvidenceLevel.CLOUD_UNVERIFIED,
-            "DQ logic demonstrated locally (SEMANTIC_ONLY); the BigQuery DQ SQL ran once on "
-            "synthetic data in GCP_SANDBOX only (#103); BigQuery DQ gating/alerting unverified",
+            "DQ logic demonstrated locally (SEMANTIC_ONLY); the BigQuery quality SQL ran ad hoc "
+            "on synthetic data in every #103-script run (#103 and #108 Stages 1-2 in "
+            "GCP_SANDBOX, #108 Stage 3 in the personal DEV and QA projects); BigQuery DQ "
+            "gating/alerting unverified",
             ("No production alerting/on-call", "DuckDB success ≠ BigQuery validation"),
-            "Execute DQ against BigQuery and define alerting after runtime exists",
+            "Gate publication on BigQuery DQ results and define alerting after a managed "
+            "runtime exists",
             (EvidenceLabel.SEMANTIC_ONLY, EvidenceLabel.CLOUD_UNVERIFIED),
         ),
         ReadinessDomain.GOLD_MARTS: (
             EvidenceLevel.CLOUD_UNVERIFIED,
-            "Gold mart contracts + local SEMANTIC_ONLY builder exist; cloud Gold unverified",
-            ("No BigQuery Gold deployment",),
-            "Deploy/validate Gold marts in BigQuery after #10",
+            "Gold mart contracts + local SEMANTIC_ONLY builder exist; the Gold SELECTs ran ad "
+            "hoc on synthetic data in every #103-script run (GCP_SANDBOX, personal DEV and QA), "
+            "with DELETED exclusion checked on 2 marts; no mart materialized or refreshed",
+            ("No BigQuery Gold deployment (no materialization or refresh)",),
+            "Materialize, refresh and validate Gold marts in BigQuery (the #10 adapter exists)",
             (EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.SEMANTIC_ONLY),
         ),
         ReadinessDomain.DATA_SERVICE: (
@@ -592,7 +643,7 @@ def _cloud_placeholder_matrix(
             EvidenceLevel.CLOUD_UNVERIFIED,
             "Recovery scenarios documented from Steps 12–20; cloud automation absent",
             ("No sandbox recovery drill evidence",),
-            "Run recovery drills in GCP_SANDBOX after adapters exist",
+            "Run recovery drills in GCP_SANDBOX against the #9/#10 adapters",
             (EvidenceLabel.CONTRACT_DEFINED, EvidenceLabel.CLOUD_UNVERIFIED),
         ),
         ReadinessDomain.ROLLBACK: (
@@ -639,8 +690,9 @@ def _cloud_placeholder_matrix(
         ),
         ReadinessDomain.OPERATIONAL_STORE_OPTIONAL: (
             EvidenceLevel.CONTRACT_DEFINED,
-            "PostgreSQL/AlloyDB OPTIONAL_NOT_REQUIRED; only if BigQuery+API/cache fails measured needs (#23)",
-            ("No justifying benchmark failure",),
+            "PostgreSQL/AlloyDB OPTIONAL_NOT_REQUIRED; #23 closed not_planned (BigQuery + "
+            "API/cache chosen; reopen only if that path fails measured needs)",
+            ("No justifying benchmark failure: the #23 gate was judged not met after #118",),
             "Do not treat operational store as a promotion prerequisite",
             (EvidenceLabel.OPTIONAL, EvidenceLabel.OPTIONAL_NOT_REQUIRED),
         ),

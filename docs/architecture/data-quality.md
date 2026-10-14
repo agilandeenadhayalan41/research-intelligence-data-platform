@@ -25,7 +25,7 @@ PRE_VISIBLE_PUBLICATION gate
 publish allowed / blocked
 ```
 
-Step 17 provides the check registry, runner, and report. Steps 19/20 call these stages.
+Step 17 provides the check registry, runner, and report. The Step 19 runner calls these stages; the Step 20 contracts map them to the `PRE_*_QUALITY_UNIT` execution units, which no deployed scheduler runs.
 
 ---
 
@@ -219,7 +219,7 @@ No invented production SLAs. Informational metrics have no threshold.
 
 ## Backends
 
-- BigQuery Standard SQL contracts under `sql/bigquery/openalex/quality/` (not executed here).
+- BigQuery Standard SQL contracts under `sql/bigquery/openalex/quality/`. Default CI does not execute them. The manual `scripts/bigquery_sandbox_103.py` executed all 12 files in BigQuery on synthetic data only, in GCP_SANDBOX (#103, #108 Stages 1–2) and the personal DEV/QA projects (#108 Stage 3); `reconciliation.decode_balance` and `reconciliation.publication_decision_balance` have no BigQuery SQL. No BigQuery run gates a publication or alerts on these results, so `DATA_QUALITY` stays `CLOUD_UNVERIFIED` in GCP_SANDBOX, DEV and QA and `BLOCKED` in PROD (tracked in #137).
 - DuckDB local runner: `SEMANTIC_ONLY` — proves check logic, result semantics, report aggregation, fixtures.
 - Does **not** prove BigQuery syntax acceptance, cost, latency, or production scale.
 

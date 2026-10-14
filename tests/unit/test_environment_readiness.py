@@ -129,8 +129,8 @@ def test_sandbox_reports_cloud_gaps() -> None:
     report = readiness_report("GCP_SANDBOX")
     assert report.overall_status is EnvironmentOverallStatus.NOT_READY
     by_domain = {e.domain: e for e in report.entries}
-    # #91/#92 live smokes verified GCS and the BigQuery adapter in the sandbox only;
-    # the environment is still NOT_READY.
+    # #91/#92 live smokes (and the #108 Stage 1 re-runs) verified GCS and the
+    # BigQuery adapter in the sandbox; the environment is still NOT_READY.
     assert by_domain[ReadinessDomain.GCS_RAW_LANDING].evidence_level is (
         EvidenceLevel.VERIFIED
     )
@@ -192,7 +192,7 @@ def test_gcs_and_bigquery_runtime_gaps_surfaced() -> None:
         )
 
 
-def test_gcs_verified_only_in_sandbox_with_evidence_and_honest_gaps() -> None:
+def test_gcs_verified_in_sandbox_dev_qa_with_evidence_and_honest_gaps() -> None:
     levels = {
         env: next(
             e
@@ -227,7 +227,7 @@ def test_gcs_verified_only_in_sandbox_with_evidence_and_honest_gaps() -> None:
     )
 
 
-def test_bigquery_verified_only_in_sandbox_with_evidence_and_honest_gaps() -> None:
+def test_bigquery_verified_in_sandbox_dev_qa_with_evidence_and_honest_gaps() -> None:
     levels = {
         env: next(
             e
@@ -323,7 +323,8 @@ def test_mandatory_domain_gap_blocks_promotion() -> None:
     decision = can_promote(EnvironmentName.GCP_SANDBOX, EnvironmentName.DEV)
     assert decision.allowed is False
     assert decision.blocking_domains
-    # GCS/BQ adapters are READY_TO_VALIDATE; other mandatory cloud gaps still block.
+    # GCS/BQ are VERIFIED in DEV (#108 Stage 3), so they do not block; the other
+    # mandatory cloud gaps still do.
     assert ReadinessDomain.GCS_RAW_LANDING not in decision.blocking_domains
     assert ReadinessDomain.BIGQUERY_ANALYTICAL not in decision.blocking_domains
     assert ReadinessDomain.ORCHESTRATION in decision.blocking_domains
@@ -508,3 +509,58 @@ def test_dq_distinguishes_local_from_cloud() -> None:
     )
     assert local_dq.evidence_level is EvidenceLevel.DEMONSTRATED_LOCAL
     assert sand_dq.evidence_level is EvidenceLevel.CLOUD_UNVERIFIED
+
+
+def _rationale(entry: ReadinessEntry) -> str:
+    return " ".join((entry.evidence, *entry.gaps, entry.required_next_action))
+
+
+def test_rationale_text_does_not_deny_recorded_dev_qa_evidence() -> None:
+    """Rationale text must agree with the levels it sits next to (#123).
+
+    Text-only guard: no level changes. Where a domain is VERIFIED outside
+    GCP_SANDBOX, no entry may still say its evidence is sandbox-only or that
+    DEV/QA have none, and PROD keeps BLOCKED while citing the DEV/QA runs.
+    """
+    registry = build_readiness_registry()
+    by_key = {(e.environment, e.domain): e for e in registry}
+    for domain in (ReadinessDomain.GCS_RAW_LANDING, ReadinessDomain.BIGQUERY_ANALYTICAL):
+        verified_in = {
+            env
+            for env in CLOUD_PROMOTION_ORDER
+            if by_key[(env, domain)].evidence_level is EvidenceLevel.VERIFIED
+        }
+        assert EnvironmentName.PROD not in verified_in
+        if verified_in - {EnvironmentName.GCP_SANDBOX}:
+            for env in EnvironmentName:
+                text = _rationale(by_key[(env, domain)])
+                assert "only in GCP_SANDBOX" not in text, (env, domain)
+                assert "GCP_SANDBOX only" not in text, (env, domain)
+                assert "No DEV/QA" not in text, (env, domain)
+        prod = by_key[(EnvironmentName.PROD, domain)]
+        assert prod.evidence_level is EvidenceLevel.BLOCKED
+        assert "#108 Stage 3" in prod.evidence
+        assert "never in PROD" in prod.evidence
+        assert any("NOT_READY" in g for g in prod.gaps)
+
+
+def test_dq_and_gold_rationale_cover_every_103_script_run() -> None:
+    """The #103 script runs every quality and Gold file in each run (#103, #108).
+
+    The text must say so for GCP_SANDBOX, DEV and QA while both domains stay
+    CLOUD_UNVERIFIED (ad hoc runs, no gating, no materialization).
+    """
+    for env in (EnvironmentName.GCP_SANDBOX, EnvironmentName.DEV, EnvironmentName.QA):
+        by_domain = {e.domain: e for e in evaluate_environment_readiness(env).entries}
+        dq = by_domain[ReadinessDomain.DATA_QUALITY]
+        gold = by_domain[ReadinessDomain.GOLD_MARTS]
+        assert dq.evidence_level is EvidenceLevel.CLOUD_UNVERIFIED
+        assert gold.evidence_level is EvidenceLevel.CLOUD_UNVERIFIED
+        assert "ran once" not in dq.evidence
+        assert "GCP_SANDBOX only" not in dq.evidence
+        for marker in ("#103", "#108 Stages 1-2", "#108 Stage 3", "DEV and QA"):
+            assert marker in dq.evidence, (env, marker)
+        assert "gating/alerting unverified" in dq.evidence
+        assert "every #103-script run" in gold.evidence
+        assert "no mart materialized" in gold.evidence
+        assert "after #10" not in gold.required_next_action

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,41 @@ def test_environment_templates_are_local_only(repo_root: Path, environment: str)
     assert config.warehouse.transactional == "postgres"
     assert config.warehouse.analytical == "duckdb"
     assert config.cloud.project_id is None
+
+
+@pytest.mark.parametrize("environment", ["dev", "qa", "prod"])
+def test_placeholder_environments_are_refused_by_local_entry_points(
+    repo_root: Path, environment: str
+) -> None:
+    # The config/*.yaml comments say nothing runs with these files (#123).
+    from research_platform.e2e.runner import run_bounded_e2e_pipeline
+    from research_platform.ingestion.deletion_pipeline import (
+        run_openalex_deletions_local_ingest,
+    )
+    from research_platform.ingestion.errors import IngestionConfigError
+    from research_platform.ingestion.pipeline import run_openalex_works_local_ingest
+
+    path = repo_root / f"config/{environment}.yaml"
+    with pytest.raises(IngestionConfigError, match="environment=local"):
+        run_openalex_works_local_ingest(path)
+    with pytest.raises(IngestionConfigError, match="environment=local"):
+        run_openalex_deletions_local_ingest(
+            path, deletion_asset=object()  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="environment=local"):
+        run_bounded_e2e_pipeline(path, works_connector=object())
+
+
+def test_cloud_scripts_do_not_read_environment_files(repo_root: Path) -> None:
+    # The recorded GCP_SANDBOX and personal DEV/QA runs used scripts/ with
+    # GOOGLE_CLOUD_PROJECT and their own flags, not config/*.yaml (#123).
+    environment_file = re.compile(r"\b(?:local|dev|qa|prod|gcp-sandbox)\.yaml\b")
+    scripts = sorted((repo_root / "scripts").glob("*.py"))
+    assert scripts
+    for script in scripts:
+        text = script.read_text(encoding="utf-8")
+        assert "load_config" not in text, script.name
+        assert environment_file.search(text) is None, script.name
 
 
 def test_sandbox_uses_explicit_environment(repo_root: Path) -> None:

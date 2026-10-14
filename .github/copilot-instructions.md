@@ -1,15 +1,18 @@
 # Research Intelligence Data Platform engineering principles
 
-- Build a local-first, cloud-ready platform in small, explicitly scoped phases.
-  Phase 1 is configuration, interfaces, documentation, and tests only. Do not
-  implement ingestion, orchestration, or serving workloads without a later task.
+- Build a local-first, cloud-ready platform in small, explicitly scoped issues.
+  Roadmap Steps 01–21 (contracts, local ingestion and deletions, orchestration
+  contracts, a readiness registry) are complete, and a local lookup prototype
+  (#112) and an in-process lookup cache (#118) exist. Nothing is deployed. Do
+  not add or deploy ingestion, orchestration, or serving workloads without an
+  explicitly approved issue.
 - Use Python 3.12+, src-layout, type hints, small modules, clear adapter interfaces,
   Pydantic validation, PyArrow interchange, structured logging, and pytest.
 - Use configuration-driven environments. Default to local resources. Never access
   production during development or create expensive cloud resources.
 - Build a reusable public research data platform, with OpenAlex first. Use public
   sources or synthetic fixtures only; never use Wiley proprietary data or require
-  Wiley enterprise access. AACT/ClinicalTrials (issue #2), OpenFDA, grants, patents,
+  Wiley enterprise access. AACT/ClinicalTrials, OpenFDA, grants, patents,
   news/releases, and other sources are future extensions until explicitly scoped.
 - Never commit credentials, `.env` files, service-account JSON, or downloaded large
   datasets. Never hardcode cloud project IDs. Obtain credentials from environment
@@ -36,6 +39,7 @@
   Run `make test`, `make check`, and `make build` for code changes.
 - Docker Compose is local PostgreSQL tooling only. Airflow DAGs and Terraform
   directories are reserved for later; do not implement them yet.
-- Maintain architecture documentation and Mermaid diagrams; Docusaurus publication
-  is planned later. Do not introduce LLM, ML, GenAI, NLP, or knowledge graph
-  implementations until explicitly requested in a later phase.
+- Maintain architecture documentation and Mermaid diagrams. The Docusaurus site in
+  `docs/site/` publishes `docs/` in place; follow `docs/site/README.md`. Do not
+  introduce LLM, ML, GenAI, NLP, or knowledge graph implementations until
+  explicitly requested in a later phase.

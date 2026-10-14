@@ -8,7 +8,7 @@ It does not open database connections, run migrations, claim work, or land data.
 | Mutable run + source-file control models | `research_platform.control.models` |
 | Status transitions, claims, retries | `research_platform.control.lifecycle` |
 | Registration idempotency / checksum conflicts | `research_platform.control.reconciliation` |
-| Persistence protocol (unimplemented) | `research_platform.control.store.ControlStore` |
+| Persistence protocol (implemented since Step 12 by `InMemoryControlStore` and the local `PostgresControlStore`) | `research_platform.control.store.ControlStore` |
 | Immutable retrieval provenance | existing `IngestionProvenance` |
 | Record-level lineage model | `RecordProvenance` |
 | Versioned DDL specification | [`sql/control/001_pipeline_control.sql`](../../sql/control/001_pipeline_control.sql) |
@@ -144,7 +144,11 @@ OpenAlexAssetMetadata.asset_id
 
 ## Write / transaction boundary
 
-`Warehouse.query()` stays read-only. Control writes use `ControlStore`:
+`Warehouse.query()` is the read-query interface, and control writes never go
+through it. Only `PostgreSQLWarehouse` enforces read-only sessions;
+`DuckDBWarehouse` and `BigQueryWarehouse` do not block write statements, so
+this is a usage rule, not an adapter guarantee. Control writes use
+`ControlStore`:
 
 - `create_pipeline_run` / `finish_pipeline_run` / `retry_pipeline_run`
 - `register_source_file`
@@ -182,9 +186,13 @@ On failure after claim: DB ROLLBACK of the publish unit, then
 `mark_source_file_failed`. Raw ObjectStore bytes may remain; ObjectStore +
 PostgreSQL are **not** one distributed ACID transaction.
 
-`InMemoryControlStore` remains for offline tests. Durable local writes use
-`PostgresControlStore` (not `Warehouse.query`). `UnimplementedControlStore` is
-still the fail-fast skeleton when no adapter is selected.
+`InMemoryControlStore` remains for offline tests and the ephemeral
+`--backend memory` mode (also the programmatic default). Durable local writes
+use `PostgresControlStore` with `--backend postgres` (not `Warehouse.query`).
+It is a local durable adapter for the Step 12/13 pipelines, not the production
+control plane, which is still undecided (tracked in #133), and not a serving
+store. `UnimplementedControlStore` is a fail-fast skeleton that only the unit
+tests construct; no runtime path selects it.
 
 ## DDL / backend limitations
 
@@ -192,6 +200,9 @@ still the fail-fast skeleton when no adapter is selected.
 targets **PostgreSQL 16+**. It specifies primary keys, foreign keys, unique
 indexes, status/claim/checksum checks, and useful indexes. Default tests only
 assert the file’s contractual contents; they do **not** execute migrations.
+The opt-in `make test-postgres-ingestion` suite applies it to a local
+PostgreSQL through `apply_ingestion_schema`, as does a `--backend postgres`
+run that opens its own connection; CI runs neither.
 DuckDB or mock checks do not prove PostgreSQL or BigQuery dialect compatibility.
 
 ## Out of scope for Step 10

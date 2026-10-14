@@ -1,5 +1,6 @@
 -- pattern_id: institution-topic-relationships
--- BigQuery Standard SQL — Step 15 / #22 (NOT YET DEPLOYED)
+-- BigQuery Standard SQL — Step 15 / #22. Executed only by manual scripts on
+-- synthetic data (GCP_SANDBOX, personal DEV/QA); NOT DEPLOYED.
 -- Safe shape: DISTINCT institution/work, then join topics (no authorship fan-out).
 
 WITH inst_works AS (

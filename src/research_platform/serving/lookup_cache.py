@@ -14,9 +14,13 @@ hot missing key does not reach the backend on every call.
 - **Size:** least-recently-used entries are evicted above ``max_entries``.
 - **Errors:** a backend error is never cached; it propagates unchanged.
 
-This is a measurement-grade cache for #118, not a deployed service. A shared
-cache (for example Memorystore) adds a network hop that this in-process cache
-does not; #118's evidence must say which one was measured.
+This is a measurement-grade cache for #118, not a deployed service, and
+nothing composes it with ``DataService``. The #118 runs (personal DEV project,
+synthetic data) used ``TtlLruCache`` directly around ``BigQueryWarehouse.query``,
+not this repository wrapper: cold runs missed the operator-stated 200 ms p95 and
+prewarmed runs met it. A shared cache (for example Memorystore) adds a network
+hop that this in-process cache does not, and that hop was not measured
+(production cache work: #151).
 """
 
 from __future__ import annotations

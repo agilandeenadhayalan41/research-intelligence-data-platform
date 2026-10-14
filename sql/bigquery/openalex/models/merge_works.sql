@@ -1,5 +1,6 @@
 -- BigQuery MERGE for `openalex.works` using frozen decisions (Step 15).
--- DEFINED — NOT YET DEPLOYED / NOT EXECUTED here.
+-- DEFINED. Executed only by manual scripts on synthetic data (GCP_SANDBOX,
+-- personal DEV/QA); NOT DEPLOYED.
 --
 -- Requires `openalex.work_publication_decisions` already materialized against
 -- the pre-MERGE target state. This MERGE does not re-evaluate precedence CASE;

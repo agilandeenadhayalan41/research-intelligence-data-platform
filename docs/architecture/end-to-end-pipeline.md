@@ -30,7 +30,7 @@ analytical/Gold models, data-quality gates, and the storage-independent
 Data Service. Step 19 wires those stages into one bounded OpenAlex Works path.
 
 Issue: [#27](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/27) (CLOSED — complete)  
-Umbrella: [#2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2) (remains OPEN; Step 20 / #25 next)
+Umbrella: [#2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2) (CLOSED; Steps 20 / #25 and 21 / #28 are also complete)
 
 ---
 
@@ -145,8 +145,8 @@ only the currently visible quality-approved published snapshot.
 - Safe structured failure summaries include typed `recovery_action` guidance
   (no DSN, SQL, credentials, payload content, private paths, or raw exception text)
 - No automatic start of Step 20 (Airflow/Composer) or Step 21 (readiness)
-- PostgreSQL/AlloyDB operational projection remains conditional (#23), not required for Step 19
-- GCS runtime (#9) and BigQuery runtime adapter (#10) remain separately scoped
+- PostgreSQL/AlloyDB operational projection is not required for Step 19 (#23 was closed as not planned; the local prototype stays unapproved)
+- The GCS (#9) and BigQuery (#10) runtime adapters exist but are separately scoped: this runner refuses non-local storage and never calls BigQuery
 
 ### SEMANTIC_ONLY limitation
 
@@ -178,6 +178,6 @@ This file describes the implemented local Step-19 path. It does **not**:
 
 - deploy GCP resources
 - add Airflow/Composer DAGs
-- expand the Data Service HTTP surface
+- add an HTTP surface to the Data Service (none exists)
 - claim BigQuery MEASURED evidence
 - close umbrella #2

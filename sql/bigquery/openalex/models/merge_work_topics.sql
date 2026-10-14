@@ -1,5 +1,6 @@
 -- Relationship refresh for `openalex.work_topics` (Step 15 publication boundary).
--- DEFINED — NOT YET DEPLOYED / NOT EXECUTED here.
+-- DEFINED. Executed only by manual scripts on synthetic data (GCP_SANDBOX,
+-- personal DEV/QA); NOT DEPLOYED.
 --
 -- REPLACE_BY_WORK_ID template for all relationship tables.
 --

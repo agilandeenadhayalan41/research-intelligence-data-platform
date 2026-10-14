@@ -42,7 +42,8 @@ This is the **target** flow. It is not a picture of running infrastructure.
 Every stage exists as code with offline tests. The bounded end-to-end runner
 (Step 19) executes the whole chain locally, with DuckDB standing in for the
 analytical layer (`SEMANTIC_ONLY`). The cloud evidence so far covers GCS
-landing and the BigQuery models, on synthetic data only. Nothing is deployed
+landing, the BigQuery models and a BigQuery + in-process cache lookup
+measurement (#118), on synthetic data only. Nothing is deployed
 to production, and no scheduler runs this flow. [Status](status.md) has the
 details.
 
@@ -61,7 +62,7 @@ visibility, and no path reaches consumers without passing both.
 | --- | --- | --- |
 | **BigQuery** | The first analytical implementation on GCP. It holds the high-volume relationships and the analytical models | Dialect, cost-guard behaviour (dry run and `maximum_bytes_billed`), pruning and latency, only for the scale and project where it ran. Cost figures so far are billing-floor artifacts ([recorded runs](../architecture/bigquery-analytical-models.md#recorded-run-103)) |
 | **DuckDB** | Local validation and prototypes on tiny synthetic fixtures, labelled `SEMANTIC_ONLY` | Logic only: grains, ACTIVE filtering, citation and license rules, fan-out safety. It does **not** prove BigQuery syntax, partition pruning, clustering, cost or latency ([validation kinds](../architecture/bigquery-analytical-models.md#separation-of-validation-kinds)) |
-| **PostgreSQL / AlloyDB** | Optional. A selective operational projection, considered only if BigQuery plus an API/cache fails a measured requirement. It never receives a copy of every analytical relationship | Today: a local adapter validated against local PostgreSQL (`LOCAL_POSTGRES_VERIFIED`), and a local lookup `PROTOTYPE` for #23 whose gate is **not** met ([operational-store gate](../architecture/query-routing.md#operational-store-gate)) |
+| **PostgreSQL / AlloyDB** | Optional. A selective operational projection, considered only if BigQuery plus an API/cache fails a measured requirement. It never receives a copy of every analytical relationship | Today: a local read adapter validated against local PostgreSQL (`LOCAL_POSTGRES_VERIFIED`), and a local lookup `PROTOTYPE` for #23 whose gate was **not** met; #23 was closed as not planned ([operational-store gate](../architecture/query-routing.md#operational-store-gate)). Separately, local PostgreSQL backs the durable control and canonical stores of the Step 12–13 runs (`--backend postgres`). That is local pipeline state, not a serving store or a production control plane |
 
 The reasoning is on [GCP: BigQuery-first](../architecture/gcp-bigquery-first.md)
 and [Query routing](../architecture/query-routing.md). Spark/Dataproc and
@@ -78,7 +79,10 @@ The first four steps set up what every later stage builds on.
   files, such as `config/local.yaml` (the safe offline default) and
   `config/gcp-sandbox.yaml` (the cloud shape, filled from environment
   variables). The environment is always selected explicitly, and sample
-  limits are strict.
+  limits are strict. `config/dev.yaml`, `qa.yaml` and `prod.yaml` are
+  local-only placeholders, and the manual cloud scripts take their settings
+  from `GOOGLE_CLOUD_PROJECT` and their own flags, not from any file in
+  `config/`.
 - **Steps 03 and 04** define the storage contract (`ObjectStore`) and the
   read-only query contract (`Warehouse`). The GCS, BigQuery, DuckDB and
   PostgreSQL adapters all implement these two contracts.
@@ -151,9 +155,14 @@ the same file again is classified, for example as `ALREADY_SUCCESS` or
 `CHECKSUM_CONFLICT`, rather than repeated.
 
 `RecordProvenance` links every canonical record to its source file, checksum
-and run. That completes the lineage chain from source file to record. All
-control writes go through the `ControlStore` protocol, never through the
-read-only `Warehouse` query interface.
+and run. That completes the lineage chain from source file to record. Control
+writes go to a control store (in memory, or `PostgresControlStore` for durable
+local runs), never through the read-only `Warehouse` query interface. Most go
+through the `ControlStore` protocol. The Step 12–13 one-transaction
+publishers are the exception: on PostgreSQL they call the store's internal
+update methods inside the same transaction, and deletion events are written by
+the deletion unit of work (the protocol has no deletion-event method).
+The production control store is undecided (tracked in #133).
 
 Details: [Pipeline control](../architecture/pipeline-control.md).
 
@@ -246,7 +255,9 @@ Publication is careful about precedence. A single frozen decision table
 classifies every incoming Work **before** the merge, as `INSERT`, `IDENTICAL`,
 `APPLY_UPDATE`, `STALE`, `CONFLICT` or `RESTORE_REQUIRED`. The `works` MERGE
 applies those decisions without reclassifying. Relationship tables are replaced
-per Work inside a BigQuery transaction, and only for eligible Works. Cost
+per Work inside a BigQuery transaction, and only for eligible Works. So far
+only `work_topics` has that REPLACE SQL; the other relationship and dimension
+tables have no publication SQL yet (tracked in #135). Cost
 guards are built into the BigQuery adapter: a dry run first, then a hard
 `maximum_bytes_billed` cap. The models were deployed and measured in the
 sandbox on about 10k synthetic Works (#103), then at about 100k (#108
@@ -309,20 +320,30 @@ there is **no HTTP deployment**. Today it runs against an in-memory reference
 repository.
 
 The intended first serving approach is **BigQuery + Data Service + optional
-cache**. Two pieces of work test whether that is enough for point lookups:
+cache**. Two pieces of work tested whether that is enough for point lookups:
 
 - **#23, a local PostgreSQL work-lookup `PROTOTYPE`.** It was built at the
-  operator's request ahead of the evidence. Its gate is **not** met, and it is
-  never deployed.
+  operator's request ahead of the evidence. Its gate was **not** met, it is
+  not approved, and it is never deployed.
 - **#118, an in-process TTL/LRU cache with a manual BigQuery + cache
   measurement script.** The target it measures against is an operator-stated
   requirement of 200 ms p95, recorded in #119, which is not a validated Wiley
-  SLA. One run, mentioned only in a commit message in PR #121, missed the
-  200 ms p95 target with a mostly cold cache: the warm-up touched too few
-  keys. `--prewarm` was added for the warm steady-state case. No warm result
-  and no docs evidence record exist at `206105e`. The code is
+  SLA. Four runs, in the personal DEV project on synthetic data, are recorded
+  in the #118 issue comments. With a cold cache, both the DOI and the Work-ID
+  lookup **missed** the target (2,426 ms and 2,554 ms p95). With every key
+  prewarmed (`--prewarm`), both **met** it (0.006 ms and 0.010 ms p95). Each
+  cache miss costs seconds through BigQuery, so the result depends on the
+  share of requests that miss. The cache was in-process around
+  `BigQueryWarehouse.query`, with no Data Service, API or shared cache in the
+  path, so this is not a production latency. The code is
   [`lookup_cache.py`](../../src/research_platform/serving/lookup_cache.py) and
   [`lookup_cache_measure_118.py`](../../scripts/lookup_cache_measure_118.py).
+
+On that evidence the operator chose the BigQuery + API/cache path for DOI and
+Work-ID lookups, assuming a small, hot working set, and closed #23 as not
+planned. Nothing is deployed: there is no HTTP API and no shared cache. A
+production-aware lookup cache is tracked in #151, and the Data Service API in
+#149.
 
 Details: [Data Service](../architecture/data-service.md),
 [Work lookup projection (#23)](../architecture/serving-work-lookup-projection.md),

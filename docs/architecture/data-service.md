@@ -4,12 +4,17 @@ Storage-independent consumer domain layer for Research Intelligence capabilities
 
 **Status:** DEFINED (typed contracts + capability registry + domain service +
 in-memory `SEMANTIC_ONLY` reference repository).  
-**Not:** DEPLOYED. No FastAPI/Flask/HTTP service. No BigQuery SDK adapter.
-No PostgreSQL/AlloyDB serving. No Redis cache. No orchestration.
+**Not:** DEPLOYED. No FastAPI/Flask/HTTP service (tracked in #149). No
+BigQuery-backed repository: the #10 `BigQueryWarehouse` exists but is not wired
+into the Data Service. No approved PostgreSQL/AlloyDB serving (#23 was closed
+not_planned; the #112 projection is a local PROTOTYPE). No Redis or other
+shared cache (the #118 cache is in-process and for measurement only). No
+orchestration.
 
 Authoritative inputs: Step 14 query-pattern registry, Step 15 BigQuery analytical
 contracts, Step 16 Gold mart registry, Step 17 quality/publication contracts,
-existing Warehouse read interface (adapter later — not leaked here).
+existing Warehouse read interface (the #7 / #8 / #10 adapters exist, but none
+backs a repository — not leaked here).
 
 ---
 
@@ -34,10 +39,14 @@ storage-independent ConsumerDataRepository
    ↓
 BigQuery / Gold first          ← intended first production backing (not implemented here)
    ↓
-optional cache                 ← implementation option only (not implemented)
+optional cache                 ← #118 in-process measurement cache only; not deployed, not wired in
    ↓
-optional future selective operational projection  ← only if measured (#23); not in Step 18
+optional future selective operational projection  ← only if measured (#23, closed not_planned); local PROTOTYPE only
 ```
+
+The cache and the projection prototype live in `research_platform.serving`
+([Work lookup projection](serving-work-lookup-projection.md#requirement-link)
+has the #118 results). Nothing in `src` composes either with `DataService`.
 
 **Quality boundary:** the Data Service consumes only data considered visible after
 the Step-17 `PRE_VISIBLE_PUBLICATION` gate. It does **not** run Step-17
@@ -64,7 +73,10 @@ src/research_platform/service/
     validation.py      # Step-14/16 alignment checks
 ```
 
-Reserved `research_platform.serving` remains unused for this domain layer.
+`research_platform.serving` is not part of this domain layer. It holds the #23
+PROTOTYPE work lookup projection (`postgres_work_lookup.py`, #112) and the #118
+in-process lookup cache (`lookup_cache.py`, PR #120), which implement
+or wrap `ConsumerDataRepository`. The `service` package does not import them.
 
 ---
 
@@ -171,8 +183,10 @@ before storage/lookup. Whitespace-only values are rejected as invalid input
 ## Pagination / cursors
 
 - Technical bounds: `DEFAULT_PAGE_LIMIT = 50`, `MAX_PAGE_LIMIT = 200`
-- Invalid limit (`< 1` or `> MAX`) → validation error (`INVALID_ARGUMENT` /
-  `LIMIT_EXCEEDED`); no silent clamp
+- Invalid limit (`< 1` or `> MAX`) → Pydantic `ValidationError` when the
+  `PageRequest` is built; no silent clamp. `map_validation_error()` in
+  `service.py` would map it to `INVALID_ARGUMENT` / `LIMIT_EXCEEDED`, but
+  nothing calls it yet and no test covers it (API error envelopes: #149)
 - Opaque cursor codec; payload may include only capability-level sort keys plus
   `capability_id` and `contract_version`
 - Reject malformed / wrong-capability / wrong-contract-version cursors with
@@ -272,11 +286,15 @@ License (primary-location only) remains a separate mart
 | `publisher_topic_analytics` | `publisher_topic_year_stats` |
 
 Documented only. Step 18 does not deploy or query BigQuery and makes no
-measured performance claims.
+measured performance claims. The later #118 runs timed BigQuery + an in-process
+cache outside the Data Service, in a personal DEV project on synthetic data.
 
 First serving approach: **BigQuery + Data Service + optional cache**.  
-PostgreSQL/AlloyDB is conditional on later measured evidence (#23) and must not
-copy the full analytical model.
+PostgreSQL/AlloyDB was conditional on measured evidence (#23). #23 was closed
+not_planned on 2026-10-13: the operator chose BigQuery + API/cache for DOI and
+Work-ID lookups, treating the working set as small and hot (not measured), and
+the closing comment says when to reopen it. Any projection must still not copy
+the full analytical model.
 
 ---
 
@@ -318,3 +336,9 @@ contract metadata (not necessarily a network endpoint).
 - AACT / OpenFDA
 
 Do not start those from this issue.
+
+Since Step 18: Steps 19–21 (#27, #25, #28) and the #9 / #10 adapters are
+complete. Step 19 runs `DataService` over the in-memory repository locally,
+Step 20 defines orchestration contracts with no DAG deployed, and Step 21 is a
+readiness assessment. #23 was closed not_planned. An HTTP Data Service is
+tracked in #149. Nothing here is deployed.

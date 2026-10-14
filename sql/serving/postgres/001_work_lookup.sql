@@ -1,6 +1,8 @@
 -- #23 PROTOTYPE: selective PostgreSQL/AlloyDB operational projection for Work point lookups.
--- The #23 gate is NOT met (no SLA, no BigQuery + API/cache measurement); this is
--- local-only prototype DDL, not an approved serving store. Idempotent.
+-- The #23 gate was NOT met: in #118 (personal DEV, synthetic data) BigQuery + an
+-- in-process cache missed the operator-stated 200 ms p95 cold but met it prewarmed,
+-- and #23 was closed not_planned. This is local-only prototype DDL, not an
+-- approved serving store. Idempotent.
 --
 -- Grain: one row per ACTIVE Work in the published consumer snapshot. DELETED
 -- Works are absent. No author/topic/institution/citation relationship tables:

@@ -23,7 +23,7 @@ page that defines it.
 
 | Term | Meaning | Defined in |
 | --- | --- | --- |
-| AACT / ClinicalTrials | The next planned public source (issue #2). Not implemented | [Public data sources](../architecture/public-data-sources.md#aact--clinicaltrials) |
+| AACT / ClinicalTrials | The next public source in the stated source priority. Not implemented, and no open issue tracks it | [Public data sources](../architecture/public-data-sources.md#aact--clinicaltrials) |
 | `ACTIVE` / `DELETED` (`activity_state`) | Whether a Work is live or tombstoned. Consumers only ever see `ACTIVE` Works | [Deletions](../architecture/openalex-deletions.md#tombstone-semantics) |
 | ADC (Application Default Credentials) | Credentials the Google client libraries find in the environment. #91, #92 and #103 ran with the operator's user ADC. No key files are kept in the repository | [IAM and secrets](../architecture/environment-readiness.md#iam--workload-identity--secrets) |
 | AlloyDB | Google Cloud's managed PostgreSQL-compatible database. With PostgreSQL, it is the candidate for the *optional* operational store, considered only if BigQuery plus a cache fails a measured requirement. Nothing has run on it | [Operational-store gate](../architecture/query-routing.md#operational-store-gate) |
@@ -50,7 +50,7 @@ page that defines it.
 | `can_promote` | The promotion check. It needs adjacent order, a `READY` source, and a target that is `READY_TO_VALIDATE` or `READY` with no mandatory-domain gaps. It has no manual override, and it returns false for every pair today | [Promotion gates](../architecture/environment-readiness.md#cicd-and-promotion-gates) |
 | Canonical model | Portable, normalized OpenAlex entities and relationships, with PyArrow schemas as the source of truth. Independent of any database's physical design | [Canonical model](../architecture/openalex-canonical-model.md) |
 | Claim token / lease | How one worker owns a `PROCESSING` file. Completion needs the current token and an unexpired lease. Stale leases are recovered explicitly | [Claim / lease sequence](../architecture/pipeline-control.md#claim--lease-sequence) |
-| `CLOUD_UNVERIFIED` | Readiness level: a cloud path is required, but there is no execution evidence for it | [Evidence legend](../architecture/environment-readiness.md#evidence-legend) |
+| `CLOUD_UNVERIFIED` | Readiness level: a cloud path is required, but it is not cloud-verified. Either there is no execution evidence, or there are only ad hoc runs, as for the data-quality and Gold SQL in the #103/#108 runs | [Evidence legend](../architecture/environment-readiness.md#evidence-legend) |
 | Clustering (`OBSERVED`) | BigQuery cluster keys chosen from query filters. Clustering was assessed (`OBSERVED`) for 4 of 11 patterns in #108 Stage 2, those reading tables of at least 64 MiB. Only `citation-relationships` (a filter on the leading cluster column) showed a reduction, to 0.157 of the dry-run estimate. The three filters on non-leading cluster columns showed none, and the cause was not isolated. Elsewhere it is NOT MEASURED | [Recorded run #108 Stage 2](../architecture/bigquery-analytical-models.md#recorded-run-108-stage-2) |
 | CMEK (customer-managed encryption keys) | Encryption with keys the customer controls rather than Google's defaults. Not validated for GCS in any environment | [GCS readiness](../architecture/environment-readiness.md#gcs-readiness) |
 | `COMPUTE_ON_READ` | Gold mart mode: computed from the analytical tables at read time | [Materialization honesty](../architecture/gold-analytical-marts.md#materialization-honesty) |
@@ -111,7 +111,7 @@ page that defines it.
 | --- | --- | --- |
 | `IDENTICAL` | Publication decision: same checksum as the stored Work. Only clocks are touched, and relationships are not refreshed | [Publication decisions](../architecture/bigquery-analytical-models.md#publication-decision-contract-frozen-pre-merge) |
 | Immutable raw landing | Storing the exact source bytes with provenance, create-only. Identical replay is a no-op and a conflict fails | [Immutable landing](../architecture/immutable-local-landing.md) |
-| Impersonation (service account) | The operator acting as a least-privilege service account through impersonation, with no key files. Used for the #108 Stage 1–3 cloud runs | [Recorded run #108 Stage 1](../architecture/bigquery-analytical-models.md#recorded-run-108-stage-1) |
+| Impersonation (service account) | The operator acting as a least-privilege service account through impersonation, with no key files. Used for the #108 Stage 1–3 cloud runs and the #118 lookup runs | [Recorded run #108 Stage 1](../architecture/bigquery-analytical-models.md#recorded-run-108-stage-1) |
 | `INFORMATIONAL_METRIC` | A data-quality measurement, such as the share of ACTIVE Works without a DOI. It is reported and never blocks publication | [HARD_GATE vs metric](../architecture/data-quality.md#hard_gate-vs-informational_metric) |
 | `IngestionProvenance` | The immutable retrieval record stored with the raw bytes: `run_id`, `source`, `source_uri`, `retrieved_at`, `sha256` | [Provenance](../architecture/immutable-local-landing.md#provenance) |
 | `INSERT` | Publication decision: a Work not yet stored | [Publication decisions](../architecture/bigquery-analytical-models.md#publication-decision-contract-frozen-pre-merge) |

@@ -19,7 +19,8 @@ SQL_ROOT = _REPO_ROOT / "sql" / "bigquery" / "openalex"
 # Step 14 patterns that must remain without BigQuery SQL in Step 15.
 UNRESOLVED_PATTERN_IDS: frozenset[str] = frozenset({"issn-source-lookup"})
 
-# Logical deployment-time safety default (not enforced without BigQuery jobs).
+# Per-query safety default. BigQueryWarehouse (#10) uses it as its default
+# maximum_bytes_billed (dry-run check + job cap); nothing else enforces it.
 DEFAULT_MAXIMUM_BYTES_BILLED = 10 * 1024 * 1024 * 1024  # 10 GiB
 
 
@@ -50,8 +51,13 @@ class BigQueryAnalyticalRegistry(SettingsModel):
         default=(
             "DEFINED IN STEP 15: SQL/schema contracts, grains, partition/cluster "
             "choices, MERGE strategy, cost rules, DuckDB SEMANTIC_ONLY fixtures. "
-            "NOT YET DEPLOYED / MEASURED: real BigQuery jobs, pruning, cost, "
-            "latency, clustering effectiveness."
+            "MEASURED ON SYNTHETIC DATA ONLY by manual runs (#103, #108) in "
+            "GCP_SANDBOX and personal DEV/QA projects: real BigQuery jobs, "
+            "publication_year pruning, small-sample latency; clustering OBSERVED "
+            "for 4 of 11 patterns (#108 Stage 2). NOT MEASURED: representative "
+            "cost (billed bytes were floor artifacts), production-scale latency "
+            "and concurrency, clustering effectiveness. NOT DEPLOYED to any "
+            "enterprise environment or PROD."
         ),
         max_length=2048,
     )

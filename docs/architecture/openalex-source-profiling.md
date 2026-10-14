@@ -237,9 +237,12 @@ verified only with offline synthetic fixtures.
   Both manifests are verified, but neither payload has been inspected. JSONL is
   the connector default. It preserves each published record verbatim, and it can
   be profiled and processed incrementally as a bounded stream. Parquet's mapping
-  of OpenAlex's nested and dynamic-key objects has not been verified. Canonical
-  analytical data may later be written as Parquet. That conversion is not part
-  of Step 08.
+  of OpenAlex's nested and dynamic-key objects has not been verified. Step 12
+  local ingestion followed this and accepts JSONL.GZ only. Canonical
+  analytical data is now written as Parquet from mapped canonical rows by the
+  canonical exporter (`research_platform.canonical.openalex.export`, PRs
+  #104/#105), so far on synthetic data only. That conversion is not part of
+  Step 08.
 - **Revisit:** if a bounded profile of a real Parquet Works file shows a
   complete, stable schema that maps the needed nested relationships, prefer it
   for its exact footer metadata and columnar reads. This decision must be based

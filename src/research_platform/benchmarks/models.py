@@ -178,7 +178,7 @@ class QueryPattern(SettingsModel):
             raise ValueError(
                 "OPTIONAL_OPERATIONAL_STORE requires MEASURED evidence; "
                 "use UNRESOLVED or BIGQUERY_PLUS_CACHE until BigQuery+cache "
-                "benchmarks exist"
+                "benchmarks reach MEASURED evidence"
             )
         if self.category in {
             QueryCategory.DOI_LOOKUP,
@@ -220,7 +220,11 @@ class BenchmarkMeasurementSpec(SettingsModel):
 
 
 class BenchmarkResult(SettingsModel):
-    """One recorded observation for a future BigQuery benchmark run."""
+    """One recorded benchmark observation.
+
+    No real BigQuery run is recorded as one yet: the #103, #108 and #118
+    scripts wrote their own evidence files outside the repository.
+    """
 
     result_id: UUID
     pattern_id: str = Field(min_length=1, max_length=64, pattern=_PATTERN_ID)

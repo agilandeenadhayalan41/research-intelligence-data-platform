@@ -11,6 +11,13 @@ class SettingsModel(BaseModel):
 
 
 class StorageConfig(SettingsModel):
+    """Object-store settings.
+
+    The ``local`` default serves local runs and tests; it is not a cloud target.
+    No factory selects a store from ``backend``: the local pipelines default to
+    ``LocalObjectStore``, and ``GCSObjectStore`` only checks for ``gcs``.
+    """
+
     backend: Literal["local", "gcs"] = "local"
     landing_path: Path = Path("data/landing")
     bucket: str | None = None
@@ -23,6 +30,17 @@ class StorageConfig(SettingsModel):
 
 
 class WarehouseConfig(SettingsModel):
+    """Warehouse adapter settings.
+
+    ``analytical`` defaults to ``duckdb`` for local tests; it is not a
+    production target, and no factory selects an engine from it (each adapter
+    only checks its own value). ``postgres_dsn_env`` names the DSN variable that
+    the Step 12/13 local pipelines read for ``--backend postgres``
+    (``PostgresControlStore`` / ``PostgresCanonicalStore``) and that
+    ``PostgreSQLWarehouse`` reads; none of these is a production control plane
+    or an approved serving store. No code reads ``transactional``.
+    """
+
     transactional: Literal["postgres"] = "postgres"
     analytical: Literal["duckdb", "bigquery"] = "duckdb"
     postgres_dsn_env: str = "POSTGRES_DSN"

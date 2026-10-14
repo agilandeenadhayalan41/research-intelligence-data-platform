@@ -59,15 +59,30 @@ traffic, or repeated indexed point queries are not met by BigQuery plus API/cach
 Do not automatically copy high-volume work-author, work-topic,
 work-institution, or citation/reference relationships into an operational store.
 
+For the DOI and Work-ID lookups this gate was not met. In #118 (the operator's
+personal DEV project, synthetic ~10k Works, an in-process cache) BigQuery + cache
+MISSED the operator-stated 200 ms p95 with a cold cache and MET it prewarmed,
+and #23 closed not_planned after the operator chose the BigQuery + API/cache
+path. The local PostgreSQL Work lookup projection (#112) stays an unapproved,
+undeployed PROTOTYPE.
+
 ## Materialized aggregates
 
 Materialize only after repeated expensive analytical usage is observed. Candidate
-outputs include:
+outputs include these Step 16 Gold marts (the
+[inventory](gold-analytical-marts.md#inventory) lists every mart); none is
+materialized:
 
-- `journal_stats`: journal ID, article count, unique author count, citation count,
-  first publication year, and latest publication year.
-- `publisher_topic_stats`: publisher ID, topic ID, license, publication year,
-  article count, and unique author count.
+- `journal_author_stats`: source (journal) ID, unique author count, and ACTIVE
+  work count.
+- `publisher_topic_year_stats`: publisher ID, topic ID, publication year, and
+  ACTIVE work count.
+- `publisher_topic_license_year_stats`: publisher ID, topic ID, primary-location
+  license, publication year, and ACTIVE work count.
+
+No mart has a citation count, a first or latest publication year, or a unique
+author count at the publisher/topic grain. Materialization and refresh are
+tracked in DE-17 (#138).
 
 Evaluate freshness, rebuild/reprocessing behavior, storage and query cost, and
 relationship fan-out before publishing an aggregate.

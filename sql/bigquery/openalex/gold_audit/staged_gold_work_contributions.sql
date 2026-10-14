@@ -1,6 +1,7 @@
 -- BigQuery staged Gold audit build: `openalex.staged_gold_work_contributions`
 -- #103 port of analytics/gold/semantic_build.build_staged_gold_audit_tables.
--- DEFINED, NOT YET DEPLOYED / NOT EXECUTED here.
+-- DEFINED. Executed only by manual scripts on synthetic data (GCP_SANDBOX,
+-- personal DEV/QA); NOT DEPLOYED.
 -- Rendered by research_platform.analytics.gold.bigquery_audit; edit the
 -- renderer, not this file.
 -- Read by quality/active_gold_deleted_work_exclusion.sql

@@ -4,7 +4,14 @@ Step 09 implements `LocalObjectStore` and the OpenAlex raw key layout.
 `GCSObjectStore` (#9) implements the same `ObjectStore` contract against GCS
 with create-only generation preconditions and offline fake-client tests. Live
 bucket validation is separately approved and is not part of default CI.
-Canonical transforms and ingestion orchestration are later steps.
+Later steps build on this contract: the Step 12 Works and Step 13 deletion
+runners ([local Works ingestion](local-works-ingestion.md),
+[deletions](openalex-deletions.md)) land raw bytes through `put_if_absent`
+before decoding them (Works records then go through the Step 11 canonical
+mapping), and the Step 19 bounded runner and the Step 20 `WORKS_INGEST_UNIT`
+contract reuse that path. Those runners accept only `storage.backend=local` and
+have run only on synthetic payloads. No Airflow or Composer is deployed, and
+ingestion does not land into GCS yet (tracked in #127).
 
 ## Preserve source bytes
 
@@ -15,8 +22,11 @@ Immutable raw landing stores the exact bytes received from the source connector:
 | `jsonl` | `source.gz` | Original gzip JSONL payload |
 | `parquet` | `source.parquet` | Original Parquet payload |
 
-JSONL.GZ is never rewritten as Parquet in this layer. Analytical Parquet
-conversion belongs to a later canonical/analytical step.
+JSONL.GZ is never rewritten as Parquet in this layer. Analytical Parquet is
+written separately, from mapped canonical rows, by the canonical Parquet
+exporter (`research_platform.canonical.openalex.export`, PRs #104/#105), so far
+only for the synthetic #103/#108 BigQuery loads. It never writes under
+raw-landing keys.
 
 ## OpenAlex raw key layout
 
@@ -231,7 +241,9 @@ separate least-privilege service account.
 claimed. Evidence: [#108](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/108#issuecomment-6132004917) (identifiers redacted).
 
 `GCS_RAW_LANDING` is therefore `VERIFIED` for **GCP_SANDBOX**, now also as
-a least-privilege runtime identity. It is not evidence for an enterprise-managed
-project, separate deploy/runtime identities, concurrent writers, retries,
-large/resumable uploads, CMEK, retention, access logging, or DEV/QA/PROD, which
-stay `READY_TO_VALIDATE` / `BLOCKED`.
+a least-privilege runtime identity, and for the personal projects labelled DEV
+and QA (#108 Stage 3). This is domain-level evidence only: every environment
+stays `NOT_READY` overall, no promotion is claimed, and PROD stays `BLOCKED`.
+It is not evidence for an enterprise-managed project, separate deploy/runtime
+identities, concurrent writers, retries, large/resumable uploads, CMEK,
+retention, or access logging.

@@ -6,10 +6,19 @@ description: What is complete, what has been validated and where, how ready each
 
 # Status
 
-> **Last updated from `main` @ `206105e` (2026-10-13).** This page summarizes
-> the repository at that commit. If a detailed page disagrees with this one,
-> check the dates on that page's "Recorded run" sections and the readiness
-> levels in [`src/research_platform/readiness/registry.py`](../../src/research_platform/readiness/registry.py).
+> **Last updated from `main` @ `d6a71a5` (2026-10-13), plus the #123 (DE-02)
+> corrections.** This page summarizes the repository at that commit, and the
+> GitHub issue states on that date. The readiness levels, the promotion
+> outcomes and the code paths under `src/` and `scripts/` are unchanged since
+> `206105e`. #123 changed wording only (docs, config and SQL comments,
+> docstrings, and descriptive strings such as the registry's rationale text),
+> added a docs summary of the four #118 runs, and added and updated offline
+> tests that check the docs against the registry. If a detailed page disagrees
+> with this one, check the dates on that page's "Recorded run" sections and
+> the readiness levels in
+> [`src/research_platform/readiness/registry.py`](../../src/research_platform/readiness/registry.py).
+> For the status of each requirement of the lead architecture, see the
+> [lead coverage register](../requirements/openalex-lead-coverage.md).
 
 ## At a glance
 
@@ -24,16 +33,25 @@ description: What is complete, what has been validated and where, how ready each
 - **Readiness:** every environment is `NOT_READY` overall, and every mandatory
   PROD domain is `BLOCKED`. No promotion between environments is possible
   today.
-- **Serving:** the PostgreSQL lookup projection (#23) is a local `PROTOTYPE`
-  whose gate is **not** met. One BigQuery + cache measurement run (#118) is
-  mentioned only in a commit message: it **missed** the 200 ms p95 target with
-  a mostly cold cache. No warm-cache result is recorded.
+- **Serving:** four BigQuery + in-process cache lookup runs (#118), in the
+  personal DEV project on synthetic data, are recorded in the issue's
+  comments. For both the DOI and the Work-ID lookup, a cold cache **missed**
+  the operator-stated 200 ms p95 target and a prewarmed cache **met** it. The
+  operator then chose the BigQuery + API/cache path, and #23 (the PostgreSQL
+  lookup projection) was closed as not planned. Its local `PROTOTYPE` stays
+  unapproved and undeployed, and its gate was **not** met.
 - **Not deployed anywhere:** Airflow/Composer, Dataform, an HTTP Data Service,
-  repository-provisioned IAM, workload identity or secrets (the #108 grants
-  were made by hand), monitoring, and a promotion pipeline.
+  a shared lookup cache, repository-provisioned IAM, workload identity or
+  secrets (the #108 grants were made by hand), monitoring, and a promotion
+  pipeline.
 - **Not proven yet:** real payloads, production scale, cost, enterprise
   environments and serving latency. See
   [What is not proven yet](#what-is-not-proven-yet).
+- **Follow-on work:** the data-engineering issues DE-01 to DE-35 are #122 to
+  #156, under the umbrella #157. #122 is closed: PR #160 added the
+  [lead coverage register](../requirements/openalex-lead-coverage.md), which
+  maps each lead requirement to its evidence and follow-on issue. The others
+  are open.
 
 ## What is not proven yet
 
@@ -72,9 +90,12 @@ this page.
   (the sandbox at about 10k and about 100k Works, DEV and QA), on synthetic
   data only. Quality gating and alerting in BigQuery remain unverified, and
   `DATA_QUALITY` stays `CLOUD_UNVERIFIED`.
-- **Serving.** There is no HTTP Data Service and no auth. No lookup latency
-  through a cache is recorded in the docs: the one #118 run used a mostly cold
-  cache and missed the target. The #23 projection has not been run on AlloyDB,
+- **Serving.** There is no HTTP Data Service and no auth. The #118 runs put an
+  in-process cache around `BigQueryWarehouse.query`, with no Data Service, API
+  or shared cache in the path, over 1,000 synthetic Works with an assumed
+  access pattern. They are an optimistic bound in personal DEV, not a
+  production latency, and the real working set is unknown. Their record is
+  the #118 issue comments. The #23 projection has not been run on AlloyDB,
   and its latency, concurrency and scale were not measured.
 - **Lookup requirement.** The 200 ms p95 target is operator-stated, not a
   measured or product-validated Wiley SLA.
@@ -99,16 +120,16 @@ roadmap's own words, completion means "the planned contracts, local
 validation, orchestration contracts, and readiness assessment are complete"
 and **not** that GCP deployment is complete.
 
-| Step | Capability | Status at `206105e` | Issue |
+| Step | Capability | Status at `d6a71a5` | Issue |
 | --- | --- | --- | --- |
-| 01 | Repository foundation: packaging, typed interfaces, logging, tests, CI | Complete | — |
-| 02 | Configuration framework: validated YAML, explicit environment, strict sample limits | Complete | — |
-| 03 | Storage contracts (`ObjectStore`), plus `GCSObjectStore` | Complete. GCS adapter live-verified (see below) | [#9][i9] |
-| 04 | Warehouse contracts, plus BigQuery, DuckDB and PostgreSQL adapters | Complete. BigQuery live-verified, DuckDB local only, PostgreSQL `LOCAL_POSTGRES_VERIFIED` | [#10][i10], [#8][i8], [#7][i7] |
-| 05 | Bounded anonymous OpenAlex connector | Complete | — |
-| 06 | Works manifest parser | Complete | — |
-| 07 | Deterministic bounded sample selector | Complete | — |
-| 08 | Bounded source profiling | Implemented. **Real payload profile pending** public network access | — |
+| 01 | Repository foundation: packaging, typed interfaces, logging, tests, CI | Complete | [#6][i6] |
+| 02 | Configuration framework: validated YAML, explicit environment, strict sample limits | Complete | [#5][i5] |
+| 03 | Storage contracts (`ObjectStore`), plus `GCSObjectStore` | Complete. GCS adapter live-verified (see below) | [#3][i3], [#9][i9] |
+| 04 | Warehouse contracts, plus BigQuery, DuckDB and PostgreSQL adapters | Complete. BigQuery live-verified, DuckDB local only, PostgreSQL `LOCAL_POSTGRES_VERIFIED` | [#4][i4], [#10][i10], [#8][i8], [#7][i7] |
+| 05 | Bounded anonymous OpenAlex connector | Complete | [#13][i13] |
+| 06 | Works manifest parser | Complete | [#12][i12] |
+| 07 | Deterministic bounded sample selector | Complete | [#14][i14] |
+| 08 | Bounded source profiling | Implemented. **Real payload profile pending** public network access | [#16][i16] |
 | 09 | Immutable local raw landing | Complete | [#17][i17] |
 | 10 | Pipeline control and provenance contracts | Complete | [#18][i18] |
 | 11 | Canonical OpenAlex model | Complete | [#15][i15] |
@@ -123,16 +144,17 @@ and **not** that GCP deployment is complete.
 | 20 | Orchestration contracts | Complete. No Airflow/Composer/Dataform | [#25][i25] |
 | 21 | Environment readiness registry and promotion gates | Complete. No cloud provisioning | [#28][i28] |
 
-The Step 09–11 issue numbers come from the PR titles in the git history. The
-others come from the README's status table.
+The issue numbers come from the `[NN]` step markers in the GitHub issue
+titles. For Steps 03 and 04, the first issue is the contract and the others
+are the adapters (`[03b]`, `[04a]`–`[04c]`).
 
 ## Validation history
 
 The table lists the validation runs recorded in the docs and merge history,
-oldest first. "Evidence level" uses the labels in the
-[Glossary](glossary.md). All cloud runs used **synthetic** data or public
-sample data, never real OpenAlex payloads. Identifiers are redacted in the
-linked evidence.
+and the #118 runs recorded in that issue's comments, oldest first. "Evidence
+level" uses the labels in the [Glossary](glossary.md). All cloud runs used
+**synthetic** data or public sample data, never real OpenAlex payloads.
+Identifiers are redacted in the linked evidence.
 
 | Issue | What was validated | Where | Evidence level | PR |
 | --- | --- | --- | --- | --- |
@@ -148,8 +170,9 @@ linked evidence.
 | [#108][i108] Stage 2 | #103 re-run at about 10× scale (100,100 batch-1 Works), 95/95, after the adapter cap-floor fix, 2026-10-12 | `GCP_SANDBOX`, least-privilege SA | `MEASURED` (synthetic-100100-works). Clustering `OBSERVED` for 4 of 11 patterns, with a reduction in only 1. Cost still not representative | [#114][p114], [#115][p115] |
 | [#108][i108] Stage 3 DEV | GCS 17/17, BigQuery smoke 10/10, #103 95/95 at about 10k Works, 2026-10-12 | DEV: a personal project labelled DEV, not enterprise-managed | `VERIFIED` for `GCS_RAW_LANDING` and `BIGQUERY_ANALYTICAL` in DEV. No promotion | [#116][p116] |
 | [#108][i108] Stage 3 QA | The same runs, at about 10k Works, with a separate service account. The DEV account was refused access to QA, 2026-10-12 | QA: a separate personal project labelled QA | `VERIFIED` for both domains in QA. No promotion | [#117][p117] |
-| [#23][i23] | Lookup requirement recorded: interactive app/API consumer, ≤200 ms end-to-end p95, ≤5 rps peak, daily freshness | Configuration only ([`config/query-patterns/openalex.yaml`](../../config/query-patterns/openalex.yaml)) | Operator-stated. **Not** measured, **not** a Wiley SLA | [#119][p119] |
-| [#118][i118] | In-process TTL/LRU lookup cache, a manual BigQuery + cache measurement script, and `--prewarm` | Not recorded for the one run | **One run, mentioned only in a commit message, missed** the 200 ms p95 target with a mostly cold cache. No warm result and no docs evidence record | [#120][p120], [#121][p121] |
+| [#23][i23] | Lookup requirement recorded: interactive app/API consumer, ≤200 ms end-to-end p95, ≤5 rps peak, daily freshness | Configuration only ([`config/query-patterns/openalex.yaml`](../../config/query-patterns/openalex.yaml)) | Operator-stated. **Not** a measured or product-validated Wiley SLA | [#119][p119] |
+| [#118][i118] tooling | In-process TTL/LRU lookup cache, a manual BigQuery + cache measurement script, and `--prewarm` | Local (offline) | Tooling only | [#120][p120], [#121][p121] |
+| [#118][i118] runs 1–4 | BigQuery + in-process cache for the DOI and Work-ID lookups: Zipf(1.1) access over 1,000 ACTIVE Works, 500 warm-up and 2,000 measured requests per run, with a cold cache (runs 1 and 3) and with every key prewarmed (runs 2 and 4), 2026-10-12/13 | DEV: the personal project labelled DEV, on the #108 Stage 3 synthetic tables (about 10k Works), as the DEV least-privilege service account | Cold: **missed** the 200 ms p95 (DOI 2,426 ms, Work-ID 2,554 ms). Prewarmed: **met** it (0.006 ms and 0.010 ms). In-process cache only, not a production latency. Placement stays `BIGQUERY_PLUS_CACHE` / `ASSUMED`, and no readiness level changed | — (issue comments) |
 
 Notes on the table:
 
@@ -159,14 +182,21 @@ Notes on the table:
   figures are billing-floor artifacts, and clustering was not measured.
 - **#108** repeats the sandbox validation with a least-privilege identity
   (Stage 1), at about 10× scale (Stage 2), and then in DEV and QA (Stage 3).
-  The repository records no stage after Stage 3, and not the issue's
-  open/closed state
+  There is no stage after Stage 3, and the issue was closed as completed on
+  2026-10-12
   ([BigQuery recorded runs](../architecture/bigquery-analytical-models.md#recorded-run-108-stage-1)).
-- **#118's one run** is described only in the body of commit `ff82034`
-  (PR #121): the 500 warm-up requests touched far fewer than the 1,000 keys,
-  so the cache was mostly cold and the run missed the target. `--prewarm`
-  was added so that a re-run measures the warm steady state. No docs page has
-  a "Recorded run" for #118. The code is
+- **#118's four runs** are recorded in the issue's comments, and the
+  [Work lookup projection](../architecture/serving-work-lookup-projection.md#118-bigquery--cache-measurement)
+  page and the
+  [lead coverage register](../requirements/openalex-lead-coverage.md)
+  summarize them. Only run 1 is described in a commit message, the body of
+  commit `ff82034` (PR #121): its 500 warm-up requests touched far fewer than
+  the 1,000 keys, so the cache was mostly cold and the run missed the target.
+  `--prewarm` loads every key first, so runs 2 and 4 measure the warm steady
+  state. Each
+  cache miss cost about 2.4–3.1 s through BigQuery, so the overall p95 meets
+  200 ms only when fewer than 5% of requests miss the cache. Each miss billed
+  BigQuery's 10 MiB minimum, so cost is a floor artifact here too. The code is
   [`lookup_cache.py`](../../src/research_platform/serving/lookup_cache.py) and
   [`lookup_cache_measure_118.py`](../../scripts/lookup_cache_measure_118.py).
 
@@ -176,7 +206,8 @@ Sources: the "Recorded run" sections of
 [PostgreSQL Warehouse](../architecture/postgres-warehouse.md#local-validation-evidence-90),
 [Work lookup projection](../architecture/serving-work-lookup-projection.md) and
 [Source profiling](../architecture/openalex-source-profiling.md#what-is-verified),
-plus the merge-commit titles and commit messages on `main`.
+plus the merge-commit titles and commit messages on `main`, and the #118 and
+#23 issue comments for the #118 runs and the #23 decision.
 
 ## Environment readiness
 
@@ -187,11 +218,11 @@ never a cloud rung.
 LOCAL (evidence only) -> GCP_SANDBOX -> DEV -> QA -> PROD
 ```
 
-The table shows the levels the code registry assigns at `206105e`, from
-`evaluate_environment_readiness()`, which makes no cloud calls. The
-identity, observability and similar rows group several registry domains that
-share the same level. The cells are per-domain levels, and the last row is
-each environment's overall status.
+The table shows the levels the code registry assigns at `d6a71a5` (unchanged
+since `206105e`), from `evaluate_environment_readiness()`, which makes no
+cloud calls. The identity, observability and similar rows group several
+registry domains that share the same level. The cells are per-domain levels,
+and the last row is each environment's overall status.
 
 | Domain | LOCAL | GCP_SANDBOX | DEV | QA | PROD |
 | --- | --- | --- | --- | --- | --- |
@@ -221,64 +252,90 @@ How to read it:
   ([promotion gates](../architecture/environment-readiness.md#cicd-and-promotion-gates)).
 - **DEV and QA are personal projects labelled DEV and QA,** not
   enterprise-managed environments. The DEV/QA `VERIFIED` levels rest on the
-  #108 Stage 3 runs above.
+  #108 Stage 3 runs above. The #118 lookup runs in DEV changed no level:
+  `DATA_SERVICE` stays `CLOUD_UNVERIFIED`.
 
 Every source agrees on one thing: **every environment is `NOT_READY`
 overall**, and every mandatory PROD domain is `BLOCKED`.
 
 ## Open and active issues
 
-| Issue | State as the repo records it | What remains open |
+The issues the evidence above centres on are now closed. The open work is the
+data-engineering program (last row).
+
+| Issue | State on GitHub (2026-10-13) | What remains open |
 | --- | --- | --- |
-| [#2][i2] | **Open.** The umbrella for deferred and runtime work and live-validation tracking | Separately scoped work, including AACT/ClinicalTrials as the next source (not implemented) |
-| [#23][i23] | **Open, gated.** Only a local `PROTOTYPE` exists, and its gate is **not** met. Lookups stay `BIGQUERY_PLUS_CACHE` / `ASSUMED` | A BigQuery + API/cache measurement at representative scale (see below) |
-| [#108][i108] | Stages 0–3 recorded. The issue's open/closed state is not recorded in the repo | The gaps its records leave open (see below) |
-| [#118][i118] | Tooling merged (#120, #121). One cold-cache run, mentioned only in a commit message, missed the target. The issue's state is not recorded in the repo | A recorded warm (`--prewarm`) measurement and a docs evidence record. The script reports a meets/misses verdict against the target p95 |
+| [#2][i2] | **Closed** (completed). The roadmap umbrella: all 21 steps complete. Its body no longer mentions AACT/ClinicalTrials | New work needs its own issue. No open issue tracks AACT/ClinicalTrials, which is not implemented |
+| [#23][i23] | **Closed, not planned.** The operator chose BigQuery + API/cache for DOI and Work-ID lookups, assuming a small, hot working set. The gate was **not** met. The local `PROTOTYPE` (#112) stays unapproved and undeployed. Lookups stay `BIGQUERY_PLUS_CACHE` / `ASSUMED` | Reopen only under the criteria in the #23 closing comment (see below) |
+| [#108][i108] | **Closed** (completed) after Stages 0–3 | The gaps its records leave open (see below) |
+| [#118][i118] | **Closed** (completed). Tooling merged (#120, #121). Four runs in personal DEV: cold **missed**, prewarmed **met**, for both lookups | The real working set, and a cache behind a deployed API. A production-aware lookup cache is tracked in [#151][i151], and the Data Service API in [#149][i149] |
+| [#122][i122]–[#156][i156], [#157][i157] | #122 (DE-01) is **closed** by PR #160, which added the [lead coverage register](../requirements/openalex-lead-coverage.md). DE-02 to DE-35 (#123–#156) and the umbrella #157 are **open** | Each requirement's follow-on issue is named in the register |
 
-More on the open items:
+More on what remains open:
 
-- **#23 gate.** The gate inputs listed on #23 are a lookup requirement, the
-  consumer, and a BigQuery + API/cache measurement at representative scale.
-  The first two are now operator-stated (#119). The measurement is not
-  recorded. A PostgreSQL/AlloyDB projection is justified only if that
-  measurement fails the requirement.
+- **#23 decision.** The gate inputs listed on #23 were a lookup requirement,
+  the consumer, and a BigQuery + API/cache measurement. The first two are
+  operator-stated (#119), and the #118 runs are the measurement, on synthetic
+  data in personal DEV rather than at representative scale. They show that
+  BigQuery + an in-process cache meets the 200 ms p95 only when fewer than 5%
+  of requests miss the cache. The operator judged the consumer's
+  working set small and hot enough for a warm cache, so no PostgreSQL/AlloyDB
+  projection was adopted. The real working set has not been measured. #23
+  reopens only if production evidence shows that more than 5% of requests
+  miss a warm cache, or that a shared cache breaks the 200 ms p95.
 - **#108 gaps.** Synthetic data instead of a representative slice,
   non-representative cost, no enterprise-managed project, one identity for
   deploy and runtime, and cancellation not exercised.
 
 ## Known inconsistencies in the docs
 
-The readiness pages do not all agree, and several older pages still describe
-work as "not implemented" or "later" that has since been done. The newer
-sources are the #108 records (PRs #113–#117), the registry's levels and the
-code itself. The table lists the outdated passages known at `206105e`. It may
-not be complete, so check any "not implemented", "later" or "future work"
-statement against the dates of the "Recorded run" sections.
+At `main` @ `d6a71a5` plus the #123 (DE-02) corrections, every outdated passage
+this section listed at `206105e` has been corrected at its source. That covers
+the GCP_SANDBOX-only and DEV/QA `READY_TO_VALIDATE` readiness wording (README,
+roadmap, environment readiness and immutable landing), the "ran once in
+GCP_SANDBOX only" data-quality and Gold wording (including the registry's
+`DATA_QUALITY` rationale), the README "Still planned", `ControlStore`,
+repository-map, Docusaurus and runtime-dependency lines, the "not
+implemented", "later" and "future work" passages in GCP: BigQuery-first,
+Platform architecture, the manifest contract, immutable landing and the Data
+Service diagram, the aggregate names in Query routing, and the missing lookup
+requirement on the Work lookup projection page.
 
-| Statement | Where | Newer source |
-| --- | --- | --- |
-| GCS and BigQuery are `VERIFIED` in GCP_SANDBOX only and `READY_TO_VALIDATE` for DEV/QA | README "Roadmap completion status", the README step table (rows 03 and 04) and its GCS/BigQuery adapter paragraphs, the [roadmap](../architecture/roadmap.md) intro, "Completed foundation" rows 03 and 04 and deferred-gaps table, and the [environment readiness](../architecture/environment-readiness.md#current-truthful-matrix-summary) matrix, evidence legend, GCS and BigQuery readiness sections and known gaps | The registry and the #108 Stage 3 records say `VERIFIED` for DEV and QA |
-| DEV/QA stay `READY_TO_VALIDATE` | The summary paragraph right after the Stage 3 records in [Immutable landing](../architecture/immutable-local-landing.md#recorded-run-108-stage-3-qa). The [#103 record](../architecture/bigquery-analytical-models.md#recorded-run-103) says the same, but it was written before Stage 3 | [#108 Stage 3 QA](../architecture/bigquery-analytical-models.md#recorded-run-108-stage-3-qa) |
-| The DQ and Gold SQL ran once, in GCP_SANDBOX only (#103) | [Environment readiness](../architecture/environment-readiness.md#data-quality--gold--data-service) "Data quality / Gold / Data Service", and the `DATA_QUALITY` rationale text in the registry (its level, `CLOUD_UNVERIFIED`, still stands) | The #103 script runs every Gold and quality file in each run: #108 Stage 1 and 2 in the sandbox, and Stage 3 in DEV and QA ([#108 Stage 2](../architecture/bigquery-analytical-models.md#recorded-run-108-stage-2)) |
-| Deploying and measuring the Step 15–16 BigQuery models is "still planned" | README "Still planned" | The same README, and #103, record them as deployed and `MEASURED` on synthetic data |
-| GCP runtime adapters are not part of the current implementation, and GCS and BigQuery runtime implementations "are not included" | The intro and the closing paragraph of "Design principles" in [GCP: BigQuery-first](../architecture/gcp-bigquery-first.md#design-principles) | The #9 / #10 adapters, the #91 / #92 smokes, and the #103 / #108 deployments |
-| There is no ingestion, GCS landing, BigQuery runtime or Data Service, and "GCS landing is later" | The "current foundation" paragraph of [Platform architecture](../architecture/platform-architecture.md#platform-flow) and its [layer responsibilities](../architecture/platform-architecture.md#layer-responsibilities) | Steps 12–21 and the #9 / #10 adapters |
-| "Landing, storage, and warehouse operations remain future work" | The end of [OpenAlex discovery and manifest contract](../architecture/openalex-manifest-contract.md#future-flow) | Steps 09, 12 and 15, and the #9 / #10 adapters |
-| "Canonical transforms and ingestion orchestration are later steps" | The intro of [Immutable landing](../architecture/immutable-local-landing.md) | Steps 11, 12, 19 and 20 |
-| `ControlStore` is a fail-fast protocol only | README "Configuration and environments" | Step 12 added an in-memory store and `PostgresControlStore` ([Local Works ingestion](../architecture/local-works-ingestion.md)) |
-| The optional cache is "not implemented" | The diagram in [Data Service](../architecture/data-service.md#architecture-boundary) "Architecture boundary" | [`lookup_cache.py`](../../src/research_platform/serving/lookup_cache.py) (#118, PRs #120 and #121): an in-process cache for measurement, not a deployed service |
-| The materialized-aggregate candidates are `journal_stats` and `publisher_topic_stats` | [Query routing](../architecture/query-routing.md#materialized-aggregates) "Materialized aggregates" | The Gold marts are `journal_author_stats`, `publisher_topic_year_stats` and `publisher_topic_license_year_stats` ([inventory](../architecture/gold-analytical-marts.md#inventory)) |
-| No lookup requirement exists (`desired_p95_latency_ms: null`) | [Work lookup projection](../architecture/serving-work-lookup-projection.md#requirement-link) | PR #119 set 200 ms p95, 5 rps and 24 h freshness in the query-pattern registry |
-| `ingestion\` and `serving\` are "Reserved runtime areas", and `scripts\` is reserved | The README repository map | `ingestion/` holds the Step 12–13 pipelines, `serving/` holds the #23 and #118 code, and `scripts/` holds four manual cloud scripts. `dags/` is still empty |
-| Docusaurus publication remains future work | README "Documentation and repository map" | This site (`docs/site/`), added after `206105e` |
-| Runtime dependencies are Pydantic, PyYAML and PyArrow | README "Local development" | `pyproject.toml` also pins `google-cloud-storage` and `google-cloud-bigquery` |
+"Recorded run" sections keep the readiness wording of their date. Where a
+later run changed it, a dated note follows. For example, the
+[#103 record](../architecture/bigquery-analytical-models.md#recorded-run-103)
+still says DEV and QA stay `READY_TO_VALIDATE`, and the note after it records
+the #108 Stage 3 result.
+
+No known inconsistency remains. The SQL header comments that said "NOT YET
+DEPLOYED / NOT EXECUTED here" (the `sql/bigquery/openalex/models/` files and
+the renderer-generated `ddl/`, `staging/` and `gold_audit/` headers) now say
+they were executed only by manual scripts on synthetic data (GCP_SANDBOX,
+personal DEV/QA) and are not deployed; `publish_works_unit.sql` says no
+recorded run executed it.
+
+The sources of truth are the
+[lead coverage register](../requirements/openalex-lead-coverage.md) for each
+lead requirement, and the readiness registry
+([`registry.py`](../../src/research_platform/readiness/registry.py)) for
+readiness levels and promotion. Check any "not implemented", "later" or
+"future work" statement against them and against the dates of the "Recorded
+run" sections.
 
 [i2]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2
+[i3]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/3
+[i4]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/4
+[i5]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/5
+[i6]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/6
 [i7]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/7
 [i8]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/8
 [i9]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/9
 [i10]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/10
+[i12]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/12
+[i13]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/13
+[i14]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/14
 [i15]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/15
+[i16]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/16
 [i17]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/17
 [i18]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/18
 [i19]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/19
@@ -298,6 +355,11 @@ statement against the dates of the "Recorded run" sections.
 [i103]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/103
 [i108]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/108
 [i118]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/118
+[i122]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/122
+[i149]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/149
+[i151]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/151
+[i156]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/156
+[i157]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/157
 [p98]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/98
 [p101]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/101
 [p102]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/102

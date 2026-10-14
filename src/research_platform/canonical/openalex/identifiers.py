@@ -98,7 +98,7 @@ def normalize_doi(value: object | None, *, field_name: str = "doi") -> str | Non
 
 
 def normalize_orcid(value: object | None, *, field_name: str = "orcid") -> str | None:
-    """Normalize ORCID to ``ACCT-000028`` (no URL)."""
+    """Normalize ORCID to the bare ``NNNN-NNNN-NNNN-NNNC`` form (no URL)."""
     if value is None:
         return None
     if not isinstance(value, str) or not value.strip():

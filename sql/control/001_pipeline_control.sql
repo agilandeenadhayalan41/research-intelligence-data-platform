@@ -1,8 +1,10 @@
 -- Pipeline control schema specification (Step 10 / issue #18)
 --
 -- Target dialect: PostgreSQL 16+ (matches docker-compose local tooling).
--- Versioned contract for review and for the optional local Step 12 durable
--- ingestion path (PostgresControlStore / apply_ingestion_schema).
+-- Versioned contract for review and for the optional local Step 12/13 durable
+-- ingestion path (PostgresControlStore / apply_ingestion_schema). That is a
+-- local durable adapter, not the production control plane, which is still
+-- undecided (DE-12, issue #133).
 -- Default offline tests and CI do NOT require applying this DDL.
 -- DuckDB or mock validation does NOT prove PostgreSQL dialect compatibility.
 --
@@ -262,10 +264,17 @@ CREATE INDEX IF NOT EXISTS record_provenance_asset_idx
 CREATE INDEX IF NOT EXISTS record_provenance_run_idx
     ON record_provenance (run_id);
 
--- Notes for later adapters (not enforced by this file alone):
--- 1. claim_source_file must use a single conditional UPDATE ... WHERE status IN
---    ('DISCOVERED','FAILED') AND (status <> 'PROCESSING' OR lease expired path
---    recovered first), returning exactly one row.
--- 2. mark_source_file_success/failed must require claim_token match and
---    lease_expires_at > now() (except explicit stale recovery).
+-- Notes for adapters (not enforced by this file alone), as PostgresControlStore
+-- implements them:
+-- 1. claim_source_file locks the row with SELECT ... FOR UPDATE, applies the
+--    Python lifecycle check (DISCOVERED -> claim, FAILED -> retry; any other
+--    status raises ClaimConflictError), then UPDATEs that locked row by
+--    asset_id. The row lock, not a conditional WHERE clause, makes the claim
+--    exclusive. An expired PROCESSING lease must be recovered first
+--    (recover_stale_claim -> FAILED / STALE_CLAIM).
+-- 2. mark_source_file_success/failed require a claim_token match and a lease
+--    that has not expired (except explicit stale recovery). Expiry is checked
+--    against the caller-supplied timestamp (processed_at, or
+--    AssetPublishRequest.now in the publish transaction), not the database
+--    now().
 -- 3. Do not map these writes through Warehouse.query().

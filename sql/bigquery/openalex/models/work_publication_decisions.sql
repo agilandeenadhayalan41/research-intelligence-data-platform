@@ -1,5 +1,6 @@
 -- Frozen Work publication decisions (Step 15 publication boundary).
--- DEFINED — NOT YET DEPLOYED / NOT EXECUTED here.
+-- DEFINED. Executed only by manual scripts on synthetic data (GCP_SANDBOX,
+-- personal DEV/QA); NOT DEPLOYED.
 --
 -- THIS FILE IS THE SINGLE PRECEDENCE CASE for analytical Work publication.
 -- Derived sets (accepted_work_ids, relationship_publish_work_ids,

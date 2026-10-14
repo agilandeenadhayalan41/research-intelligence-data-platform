@@ -264,7 +264,7 @@ class SourceFileControl(SettingsModel):
 
 
 class RecordProvenance(SettingsModel):
-    """Record-level lineage for later canonical ingestion (no payload bytes)."""
+    """Record-level lineage for canonical ingestion (no payload bytes)."""
 
     record_id: str = Field(min_length=1, max_length=256)
     entity_type: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9-]*$")

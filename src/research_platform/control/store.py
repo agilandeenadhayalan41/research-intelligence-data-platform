@@ -1,4 +1,12 @@
-"""Control-store write protocol (contracts only; no database adapter).
+"""Control-store write protocol (abstract contract).
+
+Implementations: ``InMemoryControlStore`` (``research_platform.control.memory``;
+offline tests and the ephemeral ``--backend memory`` mode) and
+``PostgresControlStore`` (``research_platform.persistence.postgres``), a local
+durable adapter for the Step 12/13 pipelines (``--backend postgres``). Neither is
+a production control plane, which is still undecided (DE-12, #133), and neither
+is a serving store. ``UnimplementedControlStore`` below is a fail-fast skeleton
+that only the unit tests construct.
 
 ``Warehouse.query()`` remains a read interface. Pipeline control persistence and
 transactional claims belong behind ``ControlStore``, not SQL string writes through
@@ -24,21 +32,26 @@ from research_platform.provenance.models import IngestionProvenance
 
 
 class ControlStore(ABC):
-    """Atomic control-plane operations for later ingestion workers.
+    """Atomic control-plane operations for ingestion workers.
 
-    Intended transaction boundary for one source file (later implementation)::
+    Step 12/13 boundary for one source file, as the local runners implement it
+    (see ``docs/architecture/pipeline-control.md``)::
 
+        claim_source_file                        # its own short transaction
+        retrieve -> ObjectStore.put_if_absent    # outside the DB transaction
         begin
-          claim_source_file
-          ... retrieve / land immutable raw / publish canonical ...
+          re-check claim token / lease
+          ... publish canonical rows ...
           record_provenance (zero or more)
-          mark_source_file_success  OR  mark_source_file_failed
+          SUCCESS transition for the claimed file
         commit
+        # on failure: rollback, then mark_source_file_failed
 
-    SUCCESS must not be published solely because a status field changed: the later
-    adapter must require the current claim token and durable side effects agreed by
-    the ingestion step (raw landing + canonical publication) inside the same
-    transactional boundary or an equivalent two-phase protocol.
+    SUCCESS must not be published solely because a status field changed: an
+    adapter must require the current claim token, and SUCCESS commits in the same
+    transaction as canonical publication. Immutable raw landing happens before
+    that transaction and may remain after a rollback; ObjectStore and the database
+    are not one distributed ACID transaction.
 
     This ABC does not open sockets, connect to PostgreSQL, or execute SQL.
     """

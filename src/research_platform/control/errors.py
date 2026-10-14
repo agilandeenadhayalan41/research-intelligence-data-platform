@@ -1,4 +1,8 @@
-"""Typed errors for pipeline-control contracts (no persistence yet)."""
+"""Typed errors for pipeline-control contracts.
+
+Raised by the lifecycle and reconciliation helpers, by the in-memory and local
+PostgreSQL control stores, and by the Step 12/13 local ingestion runners.
+"""
 
 
 class ControlError(Exception):
