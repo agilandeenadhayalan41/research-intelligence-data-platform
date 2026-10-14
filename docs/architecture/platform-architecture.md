@@ -63,10 +63,10 @@ consumer, and every environment is
   `Warehouse.query()`. Local durable adapters (`PostgresControlStore` /
   `PostgresCanonicalStore`) back the Step 12/13 pipelines when
   `--backend postgres` is selected; they are neither a production control plane
-  nor the production serving architecture. The production control plane is
-  still undecided:
+  nor the production serving architecture. No production control plane exists
+  yet:
   [ADR 0001 D4](../adr/0001-gcp-architecture-and-service-selection.md#d4-durable-control-plane-cloud-sql-for-postgresql-control-state-only)
-  proposes Cloud SQL for PostgreSQL for control state only, adopted only after
+  selects Cloud SQL for PostgreSQL for control state only, adopted only after
   the DE-12 (#133) gates pass.
 - **Canonical layer:** normalized, portable OpenAlex entities/relationships with
   PyArrow schemas and explicit ID rules
@@ -75,7 +75,7 @@ consumer, and every environment is
   these through the local ingestion transaction boundary. Object storage plus
   Parquet is the canonical data layer (lead §3.1, §30);
   [ADR 0001 D1](../adr/0001-gcp-architecture-and-service-selection.md#d1-canonical-gcs-layout-and-release-manifests)
-  proposes immutable Parquet releases in Cloud Storage, to be built in DE-07
+  selects immutable Parquet releases in Cloud Storage, to be built in DE-07
   (#128). Today canonical Parquet is only a local export.
 - **Analytical layer:** BigQuery is the first GCP analytical implementation;
   DuckDB supports local analytical tests. `PostgreSQLWarehouse` is a synchronous

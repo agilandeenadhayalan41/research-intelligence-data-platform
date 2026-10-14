@@ -190,10 +190,10 @@ PostgreSQL are **not** one distributed ACID transaction.
 `--backend memory` mode (also the programmatic default). Durable local writes
 use `PostgresControlStore` with `--backend postgres` (not `Warehouse.query`).
 It is a local durable adapter for the Step 12/13 pipelines, not the production
-control plane, and not a serving store. The production control plane is still
-undecided:
+control plane, and not a serving store. No production control plane exists
+yet:
 [ADR 0001 D4](../adr/0001-gcp-architecture-and-service-selection.md#d4-durable-control-plane-cloud-sql-for-postgresql-control-state-only)
-proposes Cloud SQL for PostgreSQL for control state only, behind this
+(status in the [ADR index](../adr/README.md)) selects Cloud SQL for PostgreSQL for control state only, behind this
 `ControlStore` contract, adopted only after the DE-12 (#133) gates pass.
 `UnimplementedControlStore` is a fail-fast skeleton that only the unit tests
 construct; no runtime path selects it.

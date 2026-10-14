@@ -162,7 +162,10 @@ through the `ControlStore` protocol. The Step 12–13 one-transaction
 publishers are the exception: on PostgreSQL they call the store's internal
 update methods inside the same transaction, and deletion events are written by
 the deletion unit of work (the protocol has no deletion-event method).
-The production control store is undecided (tracked in #133).
+No production control store exists yet (tracked in #133):
+[ADR 0001 D4](../adr/0001-gcp-architecture-and-service-selection.md#d4-durable-control-plane-cloud-sql-for-postgresql-control-state-only)
+(status in the [ADR index](../adr/README.md)) selects Cloud SQL for PostgreSQL for control state only, adopted only
+after the DE-12 gates pass.
 
 Details: [Pipeline control](../architecture/pipeline-control.md).
 

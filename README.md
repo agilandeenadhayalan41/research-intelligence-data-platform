@@ -178,7 +178,7 @@ flowchart LR
   do not create a giant flattened table or couple canonical schemas to a serving
   engine. Object storage plus Parquet is the canonical data layer (lead §3.1,
   §30); [ADR 0001 D1](docs/adr/0001-gcp-architecture-and-service-selection.md#d1-canonical-gcs-layout-and-release-manifests)
-  proposes the Cloud Storage Parquet release layout, to be built in DE-07
+  selects the Cloud Storage Parquet release layout, to be built in DE-07
   (#128). Today canonical Parquet is only a local export.
 - **Start GCP analytics with BigQuery.** Derive partitioning, clustering, bounded
   scans, and materializations from query evidence. DuckDB results do not prove
@@ -377,11 +377,11 @@ PostgreSQL. None is a production control plane or an approved serving store:
 - **Pipeline control and canonical state.** `ControlStore` has a fail-fast
   `UnimplementedControlStore`, an `InMemoryControlStore`, and the durable
   `PostgresControlStore` (with `PostgresCanonicalStore`) that the Step 12–13
-  local pipelines use with `--backend postgres`. The production durable control
-  state is undecided (tracked in
+  local pipelines use with `--backend postgres`. No production durable control
+  state exists yet (tracked in
   [#133](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/133)):
   [ADR 0001 D4](docs/adr/0001-gcp-architecture-and-service-selection.md#d4-durable-control-plane-cloud-sql-for-postgresql-control-state-only)
-  proposes Cloud SQL for PostgreSQL for control state only, adopted only after
+  selects Cloud SQL for PostgreSQL for control state only, adopted only after
   the DE-12 gates pass.
 - **Read queries.** `PostgreSQLWarehouse` implements read `Warehouse.query`
   (offline by default; local PostgreSQL integration is separate and recorded by #90).

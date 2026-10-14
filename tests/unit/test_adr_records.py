@@ -133,7 +133,7 @@ DECISION_REF_RE = re.compile(r"\bD(\d+)(?:\s*[–-]\s*D?(\d+))?\b")
 REF_DEF_RE = re.compile(r"^\[#(\d+)\]: (\S+)\s*$", re.MULTILINE)
 REF_USE_RE = re.compile(r"\[#(\d+)\]")
 MD_LINK_RE = re.compile(r"\]\(([^)\s]+)\)")
-INBOUND_ADR_LINK_RE = re.compile(r"\]\((?:[^)\s]*/)?adr/(\d{4}-[a-z0-9-]+\.md)#([^)\s]+)\)")
+INBOUND_ADR_LINK_RE = re.compile(r"\]\(((?:[^)\s#]*/)?adr/(\d{4}-[a-z0-9-]+\.md))#([^)\s]+)\)")
 REQ_ID_RE = re.compile(r"\bL\d{2}(?:\.\d)?-\d{2}\b")
 BACKTICK_RE = re.compile(r"`[^`\n]*`")
 
@@ -633,13 +633,15 @@ def traceability_errors(adr_text: str, adr_name: str, issue: str, register: str)
     return errors
 
 
-def inbound_adr_anchor_errors(text: str, adr_dir: Path) -> list[str]:
-    """Links from another page into an ADR heading (``.../adr/NNNN-title.md#anchor``)."""
+def inbound_adr_anchor_errors(text: str, page: Path, adr_dir: Path) -> list[str]:
+    """Links from ``page`` into an ADR heading (``.../adr/NNNN-title.md#anchor``)."""
     errors = []
-    for name, anchor in INBOUND_ADR_LINK_RE.findall(BACKTICK_RE.sub("", text)):
+    for target, name, anchor in INBOUND_ADR_LINK_RE.findall(BACKTICK_RE.sub("", text)):
         path = adr_dir / name
         if not path.is_file():
             errors.append(f"link to {name}, which does not exist")
+        elif (page.parent / target).resolve() != path.resolve():
+            errors.append(f"link {target} does not resolve from {page.name}")
         elif anchor not in _file_anchors(path):
             errors.append(f"anchor #{anchor} does not exist in {name}")
     return errors
@@ -765,7 +767,7 @@ def test_links_into_adr_headings_resolve() -> None:
     for page in _pages_linking_adrs():
         text = page.read_text(encoding="utf-8")
         checked += len(INBOUND_ADR_LINK_RE.findall(text))
-        assert inbound_adr_anchor_errors(text, ADR_DIR) == [], page.relative_to(REPO_ROOT)
+        assert inbound_adr_anchor_errors(text, page, ADR_DIR) == [], page.relative_to(REPO_ROOT)
     assert checked, "no page links an ADR heading"
 
 
@@ -1018,13 +1020,23 @@ def test_validator_allows_tracked_run_ids_and_non_price_rates(fake_repo: Path) -
 def test_inbound_link_validator_rejects_missing_anchors(fake_repo: Path) -> None:
     adr_dir = fake_repo / "docs/adr"
     (adr_dir / "0001-example-decision.md").write_text(_VALID_ADR, encoding="utf-8")
+    page = fake_repo / "docs/architecture/page.md"
     good = "See [D1](../adr/0001-example-decision.md#d1-control-store)."
-    assert inbound_adr_anchor_errors(good, adr_dir) == []
-    assert inbound_adr_anchor_errors(good.replace("#d1-control-store", "#d1-renamed"), adr_dir) == [
+    assert inbound_adr_anchor_errors(good, page, adr_dir) == []
+    renamed = good.replace("#d1-control-store", "#d1-renamed")
+    assert inbound_adr_anchor_errors(renamed, page, adr_dir) == [
         "anchor #d1-renamed does not exist in 0001-example-decision.md"
     ]
+    wrong_dir = "[D1](adr/0001-example-decision.md#d1-control-store)"
+    assert inbound_adr_anchor_errors(wrong_dir, page, adr_dir) == [
+        "link adr/0001-example-decision.md does not resolve from page.md"
+    ]
+    readme = "[D1](docs/adr/0001-example-decision.md#d1-control-store)"
+    assert inbound_adr_anchor_errors(readme, fake_repo / "README.md", adr_dir) == []
     missing = "[D1](docs/adr/0002-missing.md#d1-control-store)"
-    assert inbound_adr_anchor_errors(missing, adr_dir) == ["link to 0002-missing.md, which does not exist"]
+    assert inbound_adr_anchor_errors(missing, page, adr_dir) == [
+        "link to 0002-missing.md, which does not exist"
+    ]
 
 
 def test_validator_rejects_bad_file_names(fake_repo: Path) -> None:

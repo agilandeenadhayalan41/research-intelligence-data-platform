@@ -286,9 +286,9 @@ This domain covers the optional serving store only. The local
 `PostgresControlStore` / `PostgresCanonicalStore` (Steps 12–13,
 `--backend postgres`) and the `PostgreSQLWarehouse` read adapter (#7, #90) are
 local adapters, neither a serving store nor a production control plane. The
-production durable control state is undecided (DE-12, #133):
+production durable control state does not exist yet (DE-12, #133):
 [ADR 0001 D4](../adr/0001-gcp-architecture-and-service-selection.md#d4-durable-control-plane-cloud-sql-for-postgresql-control-state-only)
-proposes Cloud SQL for PostgreSQL for control state only, adopted only after
+(status in the [ADR index](../adr/README.md)) selects Cloud SQL for PostgreSQL for control state only, adopted only after
 the DE-12 gates pass. No readiness level changes because of it.
 
 ---

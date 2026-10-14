@@ -44,7 +44,7 @@ flowchart LR
 - Keep canonical schemas portable and independent of BigQuery or PostgreSQL.
   Object storage plus Parquet is the canonical data layer (lead §3.1 and §30);
   [ADR 0001 D1](../adr/0001-gcp-architecture-and-service-selection.md#d1-canonical-gcs-layout-and-release-manifests)
-  proposes the Cloud Storage Parquet release layout, to be built in DE-07
+  selects the Cloud Storage Parquet release layout, to be built in DE-07
   (#128). Today canonical Parquet is only a local export. Preserve normalized
   relationships.
 - Use BigQuery for analytical workloads and high-volume relationships. Base
@@ -61,9 +61,9 @@ flowchart LR
   BigQuery with API/cache. If needed, use it as a selective operational
   projection; do not copy every analytical relationship by default.
   [ADR 0001 D8](../adr/0001-gcp-architecture-and-service-selection.md#d8-serving-one-cloud-run-service-with-a-release-aware-in-process-cache)
-  proposes no operational serving store;
+  selects no operational serving store;
   [D4](../adr/0001-gcp-architecture-and-service-selection.md#d4-durable-control-plane-cloud-sql-for-postgresql-control-state-only)
-  proposes Cloud SQL for PostgreSQL for pipeline control state only, which is
+  selects Cloud SQL for PostgreSQL for pipeline control state only, which is
   not a serving store.
 - Keep Spark/Dataproc and Iceberg/BigLake optional future choices. Revisit them
   only if measured volume, transformation complexity, ACID/time-travel needs,
