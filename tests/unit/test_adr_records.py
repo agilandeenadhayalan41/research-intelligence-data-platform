@@ -15,10 +15,13 @@ evidence-honest:
 - DE planning IDs match their GitHub issues (DE-*k* is #(121+*k*)), issue and
   PR links resolve to this repository, relative links and ``#anchors``
   resolve, and cited register rows exist;
-- no private identifiers, no currency amounts, and no claim of a deployment,
-  enterprise evidence or an SLA;
+- no private identifiers (emails, bucket URLs, identities, IAM members,
+  project IDs, run IDs not already tracked in the recorded-run docs), no
+  currency amounts or unit prices, and no claim of a deployment, enterprise
+  evidence or an SLA;
 - the index lists every ADR exactly once and agrees with its title, status and
-  date, and the docs site sidebar shows every ADR page.
+  date, the docs site sidebar shows every ADR page, and every link from the
+  README or the docs into an ADR heading resolves.
 
 Negative cases feed broken ADR and index text to the same validators.
 """
@@ -127,6 +130,7 @@ DECISION_REF_RE = re.compile(r"\bD(\d+)(?:\s*[–-]\s*D?(\d+))?\b")
 REF_DEF_RE = re.compile(r"^\[#(\d+)\]: (\S+)\s*$", re.MULTILINE)
 REF_USE_RE = re.compile(r"\[#(\d+)\]")
 MD_LINK_RE = re.compile(r"\]\(([^)\s]+)\)")
+INBOUND_ADR_LINK_RE = re.compile(r"\]\((?:[^)\s]*/)?adr/(\d{4}-[a-z0-9-]+\.md)#([^)\s]+)\)")
 REQ_ID_RE = re.compile(r"\bL\d{2}(?:\.\d)?-\d{2}\b")
 BACKTICK_RE = re.compile(r"`[^`\n]*`")
 
@@ -135,10 +139,19 @@ PRIVATE_PATTERNS = (
     (re.compile(r"\bgs://", re.IGNORECASE), "a gs:// bucket URL"),
     (re.compile(r"\.iam\.gserviceaccount\.com\b", re.IGNORECASE), "a service-account identity"),
     (re.compile(r"\bprojects/[a-z][a-z0-9-]{4,28}[a-z0-9]\b"), "a projects/<id> project ID"),
+    (re.compile(r"\b(?:serviceAccount|user|group):[A-Za-z0-9._%+-]+@"), "an IAM member"),
 )
+# Operator run IDs (for example i103-20261012t180931) may appear only if a
+# recorded-run doc outside docs/adr/ already publishes them.
+RUN_ID_RE = re.compile(r"\bi\d{3}-20\d{6}(?:t\d{6})?\b", re.IGNORECASE)
 CURRENCY_WORD_RE = re.compile(r"[$€£¥]|\b(?:USD|EUR|GBP|dollars?|cents?)\b", re.IGNORECASE)
 CURRENCY_AMOUNT_RE = re.compile(
     r"[$€£¥]\s*\d|\b\d[\d,.]*\s*(?:USD|EUR|GBP)\b|\b(?:USD|EUR|GBP)\s*\d", re.IGNORECASE
+)
+# A bare number directly followed by a billing unit is a unit price
+# ("6.25 per TiB", "0.02 per GB-month", "1.20/hour"); "10 MiB per table" is not.
+PRICE_RATE_RE = re.compile(
+    r"\b\d+(?:[.,]\d+)?\s*(?:per|/)\s*(?:GiB|GB|TiB|TB|vCPU|hour|month)\b", re.IGNORECASE
 )
 # Affirmative claims an ADR must never make: it is a decision, not evidence.
 CLAIM_PATTERNS = (
@@ -281,6 +294,16 @@ def _file_anchors(path: Path) -> frozenset[str]:
     return heading_anchors(path.read_text(encoding="utf-8"))
 
 
+@cache
+def _tracked_run_ids(repo_root: Path) -> frozenset[str]:
+    """Run IDs that the docs outside ``docs/adr/`` (the recorded runs) already publish."""
+    ids: set[str] = set()
+    for page in sorted((repo_root / "docs").glob("*/*.md")):
+        if page.parent.name not in {"adr", "site"}:
+            ids.update(run.lower() for run in RUN_ID_RE.findall(page.read_text(encoding="utf-8")))
+    return frozenset(ids)
+
+
 def adr_title(text: str) -> str | None:
     match = re.search(r"^# ADR \d{4}: (\S.*)$", _without_fences(text), re.MULTILINE)
     return None if match is None else match.group(1).strip()
@@ -296,18 +319,23 @@ def adr_recorded(text: str) -> str | None:
     return None if match is None else match.group(1)
 
 
-def register_follow_ons(text: str) -> dict[str, str]:
-    """Register row ID -> Follow-on cell."""
+def register_cells(text: str, column: str) -> dict[str, str]:
+    """Register row ID -> its cell in ``column`` ("" when the column is missing)."""
     header = next(
         (_split_cells(line) for line in text.splitlines() if line.startswith("| ID |")), ()
     )
-    column = header.index("Follow-on") if "Follow-on" in header else None
+    index = header.index(column) if column in header else None
     rows = {}
     for line in text.splitlines():
         if line.startswith("| L"):
             cells = _split_cells(line)
-            rows[cells[0]] = cells[column] if column is not None and len(cells) > column else ""
+            rows[cells[0]] = cells[index] if index is not None and len(cells) > index else ""
     return rows
+
+
+def register_follow_ons(text: str) -> dict[str, str]:
+    """Register row ID -> Follow-on cell."""
+    return register_cells(text, "Follow-on")
 
 
 # --- Validators --------------------------------------------------------------------
@@ -356,8 +384,15 @@ def document_errors(text: str, path: Path, repo_root: Path) -> list[str]:
     for pattern, what in PRIVATE_PATTERNS:
         for match in pattern.finditer(text):
             errors.append(f"private identifier ({what}): {match.group(0)}")
-    for match in CURRENCY_AMOUNT_RE.finditer(BACKTICK_RE.sub("", text)):
+    tracked = _tracked_run_ids(root)
+    for match in RUN_ID_RE.finditer(text):
+        if match.group(0).lower() not in tracked:
+            errors.append(f"private identifier (an untracked run ID): {match.group(0)}")
+    unquoted = BACKTICK_RE.sub("", text)
+    for match in CURRENCY_AMOUNT_RE.finditer(unquoted):
         errors.append(f"currency amount {match.group(0)!r}: ADRs carry no prices")
+    for match in PRICE_RATE_RE.finditer(unquoted):
+        errors.append(f"unit price {match.group(0)!r}: ADRs carry no prices")
     flat = re.sub(r"\s+", " ", text)
     for pattern, what in CLAIM_PATTERNS:
         for match in pattern.finditer(flat):
@@ -546,6 +581,67 @@ def _scorecard_errors(body: str) -> list[str]:
     return errors
 
 
+def traceability_errors(adr_text: str, adr_name: str, issue: str, register: str) -> list[str]:
+    """Pair an ADR's register-row table with the register rows that cite it.
+
+    ``issue`` is the ADR's index cell, for example ``DE-03 [#124]``. A register
+    row belongs in the ADR's ``Row`` table when its Follow-on names that issue
+    or its Paths cell cites ``docs/adr/<adr_name>``; every row in the table
+    exists in the register and does one of the two; and each table line's
+    "Still open" cell names exactly the DE ids that its rows still follow (the
+    ADR's own DE id excluded), so the two pages cannot drift apart.
+    """
+    follow_ons = register_cells(register, "Follow-on")
+    paths = register_cells(register, "Paths")
+    own = issue.split()[0]
+    citing = {row for row, cell in paths.items() if f"docs/adr/{adr_name}" in cell}
+    naming = {row for row, cell in follow_ons.items() if issue in cell}
+    trace = _section(_without_fences(adr_text), "Lead requirement traceability")
+    errors: list[str] = []
+    answered: set[str] = set()
+    for header, rows in _tables(trace):
+        if not header or header[0] != "Row":
+            continue
+        still_open = next((i for i, cell in enumerate(header) if cell.startswith("Still open")), None)
+        if still_open is None:
+            errors.append("the register-row table has no 'Still open' column")
+            continue
+        for row in rows:
+            ids = REQ_ID_RE.findall(row[0])
+            answered.update(ids)
+            named = {f"DE-{int(de):02d}" for de, _ in DE_RE.findall(row[still_open])}
+            followed: set[str] = set()
+            for row_id in ids:
+                if row_id not in follow_ons:
+                    errors.append(f"{row_id} is not a register row")
+                    continue
+                if row_id not in citing | naming:
+                    errors.append(f"{row_id} neither cites docs/adr/{adr_name} nor names {issue}")
+                mine = {f"DE-{int(de):02d}" for de, _ in DE_RE.findall(follow_ons[row_id])} - {own}
+                if mine - named:
+                    errors.append(f"{row_id} follows {sorted(mine - named)} not named as still open")
+                followed |= mine
+            if named - followed:
+                errors.append(f"{', '.join(ids)}: still open names {sorted(named - followed)} no row follows")
+    errors.extend(
+        f"{row_id} cites or names this ADR but is not in its register-row table"
+        for row_id in sorted((citing | naming) - answered)
+    )
+    return errors
+
+
+def inbound_adr_anchor_errors(text: str, adr_dir: Path) -> list[str]:
+    """Links from another page into an ADR heading (``.../adr/NNNN-title.md#anchor``)."""
+    errors = []
+    for name, anchor in INBOUND_ADR_LINK_RE.findall(BACKTICK_RE.sub("", text)):
+        path = adr_dir / name
+        if not path.is_file():
+            errors.append(f"link to {name}, which does not exist")
+        elif anchor not in _file_anchors(path):
+            errors.append(f"anchor #{anchor} does not exist in {name}")
+    return errors
+
+
 def validate_index(text: str, path: Path, repo_root: Path, adrs: dict[str, str]) -> list[str]:
     """Return every rule violation in the ADR index; ``adrs`` maps file name -> text."""
     errors = document_errors(text, path, repo_root)
@@ -658,6 +754,25 @@ def test_adr_pages_are_in_the_sidebar_and_linked_from_the_architecture() -> None
     adr_0001 = "../adr/0001-gcp-architecture-and-service-selection.md"
     for doc in ("gcp-bigquery-first.md", "platform-architecture.md", "query-routing.md"):
         assert adr_0001 in (REPO_ROOT / "docs/architecture" / doc).read_text(encoding="utf-8"), doc
+
+
+def _pages_linking_adrs() -> list[Path]:
+    """The README and every docs page outside docs/adr/ and the site build."""
+    pages = [
+        page
+        for page in sorted((REPO_ROOT / "docs").glob("*/*.md*"))
+        if page.suffix in {".md", ".mdx"} and page.parent.name not in {"adr", "site"}
+    ]
+    return [REPO_ROOT / "README.md", *pages]
+
+
+def test_links_into_adr_headings_resolve() -> None:
+    checked = 0
+    for page in _pages_linking_adrs():
+        text = page.read_text(encoding="utf-8")
+        checked += len(INBOUND_ADR_LINK_RE.findall(text))
+        assert inbound_adr_anchor_errors(text, ADR_DIR) == [], page.relative_to(REPO_ROOT)
+    assert checked, "no page links an ADR heading"
 
 
 def test_adr_0001_records_the_user_decisions_and_non_claims(adrs: dict[str, str]) -> None:
@@ -869,6 +984,12 @@ def test_validator_accepts_the_superseded_and_scorecard_forms(fake_repo: Path) -
         ("Problem for", "Data lives in gs://example-bucket for", "a gs:// bucket URL"),
         ("Problem for", "Runs as ci@example.iam.gserviceaccount.com for", "a service-account identity"),
         ("Problem for", "Billed to projects/example-project-1 for", "a projects/<id> project ID"),
+        ("Problem for", "Grant serviceAccount:publisher@example-proj for", "an IAM member"),
+        ("Problem for", "Grant group:data-eng@example for", "an IAM member"),
+        ("Problem for", "Run i118-20261013t101500 showed for", "an untracked run ID"),
+        ("Cost is instance-hours", "Cost is 6.25 per TiB and", "unit price '6.25 per TiB'"),
+        ("Cost is instance-hours", "Cost is 0.02 per GB-month and", "unit price '0.02 per GB'"),
+        ("Cost is instance-hours", "Cost is 1.20/hour and", "unit price '1.20/hour'"),
         ("Cost is instance-hours", "Cost is about $1,200 a month and", "currency amount '$1'"),
         ("Cost is instance-hours", "Cost is 300 USD a month and", "currency amount '300 USD'"),
         ("Cost is instance-hours", "Cost is quoted in dollars and", "Cost model contains currency"),
@@ -888,6 +1009,28 @@ def test_validator_rejects_rule_violations(fake_repo: Path, old: str, new: str, 
     assert _VALID_ADR.count(old) == 1, old
     errors = _errors(_VALID_ADR.replace(old, new), fake_repo)
     assert any(expected in error for error in errors), errors
+
+
+def test_validator_allows_tracked_run_ids_and_non_price_rates(fake_repo: Path) -> None:
+    (fake_repo / "docs/architecture").mkdir()
+    (fake_repo / "docs/architecture/runs.md").write_text("Run `i103-20261012t180931`.\n", encoding="utf-8")
+    text = _VALID_ADR.replace(
+        "Cost is instance-hours",
+        "Run i103-20261012t180931 billed at least 10 MiB per table at 5 rps; cost is instance-hours",
+    )
+    assert _errors(text, fake_repo) == []
+
+
+def test_inbound_link_validator_rejects_missing_anchors(fake_repo: Path) -> None:
+    adr_dir = fake_repo / "docs/adr"
+    (adr_dir / "0001-example-decision.md").write_text(_VALID_ADR, encoding="utf-8")
+    good = "See [D1](../adr/0001-example-decision.md#d1-control-store)."
+    assert inbound_adr_anchor_errors(good, adr_dir) == []
+    assert inbound_adr_anchor_errors(good.replace("#d1-control-store", "#d1-renamed"), adr_dir) == [
+        "anchor #d1-renamed does not exist in 0001-example-decision.md"
+    ]
+    missing = "[D1](docs/adr/0002-missing.md#d1-control-store)"
+    assert inbound_adr_anchor_errors(missing, adr_dir) == ["link to 0002-missing.md, which does not exist"]
 
 
 def test_validator_rejects_bad_file_names(fake_repo: Path) -> None:
@@ -966,3 +1109,81 @@ def test_heading_anchors_follow_github_slugger() -> None:
         "status-1",
         "d4-durable-control-plane-cloud-sql-control-only",
     }
+
+
+_TRACE_REGISTER = """\
+| ID | Sec | Requirement | Paths | Follow-on |
+|---|---|---|---|---|
+| L01-01 | 1 | First | `docs/adr/0001-example-decision.md`; `README.md` | DE-07 [#128] |
+| L01-02 | 1 | Second | `README.md` | DE-03 [#124]; DE-08 [#129] |
+| L01-03 | 1 | Third | `README.md` | DE-09 [#130] |
+"""
+
+_TRACE_ADR = """\
+## Lead requirement traceability
+
+| Decision | Lead sections answered |
+|---|---|
+| D1 | §1 |
+
+| Row | Requirement (short) | Answered by | Still open, owned by |
+|---|---|---|---|
+| L01-01, L01-02 | First and second | D1 | DE-07, DE-08 |
+
+## Technology selection scorecard (lead Section 24)
+"""
+
+
+def _trace(adr: str = _TRACE_ADR, register: str = _TRACE_REGISTER) -> list[str]:
+    return traceability_errors(adr, "0001-example-decision.md", "DE-03 [#124]", register)
+
+
+def test_traceability_validator_accepts_paired_rows() -> None:
+    assert _trace() == []
+
+
+@pytest.mark.parametrize(
+    ("page", "old", "new", "expected"),
+    [
+        (
+            "register",
+            "| L01-03 | 1 | Third | `README.md` |",
+            "| L01-03 | 1 | Third | `docs/adr/0001-example-decision.md` |",
+            "L01-03 cites or names this ADR but is not in its register-row table",
+        ),
+        (
+            "register",
+            "| L01-02 | 1 | Second | `README.md` | DE-03 [#124]; DE-08 [#129] |",
+            "| L01-02 | 1 | Second | `README.md` | DE-08 [#129] |",
+            "L01-02 neither cites docs/adr/0001-example-decision.md nor names DE-03 [#124]",
+        ),
+        (
+            "register",
+            "| DE-07 [#128] |",
+            "| DE-07 [#128]; DE-10 [#131] |",
+            "L01-01 follows ['DE-10'] not named as still open",
+        ),
+        (
+            "adr",
+            "| DE-07, DE-08 |",
+            "| DE-07, DE-08, DE-35 |",
+            "L01-01, L01-02: still open names ['DE-35'] no row follows",
+        ),
+        ("adr", "| L01-01, L01-02 |", "| L01-01, L01-02, L09-99 |", "L09-99 is not a register row"),
+        (
+            "adr",
+            "| Still open, owned by |",
+            "| Open work |",
+            "the register-row table has no 'Still open' column",
+        ),
+    ],
+)
+def test_traceability_validator_rejects_drift(page: str, old: str, new: str, expected: str) -> None:
+    adr, register = _TRACE_ADR, _TRACE_REGISTER
+    if page == "adr":
+        assert old in adr
+        adr = adr.replace(old, new)
+    else:
+        assert old in register
+        register = register.replace(old, new)
+    assert expected in _trace(adr, register)

@@ -68,10 +68,11 @@ path. The local PostgreSQL Work lookup projection (#112) stays an unapproved,
 undeployed PROTOTYPE.
 
 [ADR 0001 D8](../adr/0001-gcp-architecture-and-service-selection.md#d8-serving-one-cloud-run-service-with-a-release-aware-in-process-cache)
-(Proposed, issue #124) records the proposed serving and routing decision: one
-Cloud Run service as a thin HTTP adapter over the existing Data Service
-contracts, with domain endpoints only (no `/sql`), a release-aware in-process
-cache and no operational store. It keeps the #23 closing criteria as the
+(issue #124; status in the [ADR index](../adr/README.md)) records the serving
+and routing decision: one Cloud Run service as a thin HTTP adapter over the
+existing Data Service contracts, with domain endpoints only (no `/sql`), static
+routing per capability placement, a release-aware in-process cache and no
+operational store. It keeps the #23 closing criteria as the
 revisit trigger for a Cloud SQL or AlloyDB projection, and lists the other
 options in its
 [Not selected](../adr/0001-gcp-architecture-and-service-selection.md#not-selected)

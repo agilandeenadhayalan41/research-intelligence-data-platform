@@ -118,12 +118,11 @@ and Serving Architecture* to the issues, merged PRs, files and tests behind it,
 the evidence level reached, the remaining gap and the follow-on issue. Use it,
 not this page, to check whether a lead requirement is implemented.
 
-The GCP services and policies proposed for these layers (storage layout,
+The GCP services and policies selected for these layers (storage layout,
 analytical engine, data location, control plane, runtime, orchestration, SQL
 workflow, serving, portability boundary, identity, data rights and cost
 guardrails), and the options not selected with their revisit triggers, are in
 [ADR 0001](../adr/0001-gcp-architecture-and-service-selection.md)
-(issue #124, DE-03). It is **Proposed** until the lead architect approves and
-merges the #124 pull request. It is a decision record, not evidence: it changes
-no readiness level or register status. The [ADR index](../adr/README.md) lists
-every decision record.
+(issue #124, DE-03). It is a decision record, not evidence: it changes no
+readiness level or register status. The [ADR index](../adr/README.md) lists
+every decision record and its status.

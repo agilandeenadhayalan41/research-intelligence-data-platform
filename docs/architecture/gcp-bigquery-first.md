@@ -12,13 +12,12 @@ Configure environments explicitly, default to local resources, and do not
 access production or create expensive cloud resources during development.
 
 [ADR 0001](../adr/0001-gcp-architecture-and-service-selection.md) records the
-proposed GCP service selection for this design (issue #124, DE-03): the
-canonical Cloud Storage layout, BigQuery as the analytical engine, US
-multi-region data, the control plane, runtime, orchestration, SQL workflow,
-serving path, identity, data and cost policies, and every option not selected
-with its revisit trigger. The ADR is **Proposed** until the lead architect
-approves and merges the #124 pull request; it creates no cloud resource and
-deploys nothing.
+GCP service selection for this design (issue #124, DE-03): the canonical Cloud
+Storage layout, BigQuery as the analytical engine, US multi-region data, the
+control plane, runtime, orchestration, SQL workflow, serving path, identity,
+data and cost policies, and every option not selected with its revisit
+trigger. Its status is in the [ADR index](../adr/README.md); it creates no
+cloud resource and deploys nothing.
 
 ## Target flow
 

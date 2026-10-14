@@ -444,7 +444,7 @@ tracked YAML or logs.
 | [OpenAlex deletions](docs/architecture/openalex-deletions.md) | Tombstones, precedence/restore, deletion lineage, transaction boundary |
 | [21-step roadmap](docs/architecture/roadmap.md) | Completed stages and separately scoped future work |
 | [OpenAlex lead coverage register](docs/requirements/openalex-lead-coverage.md) | Requirement-level status of the lead architecture (Sections 1–30): implementing files, tests, evidence strength, gaps, and owning follow-on issues |
-| [Architecture decision records](docs/adr/README.md) | ADR index and process; ADR 0001 (Proposed, #124) records the proposed GCP service selection and the options not selected, with revisit triggers |
+| [Architecture decision records](docs/adr/README.md) | ADR index and process; ADR 0001 (#124; its status is in the index) records the GCP service selection and the options not selected, with revisit triggers |
 | [Copilot instructions](.github/copilot-instructions.md) | Engineering rules, phase boundaries, and required validation |
 
 ```text

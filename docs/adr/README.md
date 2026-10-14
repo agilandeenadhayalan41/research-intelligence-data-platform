@@ -46,11 +46,12 @@ Every ADR has these H2 sections, in this order. A section that does not apply st
 - No private identifiers: no project IDs, bucket names, identity names, emails or untracked run IDs. The repository and the docs site are public.
 - DE planning IDs are written with their issue: DE-*k* is GitHub issue #(121+*k*), for example DE-04 [#125].
 - Links are relative and must resolve on GitHub and on the docs site (code links such as `../../src/...`).
+- Pages outside this folder link an ADR and point to this index for its status instead of repeating the status word, so they stay true when the status changes.
 
 ## Sign-off
 
 - An ADR is proposed in a pull request that references its issue.
-- **Sign-off is the lead architect's approval of that pull request.** At approval the status line is changed from Proposed to Accepted, with the date, in the same pull request; the approval and the merge commit record acceptance, and no separate signature exists.
+- **Sign-off is the lead architect's approval of that pull request.** The last commit of the pull request sets the ADR's status line and its index row from Proposed to Accepted, with the date, and the lead architect approves that commit; the approval and the merge commit record acceptance, and no separate signature exists.
 - The other accountable roles (Cloud platform, Security and governance, Data engineering, API product owner) are consulted; their open inputs are listed in the ADR. DE-04 [#125] assigns the role holders.
 - An accepted ADR is not edited in place except for its status line, links and typos. A changed decision is a new ADR that names the decisions it replaces; in the same pull request the old ADR's status becomes Superseded (or Deprecated).
 
