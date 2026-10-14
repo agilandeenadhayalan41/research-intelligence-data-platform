@@ -1,5 +1,6 @@
 -- BigQuery Standard SQL DDL for `openalex.authors`
--- Step 15 / #22 — contract only; NOT DEPLOYED / NOT EXECUTED here.
+-- Step 15 / #22 contract. Executed only by manual scripts on synthetic data
+-- (GCP_SANDBOX, personal DEV/QA); NOT DEPLOYED.
 -- Grain: one row per author_id
 -- Incremental: MERGE_BY_PRIMARY_KEY
 

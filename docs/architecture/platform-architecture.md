@@ -27,9 +27,21 @@ flowchart LR
 The diagram describes the target architecture. The current foundation includes
 configuration, contracts, bounded OpenAlex discovery/retrieval/profiling,
 immutable **local** raw landing (`LocalObjectStore`), pipeline-control/provenance
-**contracts**, the portable OpenAlex **canonical model** (no ingestion yet), and
-tests. It does not implement control persistence, GCS landing, ingestion,
-BigQuery runtime, a Data Service/API, or downstream consumers. See
+contracts with in-memory and local PostgreSQL control stores, the portable
+OpenAlex **canonical model**, one-file local Works and deletion ingestion
+(Steps 12–13), BigQuery analytical, Gold and data-quality contracts
+(Steps 15–17), the storage-independent Data Service **domain layer** (Step 18),
+a bounded local end-to-end pipeline (Step 19), orchestration contracts
+(Step 20), the readiness assessment (Step 21), and tests. The `GCSObjectStore`
+(#9) and `BigQueryWarehouse` (#10) runtime adapters exist and have run against
+real GCS and BigQuery in GCP_SANDBOX and in operator-controlled personal
+projects labelled DEV and QA (#91, #92, #103, #108), on synthetic data and, in
+the first BigQuery smoke (#92), a public sample table; never on real OpenAlex
+data. Ingestion still lands to local storage only. Beyond those operator-run
+checks, nothing is deployed: there is no HTTP Data Service/API, no scheduler
+or DAG, no repository-provisioned cloud infrastructure and no downstream
+consumer, and every environment is
+`NOT_READY` overall ([environment readiness](environment-readiness.md)). See
 [immutable local landing](immutable-local-landing.md),
 [pipeline control](pipeline-control.md), and
 [OpenAlex canonical model](openalex-canonical-model.md).
@@ -41,13 +53,17 @@ BigQuery runtime, a Data Service/API, or downstream consumers. See
 - **Immutable raw landing:** preserve original bytes and provenance for replay.
   Local landing streams source bytes, verifies SHA-256, and atomically publishes
   content with `IngestionProvenance`. Raw data and provenance are not overwritten;
-  identical replay is a no-op and conflicts fail explicitly. GCS landing is later.
+  identical replay is a no-op and conflicts fail explicitly. `GCSObjectStore`
+  (#9) implements the same create-only contract on GCS and passed live smokes in
+  GCP_SANDBOX and the personal DEV/QA projects, but no pipeline lands to GCS yet:
+  the Step 12/13 pipelines require `storage.backend=local` (tracked in #127).
 - **Pipeline control (contracts):** typed `PipelineRun` / `SourceFileControl` /
   `RecordProvenance` models, explicit DISCOVERED→PROCESSING→SUCCESS|FAILED
   lifecycle, claim/lease rules, and a `ControlStore` write protocol separate from
   `Warehouse.query()`. Local durable adapters (`PostgresControlStore` /
-  `PostgresCanonicalStore`) back Step 12 when `--backend postgres` is selected;
-  they are not the production serving architecture.
+  `PostgresCanonicalStore`) back the Step 12/13 pipelines when
+  `--backend postgres` is selected; they are neither a production control plane
+  (still undecided, tracked in #133) nor the production serving architecture.
 - **Canonical layer:** normalized, portable OpenAlex entities/relationships with
   PyArrow schemas and explicit ID rules
   (`research_platform.canonical.openalex`). Independent of PostgreSQL/BigQuery
@@ -65,9 +81,14 @@ BigQuery runtime, a Data Service/API, or downstream consumers. See
 - **Data Service/API:** expose supported domain capabilities, filters, freshness,
   latency expectations, pagination, limits, consistency, and sync/async behavior.
   Consumers should not depend on the underlying storage engine. Unrestricted raw
-  SQL is not the application/product API.
+  SQL is not the application/product API. Step 18 implements the domain layer
+  only (`research_platform.service`); no HTTP API is deployed (tracked in #149).
 - **Optional operational serving:** consider PostgreSQL/AlloyDB only after query
-  patterns and benchmarks show BigQuery plus API/cache is insufficient.
+  patterns and benchmarks show BigQuery plus API/cache is insufficient. #118
+  measured BigQuery plus an in-process cache on synthetic data in the personal
+  DEV project: cold-cache runs missed the operator-stated 200 ms p95 target and
+  prewarmed runs met it. The operator then closed #23 as not planned; the local
+  PostgreSQL Work lookup projection stays an unapproved, undeployed prototype.
 
 ## System boundary
 

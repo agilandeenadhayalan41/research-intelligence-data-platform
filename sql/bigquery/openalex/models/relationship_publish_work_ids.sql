@@ -1,5 +1,6 @@
 -- Relationship REPLACE eligibility (Step 15 publication boundary).
--- DEFINED — NOT YET DEPLOYED / NOT EXECUTED here.
+-- DEFINED. Executed only by manual scripts on synthetic data (GCP_SANDBOX,
+-- personal DEV/QA); NOT DEPLOYED.
 --
 -- Derived from frozen `work_publication_decisions` (no precedence CASE here).
 --

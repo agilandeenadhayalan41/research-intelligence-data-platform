@@ -3,7 +3,7 @@
 **Status:** COMPLETE — contracts and deterministic local validation only.  
 Package: `research_platform.orchestration` (`orchestration-contract-v1.1`)  
 Issue: [#25](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/25) (CLOSED)  
-Umbrella: [#2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2) (remains OPEN; 21-step roadmap complete)
+Umbrella: [#2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2) (CLOSED; 21-step roadmap complete)
 
 ### Explicit non-claims
 
@@ -151,8 +151,13 @@ non-retryable. `max_attempts` ≤ 5 everywhere.
 
 - No unbounded / missing bounds
 - Date span capped (≤ 366 days)
-- Preserves asset identity, run identity, publication version, provenance,
-  deletion precedence, quality gates, and idempotency
+- Intended to preserve asset identity, run identity, publication version,
+  provenance, deletion precedence, quality gates, and idempotency. Nothing
+  enforces this yet: `BackfillRequest` carries no run, publication or asset
+  identity, and no code executes it (the backfill contract is tracked in
+  [#131](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/131);
+  rerun and idempotent-publication hardening in
+  [#143](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/143))
 - Local validation uses synthetic small ranges only
 
 Development sample bounds (Step 19 `max_files=1`) remain separate from this
@@ -304,8 +309,9 @@ publication-scope bindings. Does not execute cloud resources or emulate Airflow.
 ## Secrets boundary
 
 Orchestration contracts never accept DSNs, tokens, or credential material in
-task messages or events. Future Composer secret wiring belongs to Step 21
-readiness (#28).
+task messages or events. Step 21 readiness (#28) documents the secret rules but
+wires nothing; Composer secret wiring is not implemented (tracked in
+[#144](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/144)).
 
 ---
 
@@ -314,4 +320,5 @@ readiness (#28).
 - Contract/validation only — no scheduler process
 - No MEASURED BigQuery publication concurrency proof
 - No production SLA / freshness guarantees invented here
-- PostgreSQL/AlloyDB consumer serving remains optional (#23), not a DAG task
+- PostgreSQL/AlloyDB consumer serving is not a DAG task; #23 was closed as not
+  planned, so no such projection is adopted

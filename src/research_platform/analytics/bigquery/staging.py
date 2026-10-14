@@ -143,7 +143,8 @@ def render_staging_ddl(contract: StagingTableContract, *, dataset: str = "openal
     """Render BigQuery Standard SQL DDL for one staging contract."""
     lines = [
         f"-- BigQuery Standard SQL DDL for `{dataset}.{contract.table_name}`",
-        "-- #103 publication staging; NOT DEPLOYED / NOT EXECUTED here.",
+        "-- #103 publication staging. Executed only by manual scripts on synthetic",
+        "-- data (GCP_SANDBOX, personal DEV/QA); NOT DEPLOYED.",
         f"-- Read by {_CONSUMERS[contract.table_name]}.",
         "-- Rendered by research_platform.analytics.bigquery.staging.render_staging_ddl.",
         *(f"-- {line.format(dataset=dataset)}" for line in _RATIONALE[contract.table_name]),

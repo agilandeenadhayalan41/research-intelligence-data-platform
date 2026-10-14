@@ -1,4 +1,8 @@
-"""Pipeline control contracts: models, lifecycle, and ControlStore protocol."""
+"""Pipeline control contracts: models, lifecycle, and ControlStore protocol.
+
+Also exports ``InMemoryControlStore``. The local durable PostgreSQL adapter,
+``PostgresControlStore``, lives in ``research_platform.persistence.postgres``.
+"""
 
 from research_platform.control.errors import (
     ChecksumConflictError,

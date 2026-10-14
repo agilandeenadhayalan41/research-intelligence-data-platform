@@ -1,5 +1,6 @@
 -- pattern_id: unique-authors-per-publisher
--- BigQuery Standard SQL — Step 15 / #22 (NOT YET DEPLOYED)
+-- BigQuery Standard SQL — Step 15 / #22. Executed only by manual scripts on
+-- synthetic data (GCP_SANDBOX, personal DEV/QA); NOT DEPLOYED.
 -- Safe shape: publisher works first, then distinct authors.
 
 WITH publisher_works AS (

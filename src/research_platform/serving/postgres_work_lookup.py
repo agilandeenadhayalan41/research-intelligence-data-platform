@@ -1,9 +1,12 @@
 """#23 PROTOTYPE: selective PostgreSQL/AlloyDB projection for Work point lookups.
 
-**The #23 gate is not met.** No lookup SLA exists (``desired_p95_latency_ms`` is
-null in the query-pattern registry) and BigQuery + API/cache has not been
-measured, so this is a local prototype only: it does not change any registry
-placement, is not an approved serving store, and is never deployed. See
+**The #23 gate was not met, and #23 was closed not_planned (2026-10-13).** #119
+recorded an operator-stated 200 ms p95 for the lookups (not a measured or
+product-validated SLA). #118 timed BigQuery + an in-process cache against it,
+in a personal DEV project on synthetic data: cold runs missed it, prewarmed
+runs met it, and the operator chose the cache path. So this stays a local
+prototype only: it does not change any registry placement, is not an approved
+serving store, and is never deployed. See
 ``docs/architecture/serving-work-lookup-projection.md``.
 
 Scope is the two lookup patterns ``doi-work-lookup`` and
@@ -235,6 +238,8 @@ _MISSING: Any = object()
 
 
 def _unsupported(capability_id: str) -> NoReturn:
+    # The message names the intended backing; no BigQuery-backed
+    # ConsumerDataRepository exists yet.
     _raise(
         ServiceErrorCode.DATA_UNAVAILABLE,
         "the work lookup projection serves work_metadata only; use the BigQuery-backed repository",

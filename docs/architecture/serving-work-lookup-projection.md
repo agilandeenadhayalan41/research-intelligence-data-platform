@@ -1,26 +1,75 @@
 # Work lookup projection — #23 PROTOTYPE
 
-> **Status: PROTOTYPE. The #23 gate is NOT met.** This is a local PostgreSQL 16
+> **Status: PROTOTYPE. The #23 gate was NOT met.** This is a local PostgreSQL 16
 > prototype built at the operator's explicit request (2026-10-11), ahead of
 > the evidence #23 requires. It is not an approved serving store. It changes no
 > query-pattern placement (the lookups stay `BIGQUERY_PLUS_CACHE`, `ASSUMED`;
 > `OPTIONAL_OPERATIONAL_STORE` still needs MEASURED evidence), it is never
-> deployed, and nothing in analytics depends on it. #23 stays open.
+> deployed, and nothing in analytics depends on it. #23 was closed as not
+> planned on 2026-10-13: after the #118 measurement the operator chose
+> BigQuery + API/cache for DOI and Work-ID lookups, treating the consumer's
+> working set as small and hot enough for a warm cache (not measured)
+> ([closing comment](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/23#issuecomment-6139894312),
+> which also says when to reopen it). The prototype stays in the repo,
+> unapproved and undeployed.
+>
+> It is separate from the other PostgreSQL code: `PostgresControlStore` and
+> `PostgresCanonicalStore` are the local durable stores of the Step 12/13
+> pipelines (`--backend postgres`, see
+> [Local Works ingestion](local-works-ingestion.md)), and
+> [`PostgreSQLWarehouse`](postgres-warehouse.md) is a read-only
+> `Warehouse.query` adapter. None of them is a production control plane or an
+> approved serving store.
 
 ## Requirement link
 
 #23 says to link every projection and index to a concrete unmet requirement
-and #19 evidence. **There is none yet.**
+and #19 evidence. A requirement now exists, but **it was not shown to be
+unmet** by BigQuery + API/cache, so the gate was not met.
 
 | Pattern | Projection object | Requirement | Evidence |
 | --- | --- | --- | --- |
-| `openalex-work-id-lookup` | `serving.work_lookup` primary key (`work_id`) | UNKNOWN: `desired_p95_latency_ms: null` | None. #103 measured BigQuery only, no cache: small-sample synthetic data |
-| `doi-work-lookup` | `work_lookup_doi_idx (doi, work_id)` | UNKNOWN: `desired_p95_latency_ms: null` | Same |
+| `openalex-work-id-lookup` | `serving.work_lookup` primary key (`work_id`) | Operator-stated, recorded by #119: `desired_p95_latency_ms: 200`, at most 5 rps peak, 24 h freshness, interactive app/API consumer. Not a measured or product-validated Wiley SLA | #118 (BigQuery + in-process cache, below): cold cache MISSED, prewarmed cache MET. Nothing was measured through this projection |
+| `doi-work-lookup` | `work_lookup_doi_idx (doi, work_id)` | Same | Same |
 
-The inputs needed to evaluate the gate are listed on #23
+The inputs needed to evaluate the gate were listed on #23
 ([comment](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/23#issuecomment-6114109876)):
 a lookup SLA, the consumer, and a BigQuery + API/cache measurement at
-representative scale (#108).
+representative scale. #119 recorded the first two in
+`config/query-patterns/openalex.yaml`. #108 measured BigQuery alone, with no
+cache, so the third input became #118, which ran on small synthetic data, not
+at representative scale.
+
+### #118 BigQuery + cache measurement
+
+Four manual runs of `scripts/lookup_cache_measure_118.py` in the operator's
+personal project labelled DEV, as its least-privilege service account, on
+the synthetic ~10k-Works tables that the #103 script deployed there in #108
+Stage 3. Each run used Zipf(1.1) requests over 1,000 ACTIVE Works (500
+warm-up and 2,000 measured) and an in-process `TtlLruCache` (24 h TTL, 1,000
+entries) placed directly around `BigQueryWarehouse.query`.
+`CachedWorkMetadataRepository`, `DataService`, any HTTP hop and this
+projection were not in the path.
+
+| Run | Pattern | Cache | Hit rate | Overall p95 | Against 200 ms |
+| --- | --- | --- | --- | --- | --- |
+| 1 (2026-10-12) | `doi_work_lookup` | cold (warm-up only) | 85.7% | 2,426 ms | MISSED |
+| 2 (2026-10-13) | `doi_work_lookup` | prewarmed | 100% | 0.006 ms | MET |
+| 3 (2026-10-13) | `openalex_work_id_lookup` | cold (warm-up only) | 85.7% | 2,554 ms | MISSED |
+| 4 (2026-10-13) | `openalex_work_id_lookup` | prewarmed | 100% | 0.010 ms | MET |
+
+- **What the runs show:** each cache miss costs about 2.4–3.1 s through
+  BigQuery (timed client-side, including the warehouse dry run and the
+  script's job bookkeeping) and a hit costs microseconds, so the 200 ms p95
+  is met only when fewer than 5% of requests miss the cache.
+- **Not measured:** the real working set, a shared cache such as Memorystore
+  (its network hop), concurrency and real-data scale. These are small
+  synthetic-data measurements in a personal project, not production evidence,
+  and the registry keeps both lookups `ASSUMED`. Production cache work is
+  tracked in #151.
+- **Records:** the
+  [#118 issue comments](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/118)
+  (the last one has all four verdicts).
 
 ## What it is
 
@@ -33,8 +82,11 @@ representative scale (#108).
 
 `PostgresWorkLookupRepository` implements the existing storage-independent
 `ConsumerDataRepository` protocol, but serves **only** `get_work_metadata`.
-Every other capability raises `DATA_UNAVAILABLE` and points to the
-BigQuery-backed repository.
+Every other capability raises `DATA_UNAVAILABLE` with a message that points
+to a BigQuery-backed repository. No BigQuery-backed `ConsumerDataRepository`
+exists on `main` yet: the implementations in `src` are
+`InMemoryConsumerRepository`, this one and the #118
+`CachedWorkMetadataRepository` wrapper.
 
 ## Projection contract
 

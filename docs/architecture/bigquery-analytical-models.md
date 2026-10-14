@@ -10,8 +10,9 @@ cost-safety rules, and local DuckDB semantic checks.
 | --- | --- |
 | **DEFINED IN STEP 15** | Table DDL contracts, query SQL files, pattern mappings, grains, partition/cluster decisions, MERGE/refresh design, cost rules, DuckDB `SEMANTIC_ONLY` fixtures, static offline checks |
 | **MEASURED IN GCP_SANDBOX (#103)** | Step 15–16 DDL, publication/MERGE/REPLACE models, Gold/quality/query SQL and `publication_year` pruning on synthetic-10k-works; small-sample latency ([recorded run](#recorded-run-103)) |
-| **NOT YET MEASURED** | Production-scale cost/latency/concurrency, clustering effectiveness, Gold refresh/materialization, DEV/QA/PROD |
-| **RUNTIME ADAPTER (#10)** | `BigQueryWarehouse` — dry-run + `maximum_bytes_billed`, typed `@params`, Arrow results; offline fake-client tests plus a live sandbox smoke (#92) |
+| **RE-RUN ON SYNTHETIC DATA (#108)** | The same run with a least-privilege identity ([Stage 1](#recorded-run-108-stage-1)), on synthetic-100100-works ([Stage 2](#recorded-run-108-stage-2)), and in operator-controlled personal projects labelled DEV and QA ([Stage 3](#recorded-run-108-stage-3-dev)); not enterprise environments |
+| **NOT YET MEASURED** | Representative cost (billed bytes were per-table floor artifacts), production-scale latency/concurrency, clustering effectiveness (Stage 2 only OBSERVED clustering for 4 of 11 patterns), Gold refresh/materialization, enterprise-managed DEV/QA, PROD |
+| **RUNTIME ADAPTER (#10)** | `BigQueryWarehouse` — dry-run + `maximum_bytes_billed`, typed `@params`, Arrow results; offline fake-client tests plus a live sandbox smoke (#92), repeated with least-privilege identities in #108 Stages 1 and 3 |
 
 No cloud deployment, service accounts, Terraform, or paid queries are included
 in default CI. DuckDB `SEMANTIC_ONLY` is **not** a BigQuery dialect or cost
@@ -106,6 +107,12 @@ publication, job timeout/cancellation under load, or an enterprise-managed
 project or least-privilege runtime identity. `BIGQUERY_ANALYTICAL` stays
 `VERIFIED` for **GCP_SANDBOX only**. DEV/QA stay `READY_TO_VALIDATE`, PROD stays
 `BLOCKED`, and no Gold mart is `MATERIALIZED`.
+
+*Later record (2026-10-12):* the readiness sentence above was written before
+#108. After Stage 3, `BIGQUERY_ANALYTICAL` is also `VERIFIED` for the personal
+DEV and QA projects ([DEV](#recorded-run-108-stage-3-dev),
+[QA](#recorded-run-108-stage-3-qa)). DEV and QA stay `NOT_READY` overall, PROD
+stays `BLOCKED`, and no Gold mart is `MATERIALIZED`.
 
 #### Recorded run (#108 Stage 1)
 
@@ -283,6 +290,12 @@ Canonical input tables only (Step 11). No invented fields.
 
 Ordinal relationship keys are retained for canonical portability.
 
+The Incremental column is the declared contract. Only `works`
+(`models/merge_works.sql`) and `work_topics` (`models/merge_work_topics.sql`, the
+REPLACE template) have publication SQL. The other 13 tables have no MERGE or
+REPLACE SQL yet; the #103/#108 runs loaded them directly from batch-1 Parquet
+(tracked in #135).
+
 ## Canonical → BigQuery type mapping
 
 | PyArrow (Step 11) | BigQuery |
@@ -436,14 +449,19 @@ Safe patterns (implemented in query SQL):
 
 ## Cost / scan safety
 
-Logical deployment-time rules (enforced when BigQuery execution exists):
+Logical deployment-time rules (the static checks require `@year_from` /
+`@year_to` on `publication_year` in the year-bounded query contracts and forbid
+`SELECT *` in the broad aggregate ones; callers still choose the bound values;
+`BigQueryWarehouse` enforces the byte cap):
 
 - Prefer bounded `@year_from` / `@year_to` on `publication_year` for trends.
 - No `SELECT *` in broad analytical aggregate query contracts.
 - Select only needed columns; filter `ACTIVE` early.
 - Avoid accidental cross joins / unrestricted full-corpus exploratory scans.
-- Suggested default `maximum_bytes_billed`: **10 GiB** per application query.
-  Not executed in Step 15.
+- Default `maximum_bytes_billed`: **10 GiB** per application query
+  (`DEFAULT_MAXIMUM_BYTES_BILLED`). `BigQueryWarehouse` (#10) applies it unless
+  the caller passes a cap, through a dry-run check and the job's own cap. The
+  manual #103/#108 scripts passed smaller per-job caps.
 
 ## Step 14 pattern → BigQuery query mapping
 
@@ -479,11 +497,17 @@ sql/bigquery/openalex/
   ddl/           CREATE TABLE contracts
   models/        active_works, MERGE + preconditions, transactional REPLACE
   queries/       Step 14 pattern SQL (BigQuery Standard SQL)
+  staging/       works_staging / work_topics_staging DDL for the publication unit (#103)
+  gold/          Step 16 Gold mart SQL (see gold-analytical-marts.md)
+  gold_audit/    staged Gold audit tables read by the Gold exclusion gate (#103)
+  quality/       Step 17 quality SQL (see data-quality.md)
 
 src/research_platform/analytics/bigquery/
   contracts.py   BigQueryTableContract / type mapping / merge decision helper
   registry.py    pattern → query mapping
   validation.py  static checks + DuckDB SEMANTIC_ONLY
+  staging.py     staging DDL renderer + Parquet load checks (#103)
+  sandbox/       synthetic cycle + live-run helpers for the manual scripts (#103)
 ```
 
 ## Required future real BigQuery validation
@@ -498,12 +522,14 @@ Before treating these contracts as production-ready:
 6. Confirm `maximum_bytes_billed` policy behavior.
 7. Only then consider Step 16 materializations from measured reuse.
 
-Items 1, 4, 5 and 6 were run once in GCP_SANDBOX on synthetic-10k-works (#103,
+Items 1, 4, 5 and 6 were first run in GCP_SANDBOX on synthetic-10k-works (#103,
 [recorded run](#recorded-run-103)), and so was item 3 for bytes, slot time and
-latency. Two parts remain open: item 2, a representative slice rather than
+latency. #108 repeated them with a least-privilege identity (Stage 1), on
+synthetic-100100-works (Stage 2) and in the personal DEV and QA projects
+(Stage 3). Two parts remain open: item 2, a representative slice rather than
 synthetic data, and the cost part of item 3 (billed bytes were floor
 artifacts). Repeat the run at representative scale in an enterprise-managed
-project with a least-privilege identity before item 7.
+project with a least-privilege identity before item 7 (tracked in #139).
 
 Operator decision for #108 (2026-10-11): Stage 2 uses the synthetic `large`
 preset (`scripts/bigquery_sandbox_103.py --scale large`, 100,100 batch-1 works).

@@ -11,18 +11,30 @@ Portable contracts live in `research_platform.canonical.openalex`:
 | `models.py` | Validated entity/relationship models |
 | `schemas.py` | PyArrow interchange schemas (source of truth) |
 | `mapping.py` | Source Work JSON → canonical bundle |
-| `versioning.py` | Work update precedence for later ingestion |
+| `versioning.py` | Work update precedence (used by the Step 12 canonical stores) |
 | `reconciliation.py` | Shared-entity reconciliation across Works |
 | `field_catalog.py` | SUPPORTED / DEFERRED / UNMAPPED / SOURCE-ONLY |
 
 Optional local SQL review DDL: [`sql/canonical/001_openalex_canonical.sql`](../../sql/canonical/001_openalex_canonical.sql)
-(**PostgreSQL 16+** only). It is not the future BigQuery model.
+(**PostgreSQL 16+** only). Since Step 12 it is also the schema that
+`apply_ingestion_schema` applies for the local `PostgresCanonicalStore`. It is
+not the BigQuery model, which lives under `sql/bigquery/openalex/` (see
+[BigQuery analytical models](bigquery-analytical-models.md)).
+
+The package also holds `errors.py` (typed modeling errors), `deletions.py` and
+`activity.py` (Step 13 tombstones and active filtering, #21), and `export.py`,
+the canonical Parquet exporter used by the #103/#108 BigQuery loads on
+synthetic data (PRs #104/#105).
 
 ## Evidence basis
 
 Mapping follows public OpenAlex Works API documentation and repository Step 08
-notes. Real payload profiling is still pending public network access. Fields that
-cannot be mapped confidently are catalogued rather than guessed.
+notes. Real payload profiling is still pending public network access (tracked
+in #126). Fields that cannot be mapped confidently are not guessed.
+`FIELD_CATALOG` classifies the source fields it knows about (supported,
+deferred and source-only), but it is reference data: the mapper does not read
+it, and source fields it does not list, such as `primary_topic`, are ignored
+rather than catalogued (unknown-field handling is tracked in #131).
 
 ## Identifier normalization
 
@@ -31,9 +43,9 @@ cannot be mapped confidently are catalogued rather than guessed.
 | OpenAlex entity | `W123`, `A123`, `I123`, `S123`, `P123`, `T123`, `F123` | `https://openalex.org/W123` |
 | Keyword | `keywords/<slug>` | full OpenAlex keyword URL |
 | DOI | lowercase bare DOI | `https://doi.org/...` |
-| ORCID | `ACCT-000028` | ORCID URLs |
+| ORCID | bare `NNNN-NNNN-NNNN-NNNC` (uppercase `X` check character) | `https://orcid.org/...` and `http://orcid.org/...` |
 | ROR | bare ROR id | `https://ror.org/...` |
-| ISSN / ISSN-L | `NNNN-NNNC` | spaced variants rejected |
+| ISSN / ISSN-L | `NNNN-NNNC` | spaces removed and lowercase `x` uppercased; a value without the hyphen is rejected. The mapper normalizes `issn_l` only |
 
 Malformed **work** ids fail mapping. Malformed **referenced_works** entries become
 `work_references` rows with `reference_status=MALFORMED` (not dropped silently).
@@ -223,11 +235,12 @@ Canonical rows carry the same asset checksum / run identity concepts as
 `RecordProvenance` and immutable `IngestionProvenance`. Step 12 local ingestion:
 
 1. land raw bytes + `IngestionProvenance` (outside the DB transaction)
-2. map through `map_openalex_work`
-3. in one DB transaction: canonical upsert + `RecordProvenance` + source-file SUCCESS
+2. in one DB transaction, decode and map each record through `map_openalex_work`
+3. in that same transaction: canonical upsert + `RecordProvenance` + source-file SUCCESS
 
 Durable writes use `PostgresCanonicalStore` when selected; they do not go through
-`Warehouse.query`. See [local Works ingestion](local-works-ingestion.md).
+`Warehouse.query`. It is a local durable adapter for the Step 12/13 pipelines,
+not a serving store. See [local Works ingestion](local-works-ingestion.md).
 
 ## Out of scope
 

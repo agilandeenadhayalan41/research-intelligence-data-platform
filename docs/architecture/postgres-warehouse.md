@@ -7,12 +7,18 @@ not change it.
 
 This adapter is a supported PostgreSQL **query backend** only. It is not:
 
-- `PostgresControlStore` or `PostgresCanonicalStore`
+- `PostgresControlStore` or `PostgresCanonicalStore`: the local durable control
+  and canonical stores that the Step 12/13 local pipelines use with
+  `--backend postgres` ([Local Works ingestion](local-works-ingestion.md)).
+  They are not a production control plane; that decision is tracked in #133
 - the ingestion unit of work
-- a Data Service backend
-- a PostgreSQL/AlloyDB serving projection
+- a Data Service backend: no `ConsumerDataRepository` reads through it
+- a PostgreSQL/AlloyDB serving projection: the #23 work lookup projection is a
+  separate, unapproved local PROTOTYPE in `research_platform.serving`
+  ([Work lookup projection](serving-work-lookup-projection.md))
 
-Issue **#23** stays conditional. Completing this adapter does not approve #23,
+Issue **#23** was closed not_planned on 2026-10-13, after the operator chose
+BigQuery + API/cache for lookups. Completing this adapter did not approve #23,
 does not replace BigQuery, and does not mean PostgreSQL is production-ready.
 
 Evidence: the offline fake-driver suite is `OFFLINE_TESTED`. The #90 local run
@@ -147,8 +153,12 @@ That target installs the `postgres` extra and runs
 ## Local validation evidence (#90)
 
 Recorded 2026-10-08 against `main` @ `e0b9271` (after PRs #89, #93, #94, #95,
-#97). Evidence comment:
-[#90](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/90#issuecomment-6067101622).
+#97). This re-run is recorded here and in the
+[PR #98](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/98)
+body. The only
+[#90 evidence comment](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/90#issuecomment-6067101622)
+records the earlier run at `57ac6c6`, which was not yet
+`LOCAL_POSTGRES_VERIFIED` (one packaging and two adapter defects, since fixed).
 
 | Item | Value |
 | --- | --- |
@@ -159,7 +169,7 @@ Recorded 2026-10-08 against `main` @ `e0b9271` (after PRs #89, #93, #94, #95,
 
 | Check | Result |
 | --- | --- |
-| `make test-postgres-warehouse` (unmodified; collected, not skipped) | 7 passed |
+| `make test-postgres-warehouse` (unmodified; collected, not skipped) | 7 passed (the module had 7 tests then) |
 | Binding (`%(name)s` bound server-side; injection payload as a value) | Pass |
 | Types: int, bool, text, float, date, time, timestamp, timestamptz, bounded and mixed-scale unbounded numeric, NULL-only, empty result | Pass |
 | Connection errors (missing/blank DSN, unreachable socket, unknown database/role, refused TCP, malformed DSN): fixed message, no DSN/password, no chaining | Pass |
@@ -168,6 +178,9 @@ Recorded 2026-10-08 against `main` @ `e0b9271` (after PRs #89, #93, #94, #95,
 | Cleanup: construction opens nothing; idle after success and failure; `close()`/context manager release the backend; no probe tables or backends left | Pass |
 | `make test` with the `postgres` extra installed | 973 passed, 23 deselected |
 | `make check`, `make build` | Clean |
+
+PR #100 (#99) later added two tests, so the module now has 9. Its body reports
+9 passed locally; that run is not part of the evidence above.
 
 Not exercised: `make postgres-up` (docker `postgres:16`, TCP, password/SCRAM,
 auth-failure messages), TLS, a non-superuser role, PostgreSQL versions other

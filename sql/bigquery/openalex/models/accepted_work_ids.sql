@@ -1,5 +1,6 @@
 -- Work publication acceptance set (Step 15).
--- DEFINED — NOT YET DEPLOYED / NOT EXECUTED here.
+-- DEFINED. Executed only by manual scripts on synthetic data (GCP_SANDBOX,
+-- personal DEV/QA); NOT DEPLOYED.
 --
 -- Derived from frozen `work_publication_decisions` (no precedence CASE here).
 -- Controls Work-row publication (MERGE apply/insert).

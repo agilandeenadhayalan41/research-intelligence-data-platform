@@ -11,11 +11,15 @@ canonical write implementation** behind the Step 10 write boundary.
 
 - Issue **#7** (`PostgreSQLWarehouse.query`) is a read-query adapter. It is
   **not** the ingestion write path and it is **not** approval for issue #23.
-- `Warehouse.query` remains **read-only**.
+- `Warehouse.query` remains the **read-query** interface and is never used for
+  these writes (only `PostgreSQLWarehouse` enforces read-only sessions; see
+  [write boundary](pipeline-control.md#write--transaction-boundary)).
 - Local PostgreSQL may back durable control/canonical writes when explicitly
   selected (`--backend postgres`). That does **not** make PostgreSQL the
   production serving architecture; BigQuery remains the first analytical
-  implementation.
+  implementation. `PostgresControlStore` and `PostgresCanonicalStore` are local
+  durable adapters for the Step 12/13 pipelines, **not** the production control
+  plane, which is still undecided (tracked in #133), and **not** a serving store.
 
 ## Callable entry point
 
@@ -136,8 +140,10 @@ DB transaction rolled back / source file FAILED
 
 ## Transactional claims
 
-PostgreSQL claims use `SELECT … FOR UPDATE` plus lifecycle validation and a
-conditional row update. They do **not** rely on `threading.RLock`.
+PostgreSQL claims use `SELECT … FOR UPDATE`, then lifecycle validation in
+Python, then an `UPDATE` of that locked row by `asset_id`. The row lock, not a
+conditional `WHERE` clause, makes the claim exclusive. They do **not** rely on
+`threading.RLock`.
 
 Completion (`SUCCESS` / `FAILED`) requires:
 
@@ -189,7 +195,7 @@ Do not silently treat changed declared metadata as `ALREADY_SUCCESS`.
 | Expired PROCESSING lease | `recover_stale_claim` → FAILED/`STALE_CLAIM`, then retry claim |
 | Concurrent second claim | `ClaimConflictError`; only one worker owns the lease |
 | Checksum conflict for same asset id | `CHECKSUM_CONFLICT`; never silent overwrite |
-| Mid-file decode failure | file marked FAILED; raw landing kept; run FAILED; no publish txn |
+| Mid-file decode failure | decode runs inside the publish txn, so DB ROLLBACK (no partial canonical/provenance); file FAILED; raw landing kept; run FAILED |
 | Mid-publish persistence failure | DB ROLLBACK (no partial canonical/provenance); file FAILED; raw kept |
 | Canonical Work conflict | `CanonicalConflictError`; no silent last-writer-wins |
 

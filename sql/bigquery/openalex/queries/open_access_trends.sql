@@ -1,5 +1,6 @@
 -- pattern_id: open-access-trends
--- BigQuery Standard SQL — Step 15 / #22 (NOT YET DEPLOYED)
+-- BigQuery Standard SQL — Step 15 / #22. Executed only by manual scripts on
+-- synthetic data (GCP_SANDBOX, personal DEV/QA); NOT DEPLOYED.
 -- Partition key is publication_year (INTEGER_RANGE). @year_from/@year_to
 -- filter that column for pruning. Explicit columns only.
 

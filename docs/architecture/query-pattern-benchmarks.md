@@ -1,10 +1,12 @@
 # Query-pattern and benchmark registry (Step 14)
 
 Step 14 defines the OpenAlex Research Intelligence **query-pattern and benchmark
-registry** that Step 15 will use as evidence for BigQuery analytical design.
+registry** that Step 15 used as evidence for BigQuery analytical design.
 
-It does **not** deploy BigQuery, create gold marts, implement a Data Service, or
-recommend PostgreSQL/AlloyDB without measured evidence.
+Step 14 itself does **not** deploy BigQuery, create gold marts, implement a Data
+Service, or recommend PostgreSQL/AlloyDB without measured evidence. Later issues
+ran the 11 implemented patterns in BigQuery on synthetic data only; see
+[Evidence classification](#evidence-classification).
 
 ## Artifacts
 
@@ -39,7 +41,9 @@ relationships, fields, dangling materialization candidates, invented
 `sources.issn` / `sources.eissn` query shapes, and `MIN`/`MAX(license)` collapse.
 
 Optional service-level fields stay **UNKNOWN** when no production SLA exists.
-No Wiley SLAs are invented.
+No Wiley SLAs are invented. The DOI and Work-ID lookups carry an
+operator-stated requirement (200 ms p95, 5 rps, 24 h freshness; #23, recorded by
+PR #119). It is not a measured or product-validated Wiley SLA.
 
 ## Categories covered
 
@@ -133,6 +137,33 @@ The typed model **rejects** `OPTIONAL_OPERATIONAL_STORE` unless
 Local harness results must use `FIXTURE_ONLY`. They are **not** BigQuery
 performance evidence. `BenchmarkResult` rejects `MEASURED` for local engines.
 
+No pattern is `MEASURED`. The recorded runs below are small synthetic samples:
+they show SQL correctness and small-sample latency, not placement at production
+scale, so every `evidence_status` is unchanged (`MEASURED` would also unlock
+`OPTIONAL_OPERATIONAL_STORE`).
+
+- **BigQuery alone, all 11 implemented patterns** (`issn-source-lookup` has no
+  SQL): #103 and #108 Stages 1–2 in GCP_SANDBOX (an operator-owned project,
+  synthetic ~10k and ~100k Works), and #108 Stage 3 in personal projects
+  labelled DEV and QA (synthetic ~10k Works). In GCP_SANDBOX, 21 cache-off runs
+  per pattern gave server p50 152–266 ms and client p50 0.99–1.29 s.
+  Year-partition pruning held for the year-bounded patterns, clustering was
+  OBSERVED for 4 of 11 patterns at Stage 2 (a reduction only for
+  `citation-relationships`), and billed cost was almost entirely 10 MiB
+  per-table floor artifacts, not representative. See the
+  [recorded runs](bigquery-analytical-models.md#recorded-run-103).
+- **BigQuery + in-process cache, DOI and Work-ID lookups (#118):** four runs in
+  the operator's personal DEV project on synthetic ~10k Works, through a
+  `TtlLruCache` around `BigQueryWarehouse` (no Data Service or HTTP hop). With a
+  cold cache (warm-up requests only) both MISSED the operator-stated 200 ms p95
+  (DOI 2,426 ms, Work ID 2,554 ms); prewarmed, both MET it (0.006 ms and
+  0.010 ms). The run evidence is in the #118 issue comments. #23 then closed
+  not_planned: the operator chose the BigQuery + API/cache path.
+
+No run used real OpenAlex data, an enterprise-managed project, a shared cache or
+concurrent load. Requirement-level status is in the
+[lead-requirement register](../requirements/openalex-lead-coverage.md).
+
 ## Measurement methodology
 
 `BenchmarkMeasurementSpec` / `BenchmarkResult` capture:
@@ -142,19 +173,28 @@ result rows/bytes, freshness lag, frequency, cache hit rate, materialization
 refresh cost.
 
 Step 15+ should record real BigQuery runs into `BenchmarkResult` without
-changing the registry contract.
+changing the registry contract. The #103, #108 and #118 scripts did not: they
+wrote `jobs.jsonl` and `summary.json` outside the repository, and no
+`BenchmarkResult` has been recorded for a real run.
 
 ## Materialization candidates
 
-Documented candidates (not built; Step 16 / #55):
+Documented candidates (none materialized):
 
 - journal author counts  
 - publisher author counts  
+- publisher-topic counts  
 - publisher-topic-year counts  
+- publisher-topic-license-year counts  
 - publication trends  
 - OA trends  
 
 Each lists input/output grain, refresh dependency, reuse, and freshness.
+Step 16 (#55) defined Gold SQL for them as `MATERIALIZATION_CANDIDATE` marts
+([inventory](gold-analytical-marts.md#inventory)); `publisher_topic_year_stats`
+has the year grain and serves the `publisher-topic-counts` pattern. The Gold
+SELECTs ran on synthetic data in the #103 and #108 runs, but no mart is
+`MATERIALIZED` or refreshed.
 
 ## Partitioning / clustering
 
@@ -194,10 +234,15 @@ Grain: `publisher_id + topic_id + primary_location_license + publication_year`.
 
 ## Current unknowns
 
-- Production concurrency and p95 latency targets  
-- Actual BigQuery bytes scanned / cost per pattern  
-- Cache hit rates  
-- Whether any lookup fails BigQuery + API/cache (none measured → no operational store)  
+- Production concurrency and p95 latency targets (the DOI/Work-ID 200 ms p95
+  and 5 rps are operator-stated, not production SLAs)  
+- Representative BigQuery bytes scanned / cost per pattern (the synthetic runs
+  billed almost only 10 MiB per-table floor multiples; tracked in DE-18, #139)  
+- Cache hit rates under real traffic (#118 saw 85.7% cold and 100% prewarmed
+  under a synthetic Zipf(1.1) over 1,000 keys; tracked in DE-30, #151)  
+- Whether the real DOI/Work-ID working set keeps cache misses under 5%, the
+  condition under which #118 met the 200 ms p95; #23 closed not_planned, so no
+  operational store  
 - True DOI uniqueness collisions at full OpenAlex scale  
 - Canonical modeling for ISSN/eISSN → Source identity mapping  
 

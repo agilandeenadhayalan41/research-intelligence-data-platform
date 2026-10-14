@@ -33,9 +33,12 @@ Do not force the OpenAlex schema onto clinical-trial or other source data.
 
 ## AACT / ClinicalTrials
 
-AACT is the planned next source and is documented in
-[issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2).
-This is a planning reference only; this repository does not implement AACT or
+AACT is next in the source priority above, but no open issue tracks it. The
+roadmap umbrella
+[issue #2](https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2)
+is closed and no longer describes it, and the data-engineering issues (DE-01
+to DE-35, #122–#156) are OpenAlex-only and exclude it. This section is a
+planning reference only; this repository does not implement AACT or
 ClinicalTrials ingestion.
 
 The likely logical pattern is:

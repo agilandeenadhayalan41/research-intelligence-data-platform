@@ -124,7 +124,11 @@ class InMemoryControlStore(ControlStore):
             return retried
 
     def start_pipeline_run(self, run_id: UUID, *, started_at: datetime) -> PipelineRun:
-        """PENDING -> PROCESSING helper used by local ingestion."""
+        """PENDING -> PROCESSING helper (in-memory only; not part of ``ControlStore``).
+
+        The local ingestion runners create runs directly in PROCESSING and do not
+        call this.
+        """
         with self._lock:
             existing = self._require_run(run_id)
             started = apply_pipeline_run_start(

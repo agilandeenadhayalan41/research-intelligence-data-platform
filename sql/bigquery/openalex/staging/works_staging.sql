@@ -1,5 +1,6 @@
 -- BigQuery Standard SQL DDL for `openalex.works_staging`
--- #103 publication staging; NOT DEPLOYED / NOT EXECUTED here.
+-- #103 publication staging. Executed only by manual scripts on synthetic
+-- data (GCP_SANDBOX, personal DEV/QA); NOT DEPLOYED.
 -- Read by models/work_publication_decisions.sql and models/merge_works.sql.
 -- Rendered by research_platform.analytics.bigquery.staging.render_staging_ddl.
 -- LIKE copies the `openalex.works` column schema (REQUIRED modes included),

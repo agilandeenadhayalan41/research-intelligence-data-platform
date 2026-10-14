@@ -86,7 +86,9 @@ LLM/ML/GenAI/NLP, embeddings and knowledge graphs.
 Three engines have fixed roles. **BigQuery** is the first analytical engine on
 Google Cloud (GCP). **DuckDB** is used only for local validation and
 prototypes. **PostgreSQL or AlloyDB** is an *optional* serving store, and it
-has to be justified by measurements first. The canonical data model stays
+has to be justified by measurements first (locally, PostgreSQL also holds the
+durable pipeline-control and canonical state of Step 12–13 runs made with
+`--backend postgres`; that is not a serving store). The canonical data model stays
 portable across all three
 ([three engines, three roles](how-it-works.md#three-engines-three-roles)).
 
@@ -126,7 +128,9 @@ are on the [Status](status.md) page.
    the repository and local setup.
 2. **Then use the sidebar** for the detailed architecture pages. They are
    grouped as architecture principles, sources and ingestion (in roadmap-step
-   order), analytics, serving, and operations and readiness.
+   order), analytics, serving, and operations and readiness. Two more groups
+   hold the [lead coverage register](../requirements/openalex-lead-coverage.md)
+   (requirements traceability) and the proposed next target architecture.
 
 Some reading tips:
 
@@ -140,10 +144,11 @@ Some reading tips:
 - **"Recorded run" sections are the evidence.** Each gives the date, what ran,
   what passed and what was *not* covered. Identifiers such as project, bucket
   and account names are redacted.
-- **Some pages are older than others.** Pages written at different times do
-  not always agree, for example on the DEV/QA status. The
-  [Status](status.md#known-inconsistencies-in-the-docs) page lists the known
-  inconsistencies and which source is newer.
+- **Some pages are older than others.** A "Recorded run" section keeps the
+  readiness wording of its date, and a later note or record says what changed
+  since, for example on the DEV/QA status. The
+  [Status](status.md#known-inconsistencies-in-the-docs) page lists any known
+  inconsistency that remains and which source is newer.
 - **The site renders the repository's Markdown in place.** These pages are the
   files in the repository's `docs/` folder. Links to source files open on
   GitHub, and every page has an edit link.

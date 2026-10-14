@@ -1,5 +1,6 @@
 -- BigQuery Standard SQL DDL for `openalex.work_topics_staging`
--- #103 publication staging; NOT DEPLOYED / NOT EXECUTED here.
+-- #103 publication staging. Executed only by manual scripts on synthetic
+-- data (GCP_SANDBOX, personal DEV/QA); NOT DEPLOYED.
 -- Read by models/merge_work_topics.sql.
 -- Rendered by research_platform.analytics.bigquery.staging.render_staging_ddl.
 -- Every column is NULLABLE on purpose: it accepts the canonical Parquet and

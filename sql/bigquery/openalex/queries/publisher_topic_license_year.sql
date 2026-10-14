@@ -1,5 +1,6 @@
 -- pattern_id: publisher-topic-license-year
--- BigQuery Standard SQL — Step 15 / #22 (NOT YET DEPLOYED)
+-- BigQuery Standard SQL — Step 15 / #22. Executed only by manual scripts on
+-- synthetic data (GCP_SANDBOX, personal DEV/QA); NOT DEPLOYED.
 -- License = PRIMARY LOCATION LICENSE only (is_primary = TRUE).
 -- Do NOT use MIN(license) / MAX(license). NULL primary license → NULL bucket.
 

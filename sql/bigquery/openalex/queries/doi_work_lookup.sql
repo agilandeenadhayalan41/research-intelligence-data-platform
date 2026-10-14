@@ -1,5 +1,6 @@
 -- pattern_id: doi-work-lookup
--- BigQuery Standard SQL — Step 15 / #22 (NOT YET DEPLOYED)
+-- BigQuery Standard SQL — Step 15 / #22. Executed only by manual scripts on
+-- synthetic data (GCP_SANDBOX, personal DEV/QA); NOT DEPLOYED.
 
 SELECT
   w.`work_id`,

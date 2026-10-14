@@ -1,5 +1,6 @@
 -- Reusable ACTIVE Works view (BigQuery Standard SQL).
--- Step 15 / #22 — DEFINED contract; NOT YET DEPLOYED.
+-- Step 15 / #22 — DEFINED contract. Created only by the manual #103 script on
+-- synthetic data (GCP_SANDBOX, personal DEV/QA); NOT DEPLOYED elsewhere.
 --
 -- Canonical `works` retains both ACTIVE and DELETED rows.
 -- Consumer analytical models must filter ACTIVE explicitly (or use this view).

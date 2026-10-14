@@ -1,10 +1,15 @@
 # GCP: BigQuery-first analytical architecture
 
-BigQuery is the primary first analytical implementation on GCP. This direction
-does not make GCP runtime adapters, cloud resources, or deployment part of the
-current implementation. Configure environments explicitly, default to local
-resources, and do not access production or create expensive cloud resources during
-development.
+BigQuery is the primary first analytical implementation on GCP. The
+`GCSObjectStore` (#9) and `BigQueryWarehouse` (#10) runtime adapters are
+implemented and passed live smokes (#91, #92). Operator-run scripts created the
+Step 15 tables in operator-created datasets and executed and measured the
+Step 15–16 SQL on synthetic data only, in GCP_SANDBOX (#103, #108 Stages 1–2)
+and in operator-controlled personal projects labelled DEV and QA (#108 Stage 3).
+The repository provisions no cloud infrastructure, has no deployment pipeline,
+and nothing is deployed to an enterprise environment or PROD.
+Configure environments explicitly, default to local resources, and do not
+access production or create expensive cloud resources during development.
 
 ## Target flow
 
@@ -47,6 +52,10 @@ flowchart LR
   only if measured volume, transformation complexity, ACID/time-travel needs,
   schema evolution, or multi-engine requirements warrant them.
 
-GCS, BigQuery, PostgreSQL/AlloyDB, caches, Spark, Dataproc, and Iceberg/BigLake
-runtime implementations are not included in this architecture documentation
-change.
+Runtime code that exists today: `GCSObjectStore` (#9), `BigQueryWarehouse`
+(#10), the `PostgreSQLWarehouse` read adapter (#7), the local PostgreSQL
+control and canonical stores behind the Step 12/13 pipelines, and an in-process
+lookup cache built for the #118 measurement. The local PostgreSQL Work lookup
+projection is an unapproved prototype, and #23 was closed as not planned in
+favour of BigQuery plus API/cache. AlloyDB, Spark, Dataproc and Iceberg/BigLake
+are not implemented.

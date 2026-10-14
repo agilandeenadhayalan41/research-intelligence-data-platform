@@ -518,7 +518,8 @@ def render_create_table_ddl(contract: BigQueryTableContract, *, dataset: str = "
     """Render BigQuery Standard SQL CREATE TABLE DDL for a contract."""
     lines = [
         f"-- BigQuery Standard SQL DDL for `{dataset}.{contract.table_name}`",
-        "-- Step 15 / #22 — contract only; NOT DEPLOYED / NOT EXECUTED here.",
+        "-- Step 15 / #22 contract. Executed only by manual scripts on synthetic data",
+        "-- (GCP_SANDBOX, personal DEV/QA); NOT DEPLOYED.",
         f"-- Grain: {contract.grain}",
         f"-- Incremental: {contract.incremental_strategy.value}",
         "",

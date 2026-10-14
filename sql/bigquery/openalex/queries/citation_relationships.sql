@@ -1,5 +1,6 @@
 -- pattern_id: citation-relationships
--- BigQuery Standard SQL — Step 15 / #22 (NOT YET DEPLOYED)
+-- BigQuery Standard SQL — Step 15 / #22. Executed only by manual scripts on
+-- synthetic data (GCP_SANDBOX, personal DEV/QA); NOT DEPLOYED.
 -- Source Work must be ACTIVE. Target may be ACTIVE, DELETED, or absent.
 -- Do NOT inner-join away unresolved citation targets.
 

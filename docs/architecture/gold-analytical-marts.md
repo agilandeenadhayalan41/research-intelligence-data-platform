@@ -3,7 +3,7 @@
 Consumer-oriented Gold mart contracts for OpenAlex Research Intelligence.
 
 **Status:** DEFINED (contracts + BigQuery Standard SQL + DuckDB `SEMANTIC_ONLY` fixtures).  
-**Not:** DEPLOYED / MEASURED. No GCP resources. No production materialization.
+**Not:** DEPLOYED / MEASURED. No Gold mart is deployed as a table or view. No production materialization. The manual #103 script executed all 9 Gold SELECTs in BigQuery on synthetic data only, in GCP_SANDBOX (#103, #108 Stages 1–2) and the personal DEV/QA projects (#108 Stage 3), with no DELETED-work leakage in the two marts checked (`research_discovery`, `citation_edges`; [recorded runs](bigquery-analytical-models.md#recorded-run-103)). That is execution evidence, not a deployment, and not the MEASURED evidence the promotion rule below requires.
 
 Authoritative inputs: Step 11 canonical model, Step 13 ACTIVE/deletion Policy A, Step 14 query-pattern registry, Step 15 BigQuery analytical contracts.
 
@@ -40,8 +40,8 @@ Promotion rule:
 
 > `MATERIALIZATION_CANDIDATE` → `MATERIALIZED` only when MEASURED BigQuery evidence shows significant repeated-query cost/latency/frequency/concurrency/reuse **and** refresh cost/freshness remains acceptable. FIXTURE_ONLY / SEMANTIC_ONLY / preference alone cannot promote.
 
-Current evidence available: architecture expectations, FIXTURE_ONLY local timing, DuckDB SEMANTIC_ONLY.  
-Current evidence **not** available: production BigQuery scan/latency/concurrency/frequency/refresh cost.
+Current evidence available: architecture expectations, FIXTURE_ONLY local timing, DuckDB SEMANTIC_ONLY, and the Gold SQL executed in BigQuery on synthetic data (#103, #108).  
+Current evidence **not** available: production BigQuery scan/latency/concurrency/frequency/refresh cost (materialization tracked in #138).
 
 ---
 
@@ -120,7 +120,7 @@ Dimension moves (publisher/year/topic/source) must repair **both** old and new b
 
 ## Cost / scan guidance (documented only)
 
-Inherit Step 15 rules. No tables deployed.
+Inherit Step 15 rules. No Gold mart tables deployed; the only Gold-related tables the #103 script creates in its run dataset are the three `staged_gold_*` audit tables (`sql/bigquery/openalex/gold_audit/`), for the Gold exclusion gate.
 
 - Year-based marts: partition candidate `publication_year` (INTEGER_RANGE alignment).
 - Publisher/topic/year: partition `publication_year`; cluster `publisher_id`, `topic_id`.
@@ -157,4 +157,4 @@ Shared Step 15 publication decision table names remain contract addresses only. 
 
 ## Out of scope
 
-End-to-end pipeline (#27; [details](end-to-end-pipeline.md)), orchestration (#25), readiness (#28), PostgreSQL/AlloyDB serving (#23), GCS/Terraform/cloud deploy, AACT/OpenFDA, ML/vector/KG. Data quality (#24) and Data Service (#26) are complete.
+End-to-end pipeline (#27; [details](end-to-end-pipeline.md)), orchestration (#25), readiness (#28), PostgreSQL/AlloyDB serving (#23), GCS/Terraform/cloud deploy, AACT/OpenFDA, ML/vector/KG. Data quality (#24), Data Service (#26), the end-to-end pipeline (#27), orchestration (#25) and readiness (#28) are complete; #23 was closed as not planned.

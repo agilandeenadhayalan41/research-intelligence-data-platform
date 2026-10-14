@@ -1,5 +1,6 @@
 -- Analytical Works publication unit (Step 15).
--- DEFINED — NOT YET DEPLOYED / NOT EXECUTED here.
+-- DEFINED. Not executed by any recorded run (the #103 script runs the
+-- component models one by one); NOT DEPLOYED.
 --
 -- Freezes publication decisions against the pre-MERGE target, then publishes
 -- Works and relationship projections. Do not recalculate decisions after
