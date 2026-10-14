@@ -15,6 +15,9 @@ evidence-honest:
 - DE planning IDs match their GitHub issues (DE-*k* is #(121+*k*)), issue and
   PR links resolve to this repository, relative links and ``#anchors``
   resolve, and cited register rows exist;
+- each ADR's register-row table lists exactly the register rows that cite the
+  ADR in Paths or still name its issue as a follow-on, and its "Still open"
+  cells name exactly the DE issues those rows follow;
 - no private identifiers (emails, bucket URLs, identities, IAM members,
   project IDs, run IDs not already tracked in the recorded-run docs), no
   currency amounts or unit prices, and no claim of a deployment, enterprise
@@ -720,10 +723,9 @@ def test_index_lists_every_adr_exactly_once(adrs: dict[str, str]) -> None:
     assert validate_index(INDEX.read_text(encoding="utf-8"), INDEX, REPO_ROOT, adrs) == []
 
 
-def test_each_adr_answers_every_register_row_that_names_its_issue(
+def test_each_adr_is_paired_with_the_register_rows_it_answers(
     adrs: dict[str, str], register_text: str
 ) -> None:
-    follow_ons = register_follow_ons(register_text)
     index = INDEX.read_text(encoding="utf-8")
     checked = 0
     for _, rows in _tables(_section(index, "Index")):
@@ -732,16 +734,8 @@ def test_each_adr_answers_every_register_row_that_names_its_issue(
             name = re.search(r"\((\d{4}-[^)]+\.md)\)", row[0])
             if issue is None or name is None:
                 continue
-            cited = {row_id for row_id, cell in follow_ons.items() if issue.group(0) in cell}
-            trace = _section(adrs[name.group(1)], "Lead requirement traceability")
-            answered = {
-                row_id
-                for header, trace_rows in _tables(trace)
-                if header and header[0] == "Row"
-                for trace_row in trace_rows
-                for row_id in REQ_ID_RE.findall(trace_row[0])
-            }
-            assert sorted(cited - answered) == [], f"{name.group(1)} misses register rows"
+            adr = name.group(1)
+            assert traceability_errors(adrs[adr], adr, issue.group(0), register_text) == [], adr
             checked += 1
     assert checked, "no index row names a DE issue"
 

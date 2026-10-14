@@ -433,7 +433,7 @@ The [register](../requirements/openalex-lead-coverage.md) remains the requiremen
 | D10 | §2, §5, §11, §22, §28, §29 |
 | D11, D12, D13 | §2 (catalog), §3.1, §16, §18, §21 (cost of repeated lookups), §24 (security, lifecycle, cost), §25, §27 |
 
-Every register row that names DE-03 [#124] as a follow-on is answered as follows:
+Every register row that cites this ADR in its Paths (the rows that named DE-03 [#124] as a follow-on until this change) is answered as follows:
 
 | Row | Requirement (short) | Answered by | Still open, owned by |
 |---|---|---|---|
@@ -457,7 +457,7 @@ Every register row that names DE-03 [#124] as a follow-on is answered as follows
 | L27-01 | Avoid unnecessary lock-in at the data layer | D9, D2 (binding) | DE-07, DE-13 |
 | L27-02 | Prefer Parquet | D1, D9 | DE-07, DE-32 |
 | L27-07 | Do not expose BigQuery-specific SQL to consumers | D8, D9 (DE-31 and DE-32 BigQuery channels as the only recorded exceptions) | DE-28, DE-31, DE-32 |
-| L30-01 | Adopt the §30 principle | [Architecture principle](#decisions), D1, D2, D8, D9 (adopted once this ADR is accepted) | none once accepted (the register row follows this ADR's status) |
+| L30-01 | Adopt the §30 principle | [Architecture principle](#decisions), D1, D2, D8, D9 (adopted once this ADR is accepted) | DE-07, DE-14, DE-18, DE-28 (implementing D1, D2, D8 and D9; acceptance changes no register status) |
 | L30-02 | Object storage and Parquet are the canonical layer | D1 | DE-07 |
 | L30-12 | … without changing the logical architecture | D9 (physical SQL per engine is an accepted cost) | DE-35 if a second engine is approved |
 
