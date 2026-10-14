@@ -1,6 +1,6 @@
 # OpenAlex lead coverage: traceability matrices
 
-> **Companion to the [lead coverage register](openalex-lead-coverage.md) for [#122] (DE-01).** Built from `main` @ `2e785fd186f70c9a591ca0d77387a4e8f52a9db9` on 2026-10-13. Each table walks one family of lead items (entities, fields, endpoints, routing examples, queries, aggregates) or the repository history, item by item. Evidence words use the register's vocabulary; the register rows are authoritative where a cell here is shorter.
+> **Companion to the [lead coverage register](openalex-lead-coverage.md) for [#122] (DE-01).** Built from `main` @ `2e785fd186f70c9a591ca0d77387a4e8f52a9db9` on 2026-10-13; cells updated on 2026-10-14 for [#123] (DE-02). Each table walks one family of lead items (entities, fields, endpoints, routing examples, queries, aggregates) or the repository history, item by item. Evidence words use the register's vocabulary; the register rows are authoritative where a cell here is shorter.
 
 ## Lead entities and analytical retention
 
@@ -204,7 +204,7 @@ One row per prior GitHub issue below [#122] (39 issues), ascending; every one of
 | [#20] | [12] One-file idempotent local Works ingestion | completed 2026-10-07 | [#50], [#51], [#52], [#53] ([#53] docs close-out) | Claim, land, stream-decode, canonical upsert and provenance for one file `src/research_platform/ingestion/pipeline.py`, with in-memory and local PostgreSQL stores; DEFINED (PostgreSQL path only in postgres-marked tests) | 17, 18 | DE-07, DE-08, DE-09, DE-10, DE-12, DE-20, DE-22 |
 | [#21] | [13] Idempotent OpenAlex deletions with lineage | completed 2026-10-07 | [#56], [#57], [#58], [#59] ([#59] CI import fix) | deleted_ids.csv.gz tombstones with stale precedence `src/research_platform/ingestion/deletion_pipeline.py`, `sql/control/002_deletion_events.sql`; DEFINED, Works only | 18 | DE-11, DE-15, DE-22, DE-32 |
 | [#22] | [15] BigQuery-first analytical models | completed 2026-10-07 | [#62], [#63], [#64], [#65], [#66] ([#66] docs and SQL-comment close-out) | 15 DDL, MERGE/REPLACE models and 11 query SQL under `sql/bigquery/openalex/`, contracts in `src/research_platform/analytics/bigquery/`; DEFINED; CLOUD_SYNTHETIC_MEASURED in [#103] and [#108] Stages 1-2, PERSONAL_DEV_QA_VERIFIED in [#108] Stage 3 (synthetic data) | 2, 4, 5, 6, 11, 19, 24, 27 | DE-03, DE-08, DE-09, DE-10, DE-13, DE-14, DE-15, DE-19, DE-29, DE-35 |
-| [#23] | [Optional Serving] PG/AlloyDB projections only if benchmarks require | not_planned 2026-10-13 | [#112], [#119] | Local PostgreSQL work-lookup PROTOTYPE `src/research_platform/serving/postgres_work_lookup.py` (DEFINED; its 9 integration tests need local PostgreSQL) and the operator-stated 200 ms p95 requirement in `config/query-patterns/openalex.yaml` (SEMANTIC_ONLY, not a Wiley SLA); gate not met, operator chose BigQuery + API/cache: CONDITIONAL_DEFERRED | 1, 7, 8, 10, 20, 21, 22, 26, 29 | DE-02, DE-29, DE-30, DE-35 |
+| [#23] | [Optional Serving] PG/AlloyDB projections only if benchmarks require | not_planned 2026-10-13 | [#112], [#119] | Local PostgreSQL work-lookup PROTOTYPE `src/research_platform/serving/postgres_work_lookup.py` (DEFINED; its 9 integration tests need local PostgreSQL) and the operator-stated 200 ms p95 requirement in `config/query-patterns/openalex.yaml` (SEMANTIC_ONLY, not a Wiley SLA); gate not met, operator chose BigQuery + API/cache: CONDITIONAL_DEFERRED | 1, 7, 8, 10, 20, 21, 22, 26, 29 | DE-29, DE-30, DE-35 |
 | [#24] | [17] Data-quality gates and metrics | completed 2026-10-07 | [#69], [#70], [#71], [#72] | Hard gates and metrics registry/runner `src/research_platform/quality/` plus 12 SQL in `sql/bigquery/openalex/quality/`; DEFINED; the SQL later ran in the [#103]/#108 runs on synthetic data only, no cloud gating or alerting | 17, 18 (indirect) | DE-16, DE-25, DE-26, DE-32 |
 | [#25] | [20] Airflow/Composer orchestration alignment | completed 2026-10-08 | [#80], [#81] | Orchestration contracts only (graph, ExecutionUnits, bounded XCom, retries) `src/research_platform/orchestration/`; DEFINED; no DAG, `dags/` holds only a placeholder | 17, 18 | DE-03, DE-19, DE-21, DE-22, DE-33 |
 | [#26] | [18] Data Service consumer capabilities | completed 2026-10-07 | [#73], [#74] | Storage-independent domain layer with 5 capabilities, no raw SQL, in-memory reference repository `src/research_platform/service/`; DEFINED; no HTTP API | 13, 14, 15, 16 | DE-28, DE-29, DE-31, DE-32 |
@@ -296,8 +296,8 @@ Every one of the 334 paths in git ls-files at 2e785fd is counted in exactly one 
 | `tests/contract/` | test | 2 | 3, 17 | Reusable ObjectStore contract tests for LocalObjectStore and GCSObjectStore with fake GCS ([#17], [#9]) |
 | `tests/support/` | test | 3 | 3, 19 | Fake GCS ([#9]) and fake BigQuery ([#10]) clients for offline adapter tests |
 | `tests/fixtures/` | test | 2 | 4, 17 | Tiny synthetic OpenAlex asset and provenance JSON |
-| `docs/architecture/` | doc | 23 | 1-30 (descriptive) | 22 pages plus .gitkeep, with Recorded run sections; several pages lag [#23] closure, [#108] Stage 3 and the [#118] runs (see `docs/overview/status.md` known inconsistencies; DE-02) |
-| `docs/overview/` | doc | 5 | 29, 30 | Introduction, how it works, getting started, glossary, status ([#158]; last updated from 206105e, so it lags the [#2] and [#23] closures and [#118] runs 2-4) |
+| `docs/architecture/` | doc | 23 | 1-30 (descriptive) | 22 pages plus .gitkeep, with Recorded run sections that keep the wording of their date (a dated later note follows where a later run changed it, as after the [#103] record); together the pages record the [#23] closure, [#108] Stage 3 and the [#118] runs, and `docs/overview/status.md` lists no remaining known inconsistency |
+| `docs/overview/` | doc | 5 | 29, 30 | Introduction, how it works, getting started, glossary, status ([#158]; status is last updated from d6a71a5 plus the [#123] (DE-02) corrections and records the [#2], [#23] and [#108] closures and all four [#118] runs) |
 | `docs/proposed/` | doc | 1 | 2, 3, 19, 29, 30 | `docs/proposed/target-architecture.mdx` ([#158], [#159]): proposed GCP target, marked Proposed, not built |
 | `docs/site/` | tooling | 11 | 2, 17 (proposed target diagram only) | Docusaurus 3 site that reads docs in place, with an animated target diagram ([#158]); not built in CI |
 | `docs/runbooks/` | placeholder | 1 | — | .gitkeep only; runbooks MISSING (DE-33) |
@@ -307,7 +307,7 @@ Every one of the 334 paths in git ls-files at 2e785fd is counted in exactly one 
 | `infrastructure/terraform/` | placeholder | 1 | — | .gitkeep only; no IaC; the [#108] grants were made by hand outside the repo |
 | `data/` | placeholder | 3 | — | .gitkeep in landing, manifests, sample; local data dirs, no data committed |
 | `.github/workflows/` | tooling | 1 | — | `.github/workflows/tests.yml`: make check (compileall and pip check), make test, make build on Python 3.12/3.14 plus a postgres-extra dry-run resolve; no lint, type-check or docs build |
-| repo root files plus `.github/copilot-instructions.md` | tooling / doc | 8 | — | `README.md` (stale per DE-02), `pyproject.toml`, `Makefile`, `docker-compose.yml`, `.env.example`, `.gitignore`, `vercel.json` ([#158]), `.github/copilot-instructions.md` |
+| repo root files plus `.github/copilot-instructions.md` | tooling / doc | 8 | — | `README.md`, `pyproject.toml`, `Makefile`, `docker-compose.yml`, `.env.example`, `.gitignore`, `vercel.json` ([#158]), `.github/copilot-instructions.md` |
 
 [#1]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/1
 [#2]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/2
@@ -431,5 +431,6 @@ Every one of the 334 paths in git ls-files at 2e785fd is counted in exactly one 
 [#120]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/120
 [#121]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/121
 [#122]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/122
+[#123]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/123
 [#158]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/158
 [#159]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/159
