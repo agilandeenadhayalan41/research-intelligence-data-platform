@@ -207,11 +207,6 @@ select.input {
   gap: 0.5rem;
 }
 
-.tokenPrompt {
-  margin: 0;
-  font-size: 0.875rem;
-}
-
 /* Split view ------------------------------------------------------------ */
 
 .split {

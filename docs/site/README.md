@@ -14,19 +14,22 @@ their own browser (see [Privacy](#privacy-what-stays-in-the-browser)).
 
 | Path | Purpose |
 | --- | --- |
-| `docusaurus.config.ts` | Site config: docs plugin pointed at `..` (the `docs/` folder), blog and pages plugins, the page-meta plugin, strict link checks, Mermaid, navbar and footer, `customFields` (`repo`, `communityStore`) |
+| `docusaurus.config.ts` | Site config: docs plugin pointed at `..` (the `docs/` folder), blog and pages plugins, the page-meta plugin, strict link checks, Mermaid, navbar and footer, `customFields` (`repo`, `communityStore`, `pageHistory`) |
 | `sidebars.ts` | Sidebar: Overview, then the architecture docs grouped by area, with short labels |
 | `src/pages/index.mdx` | The home page (`/`) |
 | `src/components/Home/` | Home page building blocks: `Hero`, `FlowGraphic`, `FeatureCards`, `HomeSection`, `Icon` |
 | `blog/` | Blog posts (`.md` or `.mdx`), served under `/blog` |
-| `src/pages/blog/editor.tsx`, `src/components/BlogEditor/` | The blog editor (`/blog/editor`) |
+| `src/pages/blog/editor.tsx`, `src/components/BlogEditor/` | The blog editor (`/blog/editor`, `/blog/editor?post=<repo path>`) |
+| `src/theme/BlogPostItems/`, `src/theme/BlogPostItem/Header/`, `src/components/BlogPostActions/` | The blog's **Write a post** toolbar above the post lists, and **Edit** and **Delete** next to each post's title |
+| `src/components/GitHubTokenPrompt/` | The "Add a GitHub token in the account menu" prompt shared by the editor and the Delete dialog |
 | `src/plugins/page-meta/index.js` | Build-time data for every doc and post: reading time, git history, and the raw source of blog posts for the editor |
 | `src/theme/Root.tsx` | Wraps the site in the GitHub-user and community-store providers |
 | `src/theme/NavbarItem/ComponentTypes.tsx`, `src/components/GitHubUserNavbarItem/` | The `custom-githubUser` navbar item: avatar and username, or "Sign in" |
 | `src/theme/DocItem/Content/`, `src/theme/DocItem/Footer/`, `src/theme/BlogPostItem/Footer/` | Wrappers around the theme components that add the page metadata, history and community blocks |
 | `src/components/PageMetaBar/`, `PageHistory/`, `PageCommunity/` | Reading time and last update; contributors; likes and comments |
 | `src/lib/storage.mjs` | The community store (likes, comments, editor drafts) behind one adapter interface |
-| `src/lib/github.mjs` | GitHub REST helpers: page commits, public profiles, the blog pull-request flow |
+| `src/lib/github.mjs` | GitHub REST helpers: page commits (people only, `isAutomationAuthor`), public profiles, the blog pull-request flows (add or update a post, delete a post) |
+| `src/lib/blogPosts.mjs` | Links between the blog and the editor: `blogEditorUrl(repoPath)` and the editor's `?post=` parsing |
 | `src/lib/readingTime.mjs` | Word count and minutes to read for a Markdown source |
 | `src/lib/GitHubUserContext.tsx`, `src/lib/CommunityStoreContext.tsx` | React hooks `useGitHubUser()` and `useCommunityStore()` |
 | `test/` | Unit tests for `src/lib/*.mjs` (`node:test`, no network) |
@@ -65,7 +68,7 @@ them from GitHub.
 | `/overview/introduction` | `docs/overview/introduction.md`, the docs introduction (it used to be served at `/`) |
 | `/<folder>/<file>` | Every other doc, by its path under `docs/` (for example `/architecture/roadmap`); `docs/adr/README.md` is `/adr/` |
 | `/blog`, `/blog/YYYY/MM/DD/<slug>`, `/blog/tags/...` | The blog |
-| `/blog/editor` | The blog editor |
+| `/blog/editor` | The blog editor; `/blog/editor?post=docs/site/blog/<file>` opens that post |
 
 ## Home page
 
@@ -136,6 +139,59 @@ browser.
 The repository the site talks to is set once, in `customFields.repo`
 (`owner`, `name`, `branch`) in `docusaurus.config.ts`.
 
+### People only: bots and AI tools are left out
+
+The page history, the "Updated ... by ..." line, the contributor cards and the
+commit counts credit **people only**. A commit is left out when its author is
+automation, which `isAutomationAuthor(author, excludeList)` in
+`src/lib/github.mjs` decides (the one filter, used for the GitHub data in the
+browser and by the page-meta plugin at build time). Any one of these is enough:
+
+- the GitHub account type is `Bot`;
+- the GitHub login or the git author name ends with `[bot]`;
+- the login or the name is in `customFields.pageHistory.excludeAuthors`,
+  compared ignoring case, a trailing `[bot]`, and spaces, hyphens,
+  underscores and dots (so the git name `Cursor Agent` matches `cursoragent`
+  and `Claude Code` matches `claude-code`);
+- the author email ends with `@anthropic.com` (so `noreply@anthropic.com`
+  too) or is a `<name>[bot]@users.noreply.github.com` address. Emails are read
+  only for this check: they are never published in the build data, cached or
+  shown.
+
+```ts
+// docusaurus.config.ts
+customFields: {
+  pageHistory: {
+    // The default list (DEFAULT_EXCLUDED_AUTHORS in src/lib/github.mjs):
+    // claude, claude-code, anthropic-claude, copilot, github-copilot,
+    // copilot-swe-agent, github-actions, dependabot, renovate, vercel, cursor,
+    // cursoragent, devin-ai-integration, codex, chatgpt-codex-connector,
+    // gemini-code-assist, sweep-ai, coderabbitai.
+    excludeAuthors: [...DEFAULT_EXCLUDED_AUTHORS, 'another-bot'],
+  },
+},
+```
+
+The list replaces the default one; remove the key to use the default list, or
+set `[]` to keep only the bot, `[bot]` and email rules. Changing it takes a
+rebuild for the build-time data; the browser's one-hour cache of GitHub data
+is keyed by the list, so it is asked again.
+
+- "Last updated ... by ..." is the most recent commit **by a person** (its
+  date and author), even when automation changed the page later.
+- "N people have changed this page in M commits" counts people and their
+  commits only. When automation also changed the page, the history's footer
+  says "Changes by bots and AI tools are not listed."
+- A page changed **only** by automation shows the date of its last change
+  without a name ("Updated Oct 16, 2026" in the bar above the page, "Last
+  updated Oct 16, 2026" in the history), no contributor cards, and the note
+  "Changes so far were made by automation."
+- In the build-time data, excluded commits only appear as a count and the date
+  and commit of the latest one (`automation: {commits, lastDate, lastSha}`),
+  never as a name or email. In a shallow clone, a page whose only commits after
+  the boundary are automation's has an unknown build-time history (people may
+  have changed it before the boundary) until the GitHub data loads.
+
 ## GitHub sign-in (optional)
 
 The navbar (right side) has a **Sign in** button. Signing in is deliberately
@@ -151,9 +207,12 @@ in, the navbar shows the avatar and username, and the menu has **Sign out**.
 
 ### The optional GitHub token
 
-The sign-in menu also has an optional **GitHub token** field. The token is used
-for two things only: the blog editor's **Open pull request**, and higher GitHub
-API rate limits for the page history.
+The sign-in menu (the account menu) also has an optional **GitHub token**
+field. The token is used for three things only: the blog editor's **Open pull
+request**, the blog's **Delete** (which opens a pull request too), and higher
+GitHub API rate limits for the page history. Without a token, both pull
+request buttons show the same prompt: "Add a GitHub token in the account
+menu".
 
 - It is kept in `localStorage` **on this device only** and is sent nowhere but
   `https://api.github.com`, as the `Authorization` header. Error messages never
@@ -165,7 +224,8 @@ API rate limits for the page history.
   *Contents: read and write* and *Pull requests: read and write*, is enough.
   Without push access the editor forks the repository, and a fine-grained
   token cannot be granted access to another owner's repository, so a classic
-  token with only the `public_repo` scope is the simple choice there. Remove
+  token with only the `public_repo` scope is the simple choice there. The
+  same token works for deleting a post. Remove
   the token from the menu on a shared computer, and revoke it on GitHub when it
   is no longer needed.
 
@@ -268,6 +328,55 @@ cloud identifiers or other private details in a post: the repository and the
 site are public. A post is published by merging a pull request, like any other
 change, so the strict build checks its links first.
 
+**Every change to the blog is a pull request.** Writing, editing and deleting
+a post from the site never changes the site directly: each one opens a pull
+request (or downloads a file for one), and the site changes only when that
+pull request is merged and the site is rebuilt.
+
+### Write a post, Edit and Delete
+
+- **Write a post.** The blog's post lists (`/blog`, its next pages, the tag
+  and author pages) start with a toolbar, outside any post: a **Write a post**
+  button that opens the editor (`/blog/editor`) on a new post (or on this
+  browser's unfinished new post, never on a draft of a published post) and the
+  line "Anyone can write a post: it is published when its pull request is
+  merged." It wraps the
+  theme's `BlogPostItems` (`src/theme/BlogPostItems/`), which only the list
+  pages use, so a post's own page never shows it. The archive
+  (`/blog/archive`) is a separate theme page and has no toolbar; the footer's
+  **Write a post** link is on every page.
+- **Edit** (next to each post's title, in the lists and on the post's page)
+  opens the editor on that post: `/blog/editor?post=<repo path>`, for example
+  `/blog/editor?post=docs/site/blog/2026-10-16-welcome-to-the-blog.md` (a path
+  inside `docs/site/blog/` alone also works). If this browser has a draft of
+  the post, the editor opens the draft and offers to discard it for the
+  published version. A `?post=` that is not a published post shows a message
+  and opens the editor as usual. The address follows the open post, so a
+  reload opens the same one. Editing ends with **Open pull request**, as
+  below.
+- **Delete** opens a dialog (keyboard accessible: the focus stays inside it,
+  Escape or Cancel closes it) that names the post's title and file. With a
+  GitHub token, **Open a pull request to delete it** runs
+  `openBlogDeletePullRequest` from `src/lib/github.mjs`, shows each step, and
+  ends with the pull request's link:
+  1. it reads the repository (push access?) and the tip of `main`;
+  2. it reads the post at that commit for its sha; a post that is not on
+     `main` stops here ("post not found on main"), before any branch is made;
+  3. with push access it creates a branch `blog/delete-<slug>-<yyyymmddHHMMss>`
+     from `main` in the repository; without it, it forks the repository (or
+     reuses the fork), waits for it, syncs it and creates the branch there;
+  4. it deletes `docs/site/blog/<file>` on that branch (with the sha);
+  5. it opens a pull request "Delete blog post: <title>" against `main`.
+
+  The post stays on the site until that pull request is merged; the dialog
+  says so. Without a token the dialog shows the token prompt and a link to
+  delete the file on GitHub instead. Only `.md` and `.mdx` files under
+  `docs/site/blog/` can be deleted this way: any other path is refused before
+  a request is made. Error messages never contain the token.
+- Posts map to their files with `repoPathForDoc(metadata.source)`
+  (`@site/blog/x.md` is `docs/site/blog/x.md`), the same key as the page-meta
+  plugin's `blogSources`.
+
 ### The blog editor (`/blog/editor`)
 
 The editor writes a post in the browser, with a **live preview on the right**
@@ -275,7 +384,8 @@ The editor writes a post in the browser, with a **live preview on the right**
 
 - **Open** an existing post (its source is embedded in the build, so it is the
   version of the deployed site) or **start a new one** from a template with the
-  front matter above. A toggle switches between `md` and `mdx`.
+  front matter above. A toggle switches between `md` and `mdx`. A post's
+  **Edit** button opens the editor on that post directly (`?post=`).
 - The preview compiles the text with `@mdx-js/mdx` in the browser (loaded only
   when the editor opens) and renders it with the site's own MDX components, so
   it looks like the published post. Compile errors are shown in the preview
@@ -289,8 +399,9 @@ The editor writes a post in the browser, with a **live preview on the right**
   browser only) and can be reopened later.
 - **Download** saves the file, ready to add to `docs/site/blog/` in a pull
   request.
-- **Open pull request** appears when a GitHub token is set. It uses the GitHub
-  REST API from the browser:
+- **Open pull request** appears when a GitHub token is set (without one, the
+  editor shows the "Add a GitHub token in the account menu" prompt). It uses
+  the GitHub REST API from the browser:
   1. it reads the repository to see whether the token can push to it;
   2. with push access it creates a branch `blog/<slug>-<yyyymmddHHMMss>` from
      `main` in the repository; without it, it forks the repository (or reuses
@@ -299,7 +410,8 @@ The editor writes a post in the browser, with a **live preview on the right**
   3. it commits the post to `docs/site/blog/<file>` on that branch;
   4. it opens a pull request against `main` and shows its link.
 
-  The pull request is reviewed and merged like any other. The preview is a
+  The pull request is reviewed and merged like any other: an edit is
+  published, like a new post, only when it is merged. The preview is a
   convenience: only the build checks links, so read the pull request's Vercel
   preview before merging.
 
@@ -310,8 +422,9 @@ The editor writes a post in the browser, with a **live preview on the right**
 | GitHub username, name, avatar URL, profile URL | `localStorage` | `api.github.com`: the username, to read the public profile |
 | GitHub token (optional) | `localStorage`, this device only | `api.github.com` only, as the `Authorization` header |
 | Likes, comments, editor drafts | IndexedDB (or `localStorage`, or memory) | Nowhere (until a remote store is added) |
-| Page history from GitHub | `localStorage`, one hour per page | `api.github.com`: the page's file path, to read its commits |
+| Page history from GitHub | `localStorage`, one hour per page (people only; no emails) | `api.github.com`: the page's file path, to read its commits |
 | Blog post sent with **Open pull request** | Not stored by the site | `api.github.com`, as a commit and a pull request |
+| Post deleted with **Delete** | Not stored by the site | `api.github.com`: the post's path, as a deleting commit and a pull request |
 | Colour mode and other Docusaurus settings | `localStorage` | Nowhere |
 
 Requests to `api.github.com`, and the avatar images (served by GitHub), go

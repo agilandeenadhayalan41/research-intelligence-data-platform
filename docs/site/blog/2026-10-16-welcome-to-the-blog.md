@@ -30,8 +30,8 @@ identifiers or other private details in a post.
 
 ## Write a post in the editor
 
-The [blog editor](/blog/editor) (**Write a post** in the footer) runs in your
-browser:
+The [blog editor](/blog/editor) (**Write a post** at the top of the blog, or in
+the footer) runs in your browser:
 
 1. Start a new post from the template, or open an existing post.
 2. Choose the format: `md` (Markdown, like the docs) or `mdx` (Markdown with
@@ -69,6 +69,14 @@ date: 2026-10-16
 The text above the `<!-- truncate -->` line is the excerpt on the blog list
 page. In an `.mdx` post the marker is `{/* truncate */}`. Then open a pull
 request against `main`.
+
+## Edit or delete a post
+
+Each post has **Edit** and **Delete** buttons next to its title. **Edit**
+opens the post in the editor; your changes go out as a pull request, like a
+new post. **Delete** opens a pull request that deletes the post's file (it
+needs the same GitHub token). Either way, nothing changes on the site until
+the pull request is merged.
 
 ## Likes and comments
 

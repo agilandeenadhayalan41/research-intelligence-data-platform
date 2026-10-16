@@ -15,9 +15,43 @@ export const GITHUB_API = 'https://api.github.com';
 export const LOGIN_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 
 export const COMMITS_CACHE_TTL_MS = 60 * 60 * 1000;
-export const COMMITS_CACHE_PREFIX = 'rid-github:v1:commits:';
+// v2: summaries leave out automation authors (v1 entries are ignored).
+export const COMMITS_CACHE_PREFIX = 'rid-github:v2:commits:';
+
+/** Folder of the blog posts in the repository, with a trailing slash. */
+export const BLOG_POSTS_DIR = 'docs/site/blog/';
+
+/**
+ * Commit authors left out of the page history by default: AI coding tools and
+ * bots. Matched against the GitHub login and the git author name, ignoring
+ * case, a trailing "[bot]", and spaces, hyphens, underscores and dots (so the
+ * git name "Cursor Agent" matches "cursoragent"). Set
+ * customFields.pageHistory.excludeAuthors in docusaurus.config.ts to replace it.
+ */
+export const DEFAULT_EXCLUDED_AUTHORS = Object.freeze([
+  'claude',
+  'claude-code',
+  'anthropic-claude',
+  'copilot',
+  'github-copilot',
+  'copilot-swe-agent',
+  'github-actions',
+  'dependabot',
+  'renovate',
+  'vercel',
+  'cursor',
+  'cursoragent',
+  'devin-ai-integration',
+  'codex',
+  'chatgpt-codex-connector',
+  'gemini-code-assist',
+  'sweep-ai',
+  'coderabbitai',
+]);
 
 const DEFAULT_PR_BODY = 'Blog post submitted from the docs site blog editor.';
+const DEFAULT_DELETE_PR_BODY = 'Deletes a blog post. Submitted from the docs site blog.';
+const PR_TITLE_MAX_LENGTH = 200;
 const READ_TIMEOUT_MS = 15000;
 const SLUG_MAX_LENGTH = 60;
 const OWNER_OR_REPO = /^[A-Za-z0-9_.-]{1,100}$/;
@@ -58,9 +92,31 @@ const SHA_PATTERN = /^[0-9a-f]{40}$/i;
  */
 
 /**
+ * Commits by automation authors (bots and AI tools, see isAutomationAuthor):
+ * counted, but never named.
+ *
+ * @typedef {object} AutomationSummary
+ * @property {number} commits
+ * @property {string | null} lastDate ISO date of the most recent one.
+ * @property {string | null} lastSha
+ * @property {string | null} htmlUrl Commit URL of the most recent one.
+ */
+
+/**
  * @typedef {object} CommitSummary
- * @property {Contributor[]} contributors Most commits first; ties: most recent first.
- * @property {LastChange | null} last The most recent commit.
+ * @property {Contributor[]} contributors People only. Most commits first; ties: most recent first.
+ * @property {LastChange | null} last The most recent commit by a person.
+ * @property {AutomationSummary} [automation] Present only when automation authors changed the file.
+ */
+
+/**
+ * The parts of a commit author that isAutomationAuthor looks at.
+ *
+ * @typedef {object} CommitAuthor
+ * @property {string | null} [login] GitHub login.
+ * @property {string | null} [name] Git author name.
+ * @property {string | null} [email] Git author email: only checked, never kept or shown.
+ * @property {string | null} [type] GitHub account type: 'User', 'Bot', ...
  */
 
 /**
@@ -101,7 +157,7 @@ const SHA_PATTERN = /^[0-9a-f]{40}$/i;
  * @property {boolean} forked True when the post went through a fork.
  */
 
-/** Error thrown by openBlogPullRequest. The message never contains the token. */
+/** Error thrown by openBlogPullRequest and openBlogDeletePullRequest. The message never contains the token. */
 export class GitHubError extends Error {
   /**
    * @param {string} message
@@ -158,20 +214,103 @@ export function repoPathForDoc(source, {docsDir = 'docs'} = {}) {
 }
 
 /**
+ * The exclude list as isAutomationAuthor compares it: each entry lower case,
+ * without a trailing "[bot]", spaces, hyphens, underscores or dots; empty and
+ * non-string entries dropped, duplicates removed. Anything but an array gives
+ * the default list (DEFAULT_EXCLUDED_AUTHORS); an empty array excludes no
+ * names (the bot rules still apply).
+ *
+ * @param {unknown} [list]
+ * @returns {string[]}
+ */
+export function normalizeExcludeList(list) {
+  const source = Array.isArray(list) ? list : DEFAULT_EXCLUDED_AUTHORS;
+  /** @type {string[]} */
+  const result = [];
+  for (const entry of source) {
+    const key = typeof entry === 'string' ? authorKey(entry) : '';
+    if (key && !result.includes(key)) {
+      result.push(key);
+    }
+  }
+  return result;
+}
+
+/**
+ * True when a commit author is automation (a bot or an AI tool), not a
+ * person. Any one of these is enough:
+ * - the GitHub account type is 'Bot';
+ * - the login or the name ends with "[bot]";
+ * - the login or the name is in `excludeList` (see normalizeExcludeList for
+ *   how they are compared);
+ * - the email ends with "@anthropic.com" (noreply@anthropic.com included) or
+ *   is a "<name>[bot]@users.noreply.github.com" address.
+ * The email is only checked, never returned.
+ *
+ * @param {CommitAuthor | null | undefined} author
+ * @param {unknown} [excludeList] Default DEFAULT_EXCLUDED_AUTHORS.
+ * @returns {boolean}
+ */
+export function isAutomationAuthor(author, excludeList = DEFAULT_EXCLUDED_AUTHORS) {
+  if (!author || typeof author !== 'object') {
+    return false;
+  }
+  if (author.type === 'Bot') {
+    return true;
+  }
+  const excluded = normalizeExcludeList(excludeList);
+  for (const value of [author.login, author.name]) {
+    if (typeof value !== 'string' || !value.trim()) {
+      continue;
+    }
+    if (BOT_SUFFIX.test(value.trim())) {
+      return true;
+    }
+    const key = authorKey(value);
+    if (key && excluded.includes(key)) {
+      return true;
+    }
+  }
+  const email = typeof author.email === 'string' ? author.email.trim().toLowerCase() : '';
+  return email !== '' && (email.endsWith('@anthropic.com') || BOT_NOREPLY_EMAIL.test(email));
+}
+
+const BOT_SUFFIX = /\[bot\]$/i;
+const BOT_NOREPLY_EMAIL = /\[bot\]@users\.noreply\.github\.com$/;
+
+/**
+ * @param {string} value
+ * @returns {string}
+ */
+function authorKey(value) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(BOT_SUFFIX, '')
+    .replace(/[\s._-]+/g, '');
+}
+
+/**
  * Summarises `GET /repos/{owner}/{repo}/commits?path=...` output.
  * Contributors are grouped by GitHub login (case-insensitive), or by git
- * author name when a commit is not linked to a GitHub user.
+ * author name when a commit is not linked to a GitHub user. Commits by
+ * automation authors (isAutomationAuthor with `excludeAuthors`) are left out
+ * of the contributors and of `last`; they are only counted, in `automation`.
  *
  * @param {unknown} commitsJson
+ * @param {{excludeAuthors?: unknown}} [options] excludeAuthors: default DEFAULT_EXCLUDED_AUTHORS.
  * @returns {CommitSummary}
  */
-export function summarizeCommits(commitsJson) {
+export function summarizeCommits(commitsJson, {excludeAuthors} = {}) {
   const list = Array.isArray(commitsJson) ? commitsJson : [];
+  const excluded = normalizeExcludeList(excludeAuthors);
   /** @type {Map<string, Contributor & {time: number, order: number}>} */
   const byKey = new Map();
   /** @type {LastChange | null} */
   let last = null;
   let lastTime = -Infinity;
+  /** @type {(AutomationSummary & {time: number}) | null} */
+  let automation = null;
 
   list.forEach((item) => {
     if (!item || typeof item !== 'object') {
@@ -196,6 +335,30 @@ export function summarizeCommits(commitsJson) {
 
     if (!sha && !date && !login && !nonEmpty(gitAuthor.name)) {
       return; // not a commit object
+    }
+
+    if (
+      isAutomationAuthor(
+        {
+          login,
+          name: typeof gitAuthor.name === 'string' ? gitAuthor.name : null,
+          email: typeof gitAuthor.email === 'string' ? gitAuthor.email : null,
+          type: user && typeof user.type === 'string' ? user.type : null,
+        },
+        excluded,
+      )
+    ) {
+      if (automation === null) {
+        automation = {commits: 0, lastDate: null, lastSha: null, htmlUrl: null, time: -Infinity};
+      }
+      automation.commits += 1;
+      if (automation.commits === 1 || time > automation.time) {
+        automation.time = time;
+        automation.lastDate = date;
+        automation.lastSha = sha || null;
+        automation.htmlUrl = commitUrl;
+      }
+      return;
     }
 
     const key = login ? `login:${login.toLowerCase()}` : `name:${name.toLowerCase()}`;
@@ -240,7 +403,30 @@ export function summarizeCommits(commitsJson) {
         b.commits - a.commits || compareTimesDesc(a.time, b.time) || a.order - b.order,
     )
     .map(({time, order, ...contributor}) => contributor);
-  return {contributors, last};
+  if (automation === null) {
+    return {contributors, last};
+  }
+  const {time, ...automationSummary} = /** @type {AutomationSummary & {time: number}} */ (automation);
+  return {contributors, last, automation: automationSummary};
+}
+
+/**
+ * Whether page history from GitHub (a summarizeCommits result) replaces the
+ * build-time history. It does when GitHub names people. When it holds only
+ * automation commits, it does only if the build names nobody either: GitHub's
+ * `commits?path=` does not follow renames and returns at most one page, so
+ * "automation only" from GitHub must not hide people that the build's
+ * `git log --follow` found (a page written by people, then moved by a bot).
+ *
+ * @param {{contributors: readonly unknown[], automation?: {commits: number} | null}} summary
+ * @param {{peopleCount: number, hasLast: boolean}} build
+ * @returns {boolean}
+ */
+export function preferGitHubHistory(summary, build) {
+  if (summary.contributors.length > 0) {
+    return true;
+  }
+  return (summary.automation?.commits ?? 0) > 0 && build.peopleCount === 0 && !build.hasLast;
 }
 
 /**
@@ -395,25 +581,29 @@ export function commitsCacheKey(owner, repo, path) {
  * @property {FetchLike} [fetchImpl]
  * @property {CacheLike | null} [cache] Web Storage-like cache (1 hour per path); none: no caching.
  * @property {() => Date | number} [now]
+ * @property {unknown} [excludeAuthors] Automation authors to leave out (see summarizeCommits); default DEFAULT_EXCLUDED_AUTHORS.
  */
 
 /**
  * Who changed a file: `GET /repos/{owner}/{repo}/commits?path=<path>&per_page=100`,
  * summarised with summarizeCommits and cached for an hour. Only successful
- * answers are cached.
+ * answers are cached. A cached summary is used only with the same exclude
+ * list it was made with.
  *
  * @param {FetchPageCommitsOptions} options
  * @returns {Promise<PageCommitsResult>}
  */
-export async function fetchPageCommits({owner, repo, path, token, fetchImpl, cache, now}) {
+export async function fetchPageCommits({owner, repo, path, token, fetchImpl, cache, now, excludeAuthors}) {
   const filePath = typeof path === 'string' ? path.trim().replace(/^\/+/, '') : '';
   if (!nonEmpty(owner) || !nonEmpty(repo) || !filePath) {
     return failure('invalid request', 'owner, repo and path are required.');
   }
   const clock = () => toMillis(now ? now() : Date.now());
   const key = commitsCacheKey(owner, repo, filePath);
+  const excluded = normalizeExcludeList(excludeAuthors);
+  const exclude = excluded.join(',');
 
-  const cached = readCache(cache, key, clock());
+  const cached = readCache(cache, key, clock(), exclude);
   if (cached) {
     return {ok: true, data: cached.data, cached: true, fetchedAt: cached.fetchedAt};
   }
@@ -436,9 +626,9 @@ export async function fetchPageCommits({owner, repo, path, token, fetchImpl, cac
   if (!Array.isArray(json)) {
     return failure('invalid response', 'GitHub returned an unexpected answer.', res.status);
   }
-  const data = summarizeCommits(json);
+  const data = summarizeCommits(json, {excludeAuthors: excluded});
   const fetchedAt = clock();
-  writeCache(cache, key, {v: 1, fetchedAt, data});
+  writeCache(cache, key, {v: 2, fetchedAt, exclude, data});
   return {ok: true, data, cached: false, fetchedAt};
 }
 
@@ -490,7 +680,12 @@ export async function fetchUser(login, {fetchImpl, token} = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Pull request flow (throws GitHubError)
+// Pull request flows (throw GitHubError)
+//
+// Both flows share the same steps (internal helpers below): read the
+// repository and the base branch, make a work branch (in the repository with
+// push access, else on the visitor's fork), commit one change to it, and open
+// the pull request in the upstream repository.
 
 /**
  * @typedef {object} OpenBlogPullRequestOptions
@@ -542,10 +737,195 @@ export async function openBlogPullRequest({
   forkPollAttempts = 10,
   forkPollIntervalMs = 2000,
 }) {
+  const auth = checkPullRequestInput({token, owner, repo, base});
+  if (!isPostPath(path)) {
+    throw new GitHubError(
+      'The post path must be a relative repository path ending in .md or .mdx, without "..".',
+    );
+  }
+  if (typeof content !== 'string') {
+    throw new GitHubError('The post content must be text.');
+  }
+  const flow = startFlow({owner, repo, base, auth, fetchImpl, sleep, forkPollAttempts, forkPollIntervalMs});
+  const fileName = baseNameOf(path);
+  const branch = workBranchName('blog/', fileName, now);
+
+  // 1-2. Push permission and the commit at the tip of the base branch.
+  const {canPush, baseSha} = await readBase(flow);
+
+  // 3. A branch to commit to: in the repository, or on the visitor's fork.
+  const {target, head, forked} = await createWorkBranch(flow, {canPush, baseSha, branch});
+
+  // 4. Existing file on the branch?
+  const contentsUrl = `${target}/contents/${encodePath(path)}`;
+  const existing = await flow.call('GET', `${contentsUrl}?ref=${encodeURIComponent(branch)}`, {
+    step: 'Checking for an existing file',
+    allow: [404],
+  });
+  /** @type {string | undefined} */
+  let existingSha;
+  if (existing.status !== 404) {
+    existingSha = fileShaOf(existing.json, path, 'Checking for an existing file') ?? undefined;
+  }
+
+  // 5. Commit the post.
+  const commitMessage = nonEmpty(message)
+    ? message.trim()
+    : `${existingSha ? 'Update' : 'Add'} blog post ${fileName}`;
+  await flow.call('PUT', contentsUrl, {
+    step: 'Saving the post',
+    body: {
+      message: commitMessage,
+      content: utf8ToBase64(content),
+      branch,
+      ...(existingSha ? {sha: existingSha} : {}),
+    },
+  });
+
+  // 6. Open the pull request in the upstream repository.
+  const {url, number} = await openPull(flow, {
+    title: nonEmpty(title) ? title.trim() : commitMessage,
+    head,
+    forked,
+    body: typeof body === 'string' ? body : DEFAULT_PR_BODY,
+  });
+  return {url, number, branch, head, forked};
+}
+
+/**
+ * @typedef {object} OpenBlogDeletePullRequestOptions
+ * @property {string} owner Upstream repository owner.
+ * @property {string} repo Upstream repository name.
+ * @property {string} [base] Branch to merge into (default 'main').
+ * @property {string} token GitHub token of the visitor.
+ * @property {string} path Repository path of the post: a .md or .mdx file under docs/site/blog/.
+ * @property {string} [title] Title of the post, for the pull request title (default: the file name).
+ * @property {string} [body] Pull request description.
+ * @property {FetchLike} [fetchImpl]
+ * @property {() => Date | number} [now] Clock for the branch name.
+ * @property {(ms: number) => Promise<void>} [sleep] Wait between fork polls (for tests).
+ * @property {number} [forkPollAttempts] GET attempts while the fork is being created (default 10).
+ * @property {number} [forkPollIntervalMs] Wait between attempts (default 2000).
+ */
+
+/**
+ * Opens a pull request that deletes a blog post. The post stays on the site
+ * until the pull request is merged.
+ *
+ * Only paths under docs/site/blog/ ending in .md or .mdx are accepted; any
+ * other path throws before a request is made.
+ *
+ * 1. GET the repository: can the token's user push?
+ * 2. GET the sha of `base`.
+ * 3. GET the post at that commit, for its blob sha (404: 'post not found on <base>').
+ * 4a. Push access: create branch `blog/delete-<slug>-<yyyymmddHHMMss>` in the repository.
+ * 4b. Otherwise: fork, wait for the fork, sync it and create the branch on it
+ *     (as in openBlogPullRequest).
+ * 5. DELETE the file on the branch, with its sha.
+ * 6. POST the pull request, titled 'Delete blog post: <title>'.
+ *
+ * The post is looked up before the branch is made, so a missing post leaves
+ * no branch behind.
+ *
+ * @param {OpenBlogDeletePullRequestOptions} options
+ * @returns {Promise<PullRequestResult>}
+ */
+export async function openBlogDeletePullRequest({
+  owner,
+  repo,
+  base = 'main',
+  token,
+  path,
+  title,
+  body,
+  fetchImpl,
+  now,
+  sleep,
+  forkPollAttempts = 10,
+  forkPollIntervalMs = 2000,
+}) {
+  const auth = checkPullRequestInput({token, owner, repo, base});
+  if (!isBlogPostPath(path)) {
+    throw new GitHubError(
+      `Only blog posts can be deleted here: the path must be a file under ${BLOG_POSTS_DIR} ending in .md or .mdx, without "..".`,
+    );
+  }
+  const flow = startFlow({owner, repo, base, auth, fetchImpl, sleep, forkPollAttempts, forkPollIntervalMs});
+  const fileName = baseNameOf(path);
+  const branch = workBranchName('blog/delete-', fileName, now);
+  const contentsPath = `/contents/${encodePath(path)}`;
+
+  // 1-2. Push permission and the commit at the tip of the base branch.
+  const {canPush, baseSha} = await readBase(flow);
+
+  // 3. The post at that commit: the branch is made from it, so the sha matches.
+  const step = 'Finding the post';
+  const file = await flow.call('GET', `${flow.upstream}${contentsPath}?ref=${encodeURIComponent(baseSha)}`, {
+    step,
+    notFound: `post not found on ${base} (${path}). It may have been deleted or renamed already.`,
+  });
+  const fileSha = fileShaOf(file.json, path, step);
+  if (!fileSha) {
+    throw new GitHubError(`GitHub returned no version of ${path} on ${base}.`, {step});
+  }
+
+  // 4. A branch for the change: in the repository, or on the visitor's fork.
+  const {target, head, forked} = await createWorkBranch(flow, {canPush, baseSha, branch});
+
+  // 5. Delete the post on the branch.
+  await flow.call('DELETE', `${target}${contentsPath}`, {
+    step: 'Deleting the post on the branch',
+    body: {message: `Delete blog post ${fileName}`, sha: fileSha, branch},
+  });
+
+  // 6. Open the pull request in the upstream repository.
+  const postTitle = cleanTitle(title) || fileName;
+  const {url, number} = await openPull(flow, {
+    title: `Delete blog post: ${postTitle}`,
+    head,
+    forked,
+    body: typeof body === 'string' ? body : `${DEFAULT_DELETE_PR_BODY}\n\nFile: \`${path}\``,
+  });
+  return {url, number, branch, head, forked};
+}
+
+/**
+ * True for a repository path of a blog post: a relative path under
+ * docs/site/blog/ ending in .md or .mdx, with no empty, "." or ".." segment.
+ *
+ * @param {unknown} value
+ * @returns {value is string}
+ */
+export function isBlogPostPath(value) {
+  return (
+    isPostPath(value) && value.startsWith(BLOG_POSTS_DIR) && value.length > BLOG_POSTS_DIR.length
+  );
+}
+
+/**
+ * @typedef {object} Flow
+ * @property {(method: string, apiPath: string, options: CallOptions) => Promise<{status: number, json: any}>} call
+ * @property {(ms: number) => Promise<void>} wait
+ * @property {string} owner
+ * @property {string} repo
+ * @property {string} base
+ * @property {string} upstream API path of the upstream repository, '/repos/<owner>/<repo>'.
+ * @property {number} forkPollAttempts
+ * @property {number} forkPollIntervalMs
+ */
+
+/**
+ * Checks the token, the repository and the base branch. Throws GitHubError
+ * before any request.
+ *
+ * @param {{token: unknown, owner: unknown, repo: unknown, base: unknown}} input
+ * @returns {string} The token, trimmed.
+ */
+function checkPullRequestInput({token, owner, repo, base}) {
   const auth = cleanToken(token);
   if (auth === null) {
     throw new GitHubError(
-      'A GitHub token is required to open a pull request. Add one in the GitHub menu of the navigation bar.',
+      'A GitHub token is required to open a pull request. Add one in the account menu of the navigation bar.',
     );
   }
   if (auth === false) {
@@ -559,34 +939,43 @@ export async function openBlogPullRequest({
   if (!isBranchName(base)) {
     throw new GitHubError(`"${String(base)}" is not a valid branch name.`);
   }
-  if (!isPostPath(path)) {
-    throw new GitHubError(
-      'The post path must be a relative repository path ending in .md or .mdx, without "..".',
-    );
-  }
-  if (typeof content !== 'string') {
-    throw new GitHubError('The post content must be text.');
-  }
+  return auth;
+}
+
+/**
+ * @param {{owner: string, repo: string, base: string, auth: string, fetchImpl?: FetchLike, sleep?: (ms: number) => Promise<void>, forkPollAttempts: number, forkPollIntervalMs: number}} options
+ * @returns {Flow}
+ */
+function startFlow({owner, repo, base, auth, fetchImpl, sleep, forkPollAttempts, forkPollIntervalMs}) {
   const doFetch = fetchImpl ?? defaultFetch();
   if (!doFetch) {
     throw new GitHubError('This browser cannot make network requests (fetch is not available).');
   }
-  const wait = sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const call = makeCaller(doFetch, auth);
+  return {
+    call: makeCaller(doFetch, auth),
+    wait: sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
+    owner,
+    repo,
+    base,
+    upstream: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+    forkPollAttempts: Number.isFinite(forkPollAttempts) ? Math.max(1, Math.floor(forkPollAttempts)) : 10,
+    forkPollIntervalMs,
+  };
+}
 
-  const fileName = /** @type {string} */ (path.split('/').pop());
-  const slug = slugify(fileName.replace(/\.mdx?$/i, '')) || 'post';
-  const branch = `blog/${slug}-${compactTimestamp(toDate(now ? now() : new Date()))}`;
-  const upstream = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-
-  // 1. Repository and push permission.
+/**
+ * Steps 1-2: push permission, and the commit at the tip of the base branch.
+ *
+ * @param {Flow} flow
+ * @returns {Promise<{canPush: boolean, baseSha: string}>}
+ */
+async function readBase({call, owner, repo, base, upstream}) {
   const repoInfo = await call('GET', upstream, {
     step: 'Reading the repository',
     notFound: `repository ${owner}/${repo} was not found, or the token cannot see it.`,
   });
   const canPush = Boolean(repoInfo.json?.permissions?.push);
 
-  // 2. Commit at the tip of the base branch.
   const baseRef = await call('GET', `${upstream}/git/ref/heads/${encodePath(base)}`, {
     step: `Reading branch "${base}"`,
     notFound: `branch "${base}" does not exist in ${owner}/${repo}.`,
@@ -597,111 +986,98 @@ export async function openBlogPullRequest({
       step: `Reading branch "${base}"`,
     });
   }
+  return {canPush, baseSha};
+}
 
-  // 3. A branch to commit to: in the repository, or on the visitor's fork.
-  let target = upstream;
-  let head = branch;
-  let forked = false;
+/**
+ * Step 3: the work branch, made from `baseSha`. With push access it is
+ * created in the repository; otherwise the repository is forked (or the fork
+ * reused), the fork's base branch is polled until GitHub has copied the git
+ * data (bounded), the fork is synced (best effort) and the branch is created
+ * on the fork.
+ *
+ * @param {Flow} flow
+ * @param {{canPush: boolean, baseSha: string, branch: string}} options
+ * @returns {Promise<{target: string, head: string, forked: boolean}>}
+ */
+async function createWorkBranch(flow, {canPush, baseSha, branch}) {
+  const {call, wait, base, upstream} = flow;
   if (canPush) {
     await call('POST', `${upstream}/git/refs`, {
       step: 'Creating the branch',
       body: {ref: `refs/heads/${branch}`, sha: baseSha},
     });
-  } else {
-    const fork = await call('POST', `${upstream}/forks`, {
+    return {target: upstream, head: branch, forked: false};
+  }
+
+  const fork = await call('POST', `${upstream}/forks`, {
+    step: 'Forking the repository',
+    body: {default_branch_only: true},
+  });
+  const forkOwner = fork.json?.owner?.login;
+  const forkName = fork.json?.name;
+  if (!OWNER_OR_REPO.test(String(forkOwner ?? '')) || !OWNER_OR_REPO.test(String(forkName ?? ''))) {
+    throw new GitHubError('GitHub did not say which fork it created.', {
       step: 'Forking the repository',
-      body: {default_branch_only: true},
     });
-    const forkOwner = fork.json?.owner?.login;
-    const forkName = fork.json?.name;
-    if (!OWNER_OR_REPO.test(String(forkOwner ?? '')) || !OWNER_OR_REPO.test(String(forkName ?? ''))) {
-      throw new GitHubError('GitHub did not say which fork it created.', {
-        step: 'Forking the repository',
-      });
-    }
-    target = `/repos/${encodeURIComponent(forkOwner)}/${encodeURIComponent(forkName)}`;
+  }
+  const target = `/repos/${encodeURIComponent(forkOwner)}/${encodeURIComponent(forkName)}`;
 
-    const attempts = Number.isFinite(forkPollAttempts) ? Math.max(1, Math.floor(forkPollAttempts)) : 10;
-    let ready = false;
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      // GitHub creates forks asynchronously: the fork's repository answers
-      // straight away, before its git data exists. Wait for the base branch
-      // on the fork instead (409 "Git Repository is empty" or 404 while the
-      // copy is still running).
-      const probe = await call('GET', `${target}/git/ref/heads/${encodePath(base)}`, {
-        step: 'Waiting for your fork',
-        allow: [404, 409],
-      });
-      if (probe.status !== 404 && probe.status !== 409) {
-        ready = true;
-        break;
-      }
-      if (attempt < attempts) {
-        await wait(forkPollIntervalMs);
-      }
-    }
-    if (!ready) {
-      throw new GitHubError(
-        `GitHub is still creating your fork ${forkOwner}/${forkName}. Wait a minute, then try again.`,
-        {step: 'Waiting for your fork'},
-      );
-    }
-
-    // Best effort: a fork whose base branch has diverged (409), cannot be
-    // merged (422) or cannot be synced by this token (403, e.g. upstream
-    // workflow changes) still gets a branch made from the upstream commit.
-    await call('POST', `${target}/merge-upstream`, {
-      step: 'Syncing your fork',
-      body: {branch: base},
-      allow: [403, 404, 409, 422],
+  let ready = false;
+  for (let attempt = 1; attempt <= flow.forkPollAttempts; attempt += 1) {
+    // GitHub creates forks asynchronously: the fork's repository answers
+    // straight away, before its git data exists. Wait for the base branch
+    // on the fork instead (409 "Git Repository is empty" or 404 while the
+    // copy is still running).
+    const probe = await call('GET', `${target}/git/ref/heads/${encodePath(base)}`, {
+      step: 'Waiting for your fork',
+      allow: [404, 409],
     });
-    await call('POST', `${target}/git/refs`, {
-      step: 'Creating the branch on your fork',
-      body: {ref: `refs/heads/${branch}`, sha: baseSha},
-    });
-    head = `${forkOwner}:${branch}`;
-    forked = true;
+    if (probe.status !== 404 && probe.status !== 409) {
+      ready = true;
+      break;
+    }
+    if (attempt < flow.forkPollAttempts) {
+      await wait(flow.forkPollIntervalMs);
+    }
+  }
+  if (!ready) {
+    throw new GitHubError(
+      `GitHub is still creating your fork ${forkOwner}/${forkName}. Wait a minute, then try again.`,
+      {step: 'Waiting for your fork'},
+    );
   }
 
-  // 4. Existing file on the branch?
-  const contentsUrl = `${target}/contents/${encodePath(path)}`;
-  const existing = await call('GET', `${contentsUrl}?ref=${encodeURIComponent(branch)}`, {
-    step: 'Checking for an existing file',
-    allow: [404],
+  // Best effort: a fork whose base branch has diverged (409), cannot be
+  // merged (422) or cannot be synced by this token (403, e.g. upstream
+  // workflow changes) still gets a branch made from the upstream commit.
+  await call('POST', `${target}/merge-upstream`, {
+    step: 'Syncing your fork',
+    body: {branch: base},
+    allow: [403, 404, 409, 422],
   });
-  /** @type {string | undefined} */
-  let existingSha;
-  if (existing.status !== 404) {
-    if (Array.isArray(existing.json) || existing.json?.type !== 'file') {
-      throw new GitHubError(`${path} is a folder in the repository, not a file.`, {
-        step: 'Checking for an existing file',
-      });
-    }
-    existingSha = typeof existing.json.sha === 'string' ? existing.json.sha : undefined;
-  }
-
-  // 5. Commit the post.
-  const commitMessage = nonEmpty(message)
-    ? message.trim()
-    : `${existingSha ? 'Update' : 'Add'} blog post ${fileName}`;
-  await call('PUT', contentsUrl, {
-    step: 'Saving the post',
-    body: {
-      message: commitMessage,
-      content: utf8ToBase64(content),
-      branch,
-      ...(existingSha ? {sha: existingSha} : {}),
-    },
+  await call('POST', `${target}/git/refs`, {
+    step: 'Creating the branch on your fork',
+    body: {ref: `refs/heads/${branch}`, sha: baseSha},
   });
+  return {target, head: `${forkOwner}:${branch}`, forked: true};
+}
 
-  // 6. Open the pull request in the upstream repository.
+/**
+ * Last step: the pull request in the upstream repository.
+ *
+ * @param {Flow} flow
+ * @param {{title: string, head: string, forked: boolean, body: string}} options
+ * @returns {Promise<{url: string, number: number}>}
+ */
+async function openPull({call, base, upstream}, {title, head, forked, body}) {
   const pull = await call('POST', `${upstream}/pulls`, {
     step: 'Opening the pull request',
     body: {
-      title: nonEmpty(title) ? title.trim() : commitMessage,
+      title,
       head,
       base,
-      body: typeof body === 'string' ? body : DEFAULT_PR_BODY,
+      body,
       ...(forked ? {maintainer_can_modify: true} : {}),
     },
   });
@@ -712,7 +1088,56 @@ export async function openBlogPullRequest({
       step: 'Opening the pull request',
     });
   }
-  return {url, number, branch, head, forked};
+  return {url, number};
+}
+
+/**
+ * The blob sha from a contents API answer for a file. Throws when the path is
+ * a folder; null when GitHub sent no sha.
+ *
+ * @param {any} json
+ * @param {string} path
+ * @param {string} step
+ * @returns {string | null}
+ */
+function fileShaOf(json, path, step) {
+  if (Array.isArray(json) || json?.type !== 'file') {
+    throw new GitHubError(`${path} is a folder in the repository, not a file.`, {step});
+  }
+  return nonEmpty(json.sha) ? json.sha.trim() : null;
+}
+
+/**
+ * `<prefix><slug>-<yyyymmddHHMMss>`, the slug from the file name ('post' when
+ * it has no usable characters), the time in UTC.
+ *
+ * @param {string} prefix
+ * @param {string} fileName
+ * @param {(() => Date | number) | undefined} now
+ * @returns {string}
+ */
+function workBranchName(prefix, fileName, now) {
+  const slug = slugify(fileName.replace(/\.mdx?$/i, '')) || 'post';
+  return `${prefix}${slug}-${compactTimestamp(toDate(now ? now() : new Date()))}`;
+}
+
+/**
+ * @param {string} path
+ * @returns {string}
+ */
+function baseNameOf(path) {
+  return /** @type {string} */ (path.split('/').pop());
+}
+
+/**
+ * A title on one line, at most PR_TITLE_MAX_LENGTH characters; '' when empty.
+ *
+ * @param {unknown} title
+ * @returns {string}
+ */
+function cleanTitle(title) {
+  const value = typeof title === 'string' ? title.replace(/\s+/g, ' ').trim() : '';
+  return value.length > PR_TITLE_MAX_LENGTH ? `${value.slice(0, PR_TITLE_MAX_LENGTH - 1).trimEnd()}…` : value;
 }
 
 // ---------------------------------------------------------------------------
@@ -816,7 +1241,7 @@ function readFailure(res, json, notFoundMessage, token) {
     };
   }
   if (res.status === 401) {
-    return failure('bad credentials', 'GitHub rejected the token. Check it, or remove it, in the GitHub menu.', 401);
+    return failure('bad credentials', 'GitHub rejected the token. Check it, or remove it, in the account menu.', 401);
   }
   if (res.status === 404) {
     return failure('not found', redact(notFoundMessage, token), 404);
@@ -980,9 +1405,10 @@ function redact(text, token) {
  * @param {CacheLike | null | undefined} cache
  * @param {string} key
  * @param {number} nowMs
+ * @param {string} exclude The normalised exclude list, comma-separated.
  * @returns {{data: CommitSummary, fetchedAt: number} | null}
  */
-function readCache(cache, key, nowMs) {
+function readCache(cache, key, nowMs, exclude) {
   if (!cache || typeof cache.getItem !== 'function') {
     return null;
   }
@@ -998,10 +1424,16 @@ function readCache(cache, key, nowMs) {
       typeof fetchedAt === 'number' &&
       fetchedAt <= nowMs &&
       nowMs - fetchedAt < COMMITS_CACHE_TTL_MS;
-    if (!fresh || !data || !Array.isArray(data.contributors)) {
+    if (!fresh || entry.exclude !== exclude || !data || !Array.isArray(data.contributors)) {
       return null;
     }
-    return {data: {contributors: data.contributors, last: data.last ?? null}, fetchedAt};
+    /** @type {CommitSummary} */
+    const summary = {contributors: data.contributors, last: data.last ?? null};
+    const automation = data.automation;
+    if (automation && typeof automation === 'object' && typeof automation.commits === 'number') {
+      summary.automation = automation;
+    }
+    return {data: summary, fetchedAt};
   } catch {
     return null;
   }

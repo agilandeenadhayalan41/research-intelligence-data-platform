@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {describe, test} from 'node:test';
+
+import {isAutomationAuthor} from '../src/lib/github.mjs';
 
 const require = createRequire(import.meta.url);
 const {summarizeGitLog, shallowBoundary} = require('../src/plugins/page-meta/index.js');
@@ -12,6 +14,8 @@ const {summarizeGitLog, shallowBoundary} = require('../src/plugins/page-meta/ind
 const SEP = '\x1f';
 const sha = (digit) => digit.repeat(40);
 const line = (hash, name, date) => [hash, name, date].join(SEP);
+// The plugin's format: sha, name, date, email.
+const lineWithEmail = (hash, name, date, email) => [hash, name, date, email].join(SEP);
 
 describe('page-meta summarizeGitLog', () => {
   const log = [
@@ -121,5 +125,80 @@ describe('page-meta shallowBoundary', () => {
     } finally {
       rmSync(dir, {recursive: true, force: true});
     }
+  });
+});
+
+describe('page-meta summarizeGitLog without automation', () => {
+  // As the plugin calls it: isAutomationAuthor with the default list.
+  const options = {isExcluded: (author) => isAutomationAuthor(author)};
+  const log = [
+    lineWithEmail(sha('f'), 'Claude', '2026-10-16T12:00:00+00:00', 'noreply@anthropic.com'),
+    lineWithEmail(sha('e'), 'Helper', '2026-10-16T11:00:00+00:00', 'helper@anthropic.com'),
+    lineWithEmail(sha('d'), 'renovate[bot]', '2026-10-16T10:00:00+00:00', '29139614+renovate[bot]@users.noreply.github.com'),
+    lineWithEmail(sha('c'), 'Ada', '2026-10-15T10:00:00+00:00', 'ada@example.invalid'),
+    lineWithEmail(sha('b'), 'Cursor Agent', '2026-10-14T10:00:00+00:00', 'cursoragent@cursor.com'),
+    lineWithEmail(sha('a'), 'Grace', '2026-10-13T10:00:00+00:00', 'grace@example.invalid'),
+  ].join('\n');
+
+  test('people only: authors, count and last change; automation is counted without names', () => {
+    const summary = summarizeGitLog(log, new Set(), options);
+    assert.equal(summary.lastAuthor, 'Ada');
+    assert.equal(summary.lastDate, '2026-10-15T10:00:00.000Z');
+    assert.equal(summary.lastSha, sha('c'));
+    assert.equal(summary.commits, 2);
+    assert.deepEqual(
+      summary.authors.map(({name, commits}) => [name, commits]),
+      [
+        ['Ada', 1],
+        ['Grace', 1],
+      ],
+    );
+    assert.deepEqual(summary.automation, {commits: 4, lastDate: '2026-10-16T12:00:00.000Z', lastSha: sha('f')});
+    const text = JSON.stringify(summary);
+    for (const hidden of ['Claude', 'Helper', 'renovate', 'Cursor', '@', 'example.invalid']) {
+      assert.ok(!text.includes(hidden), `${hidden} must not appear`);
+    }
+  });
+
+  test('a page changed only by automation: no author, no count, the date of the last change', () => {
+    const onlyAutomation = log
+      .split('\n')
+      .filter((entry) => !/Ada|Grace/.test(entry))
+      .join('\n');
+    assert.deepEqual(summarizeGitLog(onlyAutomation, new Set(), options), {
+      lastAuthor: null,
+      lastDate: null,
+      lastSha: null,
+      commits: 0,
+      authors: [],
+      automation: {commits: 4, lastDate: '2026-10-16T12:00:00.000Z', lastSha: sha('f')},
+    });
+  });
+
+  test('shallow clone: automation alone after the boundary is an unknown history', () => {
+    const shallow = [
+      lineWithEmail(sha('f'), 'Claude', '2026-10-16T12:00:00+00:00', 'noreply@anthropic.com'),
+      lineWithEmail(sha('a'), 'Boundary', '2026-10-13T10:00:00+00:00', 'someone@example.invalid'),
+    ].join('\n');
+    assert.deepEqual(summarizeGitLog(shallow, new Set([sha('a')]), options), {
+      lastAuthor: null,
+      lastDate: null,
+      lastSha: null,
+      commits: null,
+      authors: null,
+    });
+  });
+
+  test('without isExcluded every author counts, and three-field lines still parse', () => {
+    const summary = summarizeGitLog(log);
+    assert.equal(summary.commits, 6);
+    assert.equal(summary.lastAuthor, 'Claude');
+    assert.equal('automation' in summary, false);
+    assert.equal(summarizeGitLog(line(sha('a'), 'Ada', '2026-10-13T10:00:00+00:00'), new Set(), options).lastAuthor, 'Ada');
+  });
+
+  test('the plugin reads the author email from git (sha, name, date, email)', () => {
+    const source = readFileSync(new URL('../src/plugins/page-meta/index.js', import.meta.url), 'utf8');
+    assert.match(source, /'%H%x1f%an%x1f%aI%x1f%ae'/);
   });
 });

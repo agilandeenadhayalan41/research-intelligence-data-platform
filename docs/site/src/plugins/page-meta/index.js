@@ -12,9 +12,10 @@
 //     pages: {
 //       'docs/architecture/roadmap.md': {
 //         readingMinutes, words,          // null when the file cannot be read
-//         lastAuthor, lastDate, lastSha,  // null when git has no answer
-//         commits,                        // number of commits; null when git failed
+//         lastAuthor, lastDate, lastSha,  // latest commit by a person; null when git has no answer
+//         commits,                        // commits by people; null when git failed
 //         authors: [{name, commits, lastDate, lastSha}] | null,
+//         automation?: {commits, lastDate, lastSha}, // only when bots or AI tools changed the file
 //       },
 //     },
 //     blogSources: [{repoPath, file, title, format, content}],
@@ -23,6 +24,13 @@
 // Keys are repository paths, the same as repoPathForDoc(metadata.source) in
 // src/lib/github.mjs gives in the browser. blogSources embeds the raw source of
 // each blog post for the editor at /blog/editor.
+//
+// Only people are credited: commits by automation authors (bots and AI tools,
+// isAutomationAuthor in src/lib/github.mjs with
+// customFields.pageHistory.excludeAuthors) are left out of the authors, the
+// last change and the commit count, and only counted in `automation`, without
+// a name. The author email is read from git for that check only; it is never
+// published.
 //
 // Git never fails the build: any error (no git, not a repository, a timeout)
 // leaves the git fields null. In a shallow clone (Vercel builds from one) the
@@ -45,6 +53,9 @@ const MARKDOWN_FILE = /\.mdx?$/i;
 const GIT_TIMEOUT_MS = 15000;
 const GIT_MAX_BUFFER = 16 * 1024 * 1024;
 const FIELD_SEPARATOR = '\x1f';
+// sha, author name, author date, author email. The email comes last so that
+// three-field lines (no email) still parse.
+const GIT_LOG_FORMAT = '%H%x1f%an%x1f%aI%x1f%ae';
 const SHA = /^[0-9a-f]{40}$/i;
 
 /**
@@ -56,14 +67,29 @@ const SHA = /^[0-9a-f]{40}$/i;
  */
 
 /**
+ * Commits by automation authors: counted, never named.
+ *
+ * @typedef {object} AutomationSummary
+ * @property {number} commits
+ * @property {string | null} lastDate ISO date of the most recent one.
+ * @property {string | null} lastSha
+ */
+
+/**
  * @typedef {object} PageMeta
  * @property {number | null} readingMinutes
  * @property {number | null} words
- * @property {string | null} lastAuthor
+ * @property {string | null} lastAuthor Author of the latest commit by a person.
  * @property {string | null} lastDate ISO 8601.
  * @property {string | null} lastSha
- * @property {number | null} commits
- * @property {AuthorSummary[] | null} authors Most commits first; ties: most recent first.
+ * @property {number | null} commits Commits by people.
+ * @property {AuthorSummary[] | null} authors People only. Most commits first; ties: most recent first.
+ * @property {AutomationSummary} [automation] Only when automation authors changed the file.
+ */
+
+/**
+ * @typedef {object} GitLogOptions
+ * @property {(author: {name: string, email: string}) => boolean} [isExcluded] True for an automation author; default: nobody.
  */
 
 /**
@@ -88,6 +114,13 @@ const SHA = /^[0-9a-f]{40}$/i;
  */
 module.exports = async function pageMetaPlugin(context) {
   const {readingTime} = await import('../../lib/readingTime.mjs');
+  const {isAutomationAuthor, normalizeExcludeList} = await import('../../lib/github.mjs');
+  const customFields = /** @type {Record<string, any> | undefined} */ (context.siteConfig.customFields);
+  const excludeAuthors = normalizeExcludeList(customFields?.pageHistory?.excludeAuthors);
+  /** @type {GitLogOptions} */
+  const gitLogOptions = {
+    isExcluded: (author) => isAutomationAuthor(author, excludeAuthors),
+  };
 
   const siteDir = path.resolve(context.siteDir);
   // The site lives in <repo>/docs/site, as repoPathForDoc assumes.
@@ -108,13 +141,13 @@ module.exports = async function pageMetaPlugin(context) {
    * `git log --follow` for one file. Never throws.
    *
    * @param {string} repoPath
-   * @returns {Pick<PageMeta, 'lastAuthor' | 'lastDate' | 'lastSha' | 'commits' | 'authors'>}
+   * @returns {GitSummary}
    */
   function gitHistory(repoPath) {
     try {
       const output = execFileSync(
         'git',
-        ['log', '--follow', '--format=%H%x1f%an%x1f%aI', '--', repoPath],
+        ['log', '--follow', `--format=${GIT_LOG_FORMAT}`, '--', repoPath],
         {
           cwd: repoRoot,
           encoding: 'utf8',
@@ -124,7 +157,7 @@ module.exports = async function pageMetaPlugin(context) {
           windowsHide: true,
         },
       );
-      return summarizeGitLog(output, boundary);
+      return summarizeGitLog(output, boundary, gitLogOptions);
     } catch (error) {
       if (!gitWarningShown) {
         gitWarningShown = true;
@@ -275,27 +308,38 @@ function shallowBoundary(repoRoot) {
   }
 }
 
+/** @typedef {Pick<PageMeta, 'lastAuthor' | 'lastDate' | 'lastSha' | 'commits' | 'authors' | 'automation'>} GitSummary */
+
 /**
- * Parses `git log --format=%H%x1f%an%x1f%aI` output (newest first).
+ * Parses `git log --format=%H%x1f%an%x1f%aI%x1f%ae` output (newest first;
+ * the email field is optional).
  *
  * Commits in `boundary` (the grafted roots of a shallow clone, which seem to
- * add every file) are skipped. A file whose only commits are boundary commits
- * has an unknown history (null fields), not an empty one.
+ * add every file) are skipped. Commits whose author `isExcluded` (bots and AI
+ * tools) are left out of the authors, the last change and the count; they
+ * are only counted in `automation`, without a name or email.
+ *
+ * A file with no commit by a person but some boundary commits has an unknown
+ * history (null fields), not an empty one: people may have changed it before
+ * the boundary.
  *
  * @param {string} output
  * @param {Set<string>} [boundary]
- * @returns {Pick<PageMeta, 'lastAuthor' | 'lastDate' | 'lastSha' | 'commits' | 'authors'>}
+ * @param {GitLogOptions} [options]
+ * @returns {GitSummary}
  */
-function summarizeGitLog(output, boundary = new Set()) {
+function summarizeGitLog(output, boundary = new Set(), {isExcluded} = {}) {
   /** @type {Map<string, AuthorSummary & {time: number, order: number}>} */
   const byName = new Map();
   /** @type {{name: string, date: string | null, sha: string, time: number} | null} */
   let last = null;
+  /** @type {{commits: number, lastDate: string | null, lastSha: string | null, time: number} | null} */
+  let automation = null;
   let commits = 0;
   let skipped = 0;
 
   for (const line of output.split('\n')) {
-    const [sha = '', rawName = '', rawDate = ''] = line.trim().split(FIELD_SEPARATOR);
+    const [sha = '', rawName = '', rawDate = '', rawEmail = ''] = line.trim().split(FIELD_SEPARATOR);
     if (!SHA.test(sha)) {
       continue;
     }
@@ -303,11 +347,24 @@ function summarizeGitLog(output, boundary = new Set()) {
       skipped += 1;
       continue;
     }
-    commits += 1;
     const name = rawName.trim() || 'Unknown';
     const parsed = Date.parse(rawDate);
     const time = Number.isFinite(parsed) ? parsed : -Infinity;
     const date = Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+
+    if (isExcluded && isExcluded({name: rawName.trim(), email: rawEmail.trim()})) {
+      if (automation === null) {
+        automation = {commits: 0, lastDate: null, lastSha: null, time: -Infinity};
+      }
+      automation.commits += 1;
+      if (automation.commits === 1 || time > automation.time) {
+        automation.time = time;
+        automation.lastDate = date;
+        automation.lastSha = sha;
+      }
+      continue;
+    }
+    commits += 1;
 
     if (last === null || time > last.time) {
       last = {name, date, sha, time};
@@ -336,13 +393,19 @@ function summarizeGitLog(output, boundary = new Set()) {
     .sort((a, b) => b.commits - a.commits || compareDesc(a.time, b.time) || a.order - b.order)
     .map(({time, order, ...author}) => author);
 
-  return {
+  /** @type {GitSummary} */
+  const summary = {
     lastAuthor: last ? last.name : null,
     lastDate: last ? last.date : null,
     lastSha: last ? last.sha : null,
     commits,
     authors,
   };
+  if (automation !== null) {
+    const {time, ...counted} = automation;
+    summary.automation = counted;
+  }
+  return summary;
 }
 
 // Exposed for the unit tests (test/pageMeta.test.mjs).

@@ -3,6 +3,7 @@ import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 
 import repoLinks from './src/remark/repo-links.mjs';
+import {DEFAULT_EXCLUDED_AUTHORS} from './src/lib/github.mjs';
 
 // This file runs in Node.js at build time. Do not use browser APIs or JSX here.
 
@@ -78,6 +79,15 @@ const config: Config = {
     // permanently in each visitor's own browser (IndexedDB). A remote adapter
     // (an API plus a database) can be added later behind the same interface.
     communityStore: 'browser',
+    // Page history ("Updated ... by", contributors, commit counts) credits
+    // people only. Commits whose GitHub login or git author name is in this
+    // list are left out, like GitHub bot accounts, "[bot]" names and
+    // @anthropic.com or "[bot]@users.noreply.github.com" author emails
+    // (always left out). Case, a trailing "[bot]", spaces, hyphens,
+    // underscores and dots are ignored. Remove the key for the default list.
+    pageHistory: {
+      excludeAuthors: [...DEFAULT_EXCLUDED_AUTHORS],
+    },
   },
 
   i18n: {

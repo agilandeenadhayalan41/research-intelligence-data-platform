@@ -1,0 +1,15 @@
+/* The post header with Edit and Delete at the right of the title; on narrow
+   screens the buttons wrap under the header. */
+
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0 1rem;
+}
+
+.main {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
