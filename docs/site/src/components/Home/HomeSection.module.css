@@ -1,0 +1,77 @@
+.section {
+  max-width: var(--rid-home-max-width);
+  margin: 0 auto 3.5rem;
+}
+
+.header {
+  max-width: 48rem;
+  margin-bottom: 1.5rem;
+}
+
+.title {
+  margin: 0 0 0.5rem;
+  font-size: clamp(1.5rem, 1.25rem + 1vw, 1.875rem);
+  letter-spacing: -0.015em;
+}
+
+.intro {
+  margin: 0;
+  color: var(--ifm-color-emphasis-700);
+  font-size: 1.0625rem;
+}
+
+.body > :last-child {
+  margin-bottom: 0;
+}
+
+/* variant="steps": a Markdown ordered list becomes numbered tiles. */
+.steps .body ol {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 21rem), 1fr));
+  gap: 1rem;
+  margin: 0 0 1.25rem;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+.steps .body ol > li {
+  position: relative;
+  margin: 0;
+  padding: 1.125rem 1.25rem 1.25rem;
+  border: 1px solid var(--rid-border-color);
+  border-radius: var(--rid-radius-md);
+  background: var(--rid-surface-raised);
+  color: var(--ifm-color-emphasis-700);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  counter-increment: step;
+}
+
+.steps .body ol > li::before {
+  content: counter(step, decimal-leading-zero);
+  display: block;
+  margin-bottom: 0.375rem;
+  color: var(--rid-primary-strong);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+}
+
+.steps .body ol > li strong {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--ifm-heading-color);
+  font-size: 1rem;
+}
+
+/* variant="note": the body sits in a tinted panel. */
+.note .body {
+  max-width: 56rem;
+  padding: 1.5rem clamp(1.25rem, 3vw, 2rem);
+  border: 1px solid var(--rid-border-color);
+  border-left: 4px solid var(--ifm-color-primary);
+  border-radius: var(--rid-radius-md);
+  background: var(--rid-subtle-background);
+}

@@ -1,7 +1,22 @@
 /*
- * Site-wide styles. Infima (the classic theme's CSS framework) reads these
- * variables; see https://docusaurus.io/docs/styling-layout
+ * Site-wide styles. Infima (the classic theme's CSS framework) reads the
+ * --ifm-* variables; see https://docusaurus.io/docs/styling-layout
+ *
+ * With future.v4.useCssCascadeLayers the theme's CSS sits in cascade layers
+ * and this file does not, so a rule here wins over the theme whatever its
+ * specificity. Two consequences:
+ *   - a variable set on :root here also wins in dark mode, so a variable
+ *     whose dark value differs must be set again in the dark block below;
+ *   - keep selectors narrow, because they override Infima unconditionally.
+ *
+ * --rid-* variables are this site's own design tokens. The home page
+ * (src/components/Home) and the community components use them, so light and
+ * dark mode are defined once, here.
  */
+
+/* ------------------------------------------------------------------ */
+/* Tokens: light mode                                                  */
+/* ------------------------------------------------------------------ */
 
 :root {
   --ifm-color-primary: #1f5fa8;
@@ -13,7 +28,37 @@
   --ifm-color-primary-lightest: #317cd4;
   --ifm-code-font-size: 95%;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+
+  --ifm-global-radius: 0.5rem;
+  --ifm-navbar-shadow: none;
+  --ifm-table-head-background: var(--ifm-color-emphasis-100);
+  --ifm-table-border-color: var(--ifm-color-emphasis-300);
+  --ifm-blockquote-border-color: var(--ifm-color-primary);
+  --ifm-blockquote-padding-vertical: 0.75rem;
+
+  --rid-home-max-width: 76rem;
+  --rid-radius-sm: 0.5rem;
+  --rid-radius-md: 0.75rem;
+  --rid-radius-lg: 1.25rem;
+  --rid-border-color: #e3e8ef;
+  --rid-surface-raised: #ffffff;
+  --rid-subtle-background: #f5f8fc;
+  --rid-primary-soft: #e8f0fa;
+  --rid-primary-soft-strong: #b9d0ec;
+  --rid-primary-strong: #174a85;
+  --rid-on-primary: #ffffff;
+  --rid-shadow-sm: 0 1px 2px rgba(15, 30, 55, 0.05), 0 1px 3px rgba(15, 30, 55, 0.06);
+  --rid-shadow-md: 0 6px 16px rgba(15, 30, 55, 0.08), 0 2px 4px rgba(15, 30, 55, 0.05);
+  --rid-hero-background:
+    radial-gradient(ellipse at 100% 0%, rgba(49, 124, 212, 0.14), transparent 55%),
+    linear-gradient(180deg, #f3f7fc 0%, #ffffff 100%);
+  --rid-hero-grid-color: rgba(31, 95, 168, 0.07);
+  --rid-focus-color: var(--ifm-color-primary);
 }
+
+/* ------------------------------------------------------------------ */
+/* Tokens: dark mode                                                   */
+/* ------------------------------------------------------------------ */
 
 [data-theme='dark'] {
   --ifm-color-primary: #6fa8e8;
@@ -24,17 +69,257 @@
   --ifm-color-primary-lighter: #99c0ee;
   --ifm-color-primary-lightest: #c1d9f5;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+
+  /* A slightly blue-tinted dark instead of Infima's neutral grey. */
+  --ifm-background-color: #11161d;
+  --ifm-background-surface-color: #161d27;
+  --ifm-table-head-background: rgba(255, 255, 255, 0.05);
+  --ifm-table-border-color: #2c3644;
+
+  --rid-border-color: #263142;
+  --rid-surface-raised: #18202b;
+  --rid-subtle-background: #151d29;
+  --rid-primary-soft: rgba(111, 168, 232, 0.14);
+  --rid-primary-soft-strong: rgba(111, 168, 232, 0.35);
+  --rid-primary-strong: #a9cbf1;
+  --rid-on-primary: #11161d;
+  --rid-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --rid-shadow-md: 0 8px 20px rgba(0, 0, 0, 0.35), 0 2px 4px rgba(0, 0, 0, 0.25);
+  --rid-hero-background:
+    radial-gradient(ellipse at 100% 0%, rgba(111, 168, 232, 0.16), transparent 55%),
+    linear-gradient(180deg, #152031 0%, #11161d 100%);
+  --rid-hero-grid-color: rgba(111, 168, 232, 0.08);
 }
+
+/* ------------------------------------------------------------------ */
+/* Focus                                                               */
+/* ------------------------------------------------------------------ */
+
+/* A visible ring for keyboard users (:focus-visible) on every interactive
+   element. :where() keeps the specificity at zero, so a component can draw
+   its own ring. Containers focused by script (tabindex -1) are left out. */
+:where(
+    a,
+    button,
+    input,
+    select,
+    textarea,
+    summary,
+    [tabindex]:not([tabindex='-1'])
+  ):focus-visible {
+  outline: 2px solid var(--rid-focus-color);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Navbar                                                              */
+/* ------------------------------------------------------------------ */
+
+.navbar {
+  border-bottom: 1px solid var(--rid-border-color);
+}
+
+.navbar__title {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* Top-bar links get a soft pill on hover. The active state stays a colour
+   change only: "doc" navbar items count as active on every page of their
+   sidebar, so on a doc page several items are active at once. */
+.navbar__items .navbar__link {
+  border-radius: var(--rid-radius-sm);
+  font-weight: 500;
+}
+
+.navbar__items .navbar__link:hover {
+  background: var(--ifm-hover-overlay);
+}
+
+/* ------------------------------------------------------------------ */
+/* Footer                                                              */
+/* ------------------------------------------------------------------ */
+
+.footer--dark {
+  --ifm-footer-background-color: #0f2440;
+  --ifm-footer-link-color: #c7d5e8;
+  --ifm-footer-link-hover-color: #ffffff;
+  --ifm-footer-title-color: #ffffff;
+  --ifm-footer-color: #a9bbd3;
+}
+
+[data-theme='dark'] .footer--dark {
+  --ifm-footer-background-color: #0b1119;
+  border-top: 1px solid var(--rid-border-color);
+}
+
+.footer__title {
+  margin-bottom: 0.75rem;
+  font-size: 0.8125rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.footer__link-item {
+  line-height: 2;
+}
+
+.footer__link-item:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.footer__copyright {
+  font-size: 0.875rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Doc content                                                         */
+/* ------------------------------------------------------------------ */
+
+.markdown h1,
+.markdown h2 {
+  letter-spacing: -0.015em;
+}
+
+/* Blockquote callouts, such as "Target, not running infrastructure". */
+.markdown blockquote {
+  border-radius: 0 var(--ifm-global-radius) var(--ifm-global-radius) 0;
+  background-color: var(--rid-subtle-background);
+}
+
+.markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.menu__link--active:not(.menu__link--sublist) {
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ */
+/* Tables and diagrams                                                 */
+/* ------------------------------------------------------------------ */
 
 /* Wide status and evidence tables scroll inside the article, not the page. */
 .markdown table {
   display: block;
   max-width: 100%;
   overflow-x: auto;
+  font-size: 0.9375rem;
+}
+
+/* Long evidence cells read top-down; headers sit on the bottom line and,
+   as on GitHub, start-aligned unless the Markdown sets an alignment. */
+.markdown table th {
+  vertical-align: bottom;
+}
+
+.markdown table th:not([align]):not([style*='text-align']) {
+  text-align: start;
+}
+
+.markdown table td {
+  vertical-align: top;
 }
 
 /* Mermaid diagrams stay centred and never overflow the content column. */
 .docusaurus-mermaid-container {
   overflow-x: auto;
   text-align: center;
+}
+
+/* ------------------------------------------------------------------ */
+/* Utility classes                                                     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * GitHub avatars (navbar sign-in, page history, comments):
+ *   <img class="rid-avatar rid-avatar--sm" src="..." alt="" />
+ *   <span class="rid-avatar rid-avatar--sm" aria-hidden="true">ab</span>
+ *     initials, when there is no picture
+ *   <span class="rid-avatar-stack">...avatars or links to them...</span>
+ *     an overlapping row of avatars
+ * Sizes: --xs 20px, --sm 24px, --md 32px (default), --lg 40px, --xl 48px.
+ */
+.rid-avatar {
+  --rid-avatar-size: 2rem;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: var(--rid-avatar-size);
+  height: var(--rid-avatar-size);
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--rid-primary-soft);
+  box-shadow: 0 0 0 1px var(--rid-border-color);
+  color: var(--rid-primary-strong);
+  font-size: calc(var(--rid-avatar-size) * 0.4);
+  font-weight: 700;
+  line-height: 1;
+  object-fit: cover;
+  text-transform: uppercase;
+  vertical-align: middle;
+  user-select: none;
+}
+
+.rid-avatar--xs {
+  --rid-avatar-size: 1.25rem;
+}
+
+.rid-avatar--sm {
+  --rid-avatar-size: 1.5rem;
+}
+
+.rid-avatar--md {
+  --rid-avatar-size: 2rem;
+}
+
+.rid-avatar--lg {
+  --rid-avatar-size: 2.5rem;
+}
+
+.rid-avatar--xl {
+  --rid-avatar-size: 3rem;
+}
+
+.rid-avatar-stack {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 0.25rem;
+  padding-left: 0.375rem;
+}
+
+.rid-avatar-stack > * {
+  position: relative;
+  margin-left: -0.375rem;
+}
+
+.rid-avatar-stack .rid-avatar {
+  box-shadow: 0 0 0 2px var(--ifm-background-color);
+}
+
+.rid-avatar-stack > :hover,
+.rid-avatar-stack > :focus-visible {
+  z-index: 1;
+}
+
+/* Visually hidden, still read by screen readers (labels, live regions). */
+.rid-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Small muted notes, such as "Saved in this browser". */
+.rid-muted-note {
+  color: var(--ifm-color-emphasis-700);
+  font-size: 0.8125rem;
 }

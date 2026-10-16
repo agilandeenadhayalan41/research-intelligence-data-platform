@@ -248,3 +248,5 @@ docs/site/node_modules/
 docs/site/build/
 docs/site/.docusaurus/
 docs/site/.cache-loader/
+# The site's own source modules (the Python "lib/" rule above would hide them).
+!docs/site/src/lib/

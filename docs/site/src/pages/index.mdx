@@ -1,0 +1,137 @@
+---
+title: Research Intelligence Data Platform
+description: One traceable path from public research data to the applications and analysts that use it. The first source is OpenAlex, a free public catalog of scholarly works, authors, institutions, journals, publishers and topics.
+hide_table_of_contents: true
+---
+
+import {
+  Hero,
+  HeroActions,
+  ButtonLink,
+  FlowGraphic,
+  HomeSection,
+  FeatureCards,
+  FeatureCard,
+} from '@site/src/components/Home';
+
+{/*
+  The home page (route /). Its wording is reused from docs/overview/introduction.md
+  and docs/overview/how-it-works.md, and it must make no claim those pages do not.
+  When the status or the roadmap changes there, update "Where things stand" here.
+  Links are site routes; the strict build fails on any that do not exist.
+*/}
+
+<Hero eyebrow="Documentation" title="Research Intelligence Data Platform" graphic={<FlowGraphic />}>
+
+**One traceable path from public research data to the applications and analysts that use it.**
+The first source is **OpenAlex**, a free public catalog of scholarly works, authors,
+institutions, journals, publishers and topics.
+
+<HeroActions>
+  <ButtonLink to="/overview/introduction" primary>Read the docs</ButtonLink>
+  <ButtonLink to="/overview/status">Status</ButtonLink>
+  <ButtonLink to="/blog">Blog</ButtonLink>
+</HeroActions>
+
+</Hero>
+
+<HomeSection
+  id="explore-the-docs"
+  title="Explore the docs"
+  intro="Start with the overview pages in order, then use the sidebar for the detailed architecture pages.">
+
+<FeatureCards>
+  <FeatureCard title="How it works" to="/overview/how-it-works" icon="flow">
+    The end-to-end data flow, one stage at a time.
+  </FeatureCard>
+  <FeatureCard title="Status" to="/overview/status" icon="status">
+    What has been validated, where, and how strongly. What is not proven yet.
+  </FeatureCard>
+  <FeatureCard title="Roadmap" to="/architecture/roadmap" icon="roadmap">
+    All 21 roadmap steps are complete: the planned contracts, local validation,
+    orchestration contracts and readiness assessment. That does not mean GCP
+    deployment is done.
+  </FeatureCard>
+  <FeatureCard title="Architecture decisions" to="/adr/" icon="decision">
+    Decisions that select a technology, a policy or a boundary, with the options
+    considered, the evidence and the conditions that would reopen them.
+  </FeatureCard>
+  <FeatureCard title="Lead coverage register" to="/requirements/openalex-lead-coverage" icon="register">
+    Requirements traceability: the files and tests that implement each
+    requirement, how strongly it is proven and what is missing.
+  </FeatureCard>
+  <FeatureCard title="Getting started" to="/overview/getting-started" icon="terminal">
+    The repository layout and how to run the tests locally.
+  </FeatureCard>
+  <FeatureCard title="Glossary" to="/overview/glossary" icon="book">
+    The status labels and terms used across these docs.
+  </FeatureCard>
+</FeatureCards>
+
+</HomeSection>
+
+<HomeSection
+  id="a-governed-path"
+  title="A governed path"
+  intro="The data is large, it changes (records are updated and Works are deleted), and its many-to-many relationships make naive counts wrong. The platform's answer is a governed path with these properties."
+  variant="steps">
+
+1. **Bounded retrieval.** Source files are discovered from a public manifest and fetched one
+   small, bounded file at a time, anonymously.
+2. **Preserved source.** The original bytes are stored unchanged, with a SHA-256 checksum and
+   provenance, so any step can be replayed.
+3. **Portable canonical model.** Records are normalized into entities and relationships that do
+   not depend on any one database engine.
+4. **BigQuery analytics.** Analytical models are built in BigQuery. Gold marts (consumer-facing
+   outputs) are materialized only when measured usage justifies it.
+5. **Quality before visibility.** Hard data-quality gates must pass before anything becomes
+   visible to consumers.
+6. **Capabilities, not raw SQL.** Consumers use a storage-independent Data Service of domain
+   capabilities, such as "look up a Work by DOI".
+
+The whole path is followed stage by stage on [How it works](/overview/how-it-works).
+
+</HomeSection>
+
+<HomeSection
+  id="three-engines-three-roles"
+  title="Three engines, three roles"
+  intro="The canonical data model stays portable across all three.">
+
+<FeatureCards>
+  <FeatureCard title="BigQuery" icon="database">
+    The first analytical engine on Google Cloud (GCP). Partitioning, clustering and
+    materialization follow query evidence.
+  </FeatureCard>
+  <FeatureCard title="DuckDB" icon="laptop">
+    Used only for local validation and prototypes. Its `SEMANTIC_ONLY` results do not
+    prove BigQuery dialect, cost or cloud readiness.
+  </FeatureCard>
+  <FeatureCard title="PostgreSQL or AlloyDB" icon="server">
+    An *optional* serving store, considered only if BigQuery plus an API/cache fails a
+    measured requirement.
+  </FeatureCard>
+</FeatureCards>
+
+More on [How it works](/overview/how-it-works#three-engines-three-roles).
+
+</HomeSection>
+
+<HomeSection id="where-things-stand" title="Where things stand" variant="note">
+
+**What a consumer gets.** Typed questions instead of raw SQL, for example: look up a Work by
+DOI, count the unique authors per journal, or follow publisher × topic trends by year. Today
+these exist as tested contracts and query patterns. Their SQL has run in BigQuery on synthetic
+data, and the Data Service capabilities run locally. None is deployed as a service yet.
+
+All **21 roadmap steps are complete**. That means the planned contracts, local validation,
+orchestration contracts and readiness assessment are done. It does **not** mean GCP deployment
+is done, and it does not mean anything is production-ready.
+
+Beyond the roadmap, the GCS and BigQuery adapters have passed live smoke tests in a sandbox
+project and in personal projects labelled DEV and QA. The BigQuery models have been deployed and
+measured there **on synthetic data only**. Every environment is still `NOT_READY` overall, and
+every mandatory PROD domain is `BLOCKED`. The evidence levels and the open gaps are on the
+[Status](/overview/status) page.
+
+</HomeSection>
