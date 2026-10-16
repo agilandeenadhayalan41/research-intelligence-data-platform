@@ -150,28 +150,32 @@ in, the navbar shows the avatar and username, and the menu has **Sign out**.
 
 - There is no password and no OAuth. **The username alone is not
   authentication**: the site cannot check that the person typing it owns that
-  account. That is why liking and commenting also need a GitHub token (below),
-  which the site's `/api/community` checks with GitHub.
-- Reading works signed out. Where likes and comments are kept in the browser
-  only (see [Without the server token](#without-the-server-token-and-with-npm-start)),
-  they can also be made signed out, as `guest`.
+  account. That is why shared likes and comments show a name only when a
+  GitHub token is saved too (below), which the site's `/api/community` checks
+  with GitHub. Without one they are made as a guest.
+- Nothing needs signing in: reading, liking and commenting all work signed
+  out, as a guest (see [Likes and comments](#likes-and-comments)).
 
 ### The optional GitHub token
 
-The sign-in menu also has a **GitHub token** field. The token is used for:
-liking and commenting (it is required for those), the blog editor's **Open
-pull request**, and higher GitHub API rate limits for the page history.
+The sign-in menu also has an optional **GitHub token** field. The token is
+used for: showing your verified GitHub name on your likes and comments
+(signed in with a token; without one you like and comment as a guest), the
+blog editor's **Open pull request**, and higher GitHub API rate limits for the
+page history.
 
 - It is kept in `localStorage` **on this device only**. It is sent to
-  `https://api.github.com`, as the `Authorization` header, and with each like,
-  unlike, comment or deletion to this site's own `/api/community`, **only to
-  confirm your login**: the function calls `GET https://api.github.com/user`
-  with it and keeps nothing but the answer's login, name and avatar (in memory,
-  for 10 minutes, under the token's SHA-256). It is never stored, logged or
-  sent anywhere else, and error messages never include it.
-- **To like and comment, any token works**, even a fine-grained token with
-  only the default public, read-only access and no permissions: the site only
-  needs to know whose it is.
+  `https://api.github.com`, as the `Authorization` header, and, while you are
+  signed in, with each like, unlike, comment or deletion to this site's own
+  `/api/community`, **only to confirm your login**: the function calls
+  `GET https://api.github.com/user` with it and keeps nothing but the answer's
+  login, name and avatar (in memory, for 10 minutes, under the token's
+  SHA-256). It is never stored, logged or sent anywhere else, and error
+  messages never include it. Signed out, a saved token is not sent with likes
+  and comments.
+- **To show your name on likes and comments, any token works**, even a
+  fine-grained token with only the default public, read-only access and no
+  permissions: the site only needs to know whose it is.
 - Anything in `localStorage` can be read by scripts running on the site's
   origin, and stays until it is removed. Give the token an expiry date and the
   least access that works. With push access to this repository, a
@@ -204,20 +208,41 @@ comment is a commit. The page says so next to the buttons ("Shared with
 everyone. Saved in this site's GitHub repository."). Blog editor drafts are
 not shared: they stay in the visitor's browser.
 
-Anyone can read likes and comments without signing in. To like or comment, a
-visitor signs in (navbar, GitHub username) **and** adds a GitHub token in the
-account menu; without both, the page shows "Add a GitHub token in the account
-menu to like or comment" with a button that opens the menu. The token is what
-proves who they are (the username alone proves nothing), so likes and comments
-always carry the verified GitHub login and avatar.
+**Guests come first.** Anyone can read, like and comment right away, without
+signing in. Under the comment box the page says "Commenting as a guest ·
+Sign in with GitHub to show your name" (the link opens the account menu).
+
+- **As a guest**, the browser makes a random id the first time it likes or
+  comments (a UUID v4, kept in `localStorage` under
+  `rid-community:v1:guest-id`) and sends it as the `X-Guest-Id` header with
+  its writes and, from then on, its page reads. A visitor who only reads never
+  gets one. The
+  site keeps only a hash of it, so the guest can later unlike their like and
+  delete their own comments (shown as "Guest (you)"), and nobody else can.
+  Guest comments show as **Guest**, with no avatar. A guest who clears site
+  data, or uses another browser or a private window, is a new guest and can no
+  longer delete their earlier comments (a maintainer can, see
+  [Moderation](#moderation)).
+- **Signed in with a token** (navbar sign-in **and** a GitHub token in the
+  account menu), likes and comments carry the verified GitHub login, name and
+  avatar: the token is what proves who the visitor is (the typed username alone
+  proves nothing). The comment hint then says "Commenting as @login". Signed in
+  without a token is still a guest ("Add a GitHub token to comment as
+  @login"). The guest id is still sent, so comments written as a guest in this
+  browser stay deletable after signing in.
+- Names never come from the request: the function ignores any name, login or
+  avatar in the body of a guest write, and refuses (403) a write whose `login`
+  is not the verified user.
 
 ### How shared storage works
 
 ```text
-browser ──GET  /api/community?page=/docs/x.md──────────────▶ api/community.mjs ──contents API──▶ community-data branch
-        ──POST /api/community  Authorization: Bearer <visitor token>
+browser ──GET  /api/community?page=/docs/x.md   X-Guest-Id: <uuid>───▶ api/community.mjs ──contents API──▶ community-data branch
+        ──POST /api/community  X-Guest-Id: <uuid>
+                               [Authorization: Bearer <visitor token>]   (signed in with a token only)
                                {action, page, body?, id?, login?}
-                                  │ GET https://api.github.com/user with the visitor token: who is it?
+                                  │ who is it? 1. resolveSessionUser(request)  2. the Bearer token, checked with
+                                  │ GET https://api.github.com/user  3. otherwise a guest: sha256(guest id)
                                   └ write with the server token (COMMUNITY_GITHUB_TOKEN): one commit
 ```
 
@@ -226,31 +251,54 @@ browser ──GET  /api/community?page=/docs/x.md──────────�
   `api/_lib/community.mjs` (the underscore keeps that file from becoming a
   route), which holds all the logic and is unit-tested from `docs/site/test`.
 - **Reads.** `GET /api/community?page=<pageId>` answers
-  `{configured: true, pageId, likes: {count, likedBy}, comments: [...]}`
-  (comments oldest first, each `{id, pageId, author: {login, name, avatarUrl}, body, createdAt}`).
-  A page without a file is empty. Each function instance caches a page for
-  20 seconds; responses are `Cache-Control: no-store`. `GET /api/community`
-  without `page` is a status probe (`{configured: true}`, no GitHub call).
+  `{configured: true, pageId, likes: {count, likedBy, liked}, comments: [...]}`
+  (comments oldest first, each
+  `{id, pageId, author: {login, name, avatarUrl}, body, createdAt, canDelete}`).
+  `count` includes guests; `likedBy` lists only the GitHub logins (guests are
+  counted, never listed). `liked` and `canDelete` are worked out for **this
+  request's caller** (their session, else their `X-Guest-Id`): that is the
+  only way a guest learns which like and comments are theirs, and no guest's
+  key ever appears in an answer. A missing or malformed guest id on a read
+  just means `false`. A page without a file is empty. Each function instance
+  caches a page for 20 seconds; responses are `Cache-Control: no-store`.
+  `GET /api/community` without `page` is a status probe (`{configured: true}`,
+  no GitHub call).
 - **Writes.** `POST /api/community` with a JSON body
-  `{action: 'like' | 'unlike' | 'comment' | 'delete', page, body?, id?, login?}`
-  and the visitor's token as `Authorization: Bearer …`. The function calls
-  `GET https://api.github.com/user` with that token to learn the login (cached
-  for 10 minutes under the token's SHA-256, never the token itself), then
-  writes with its **own** token. `like` and `unlike` are idempotent; a comment
-  is stored with the name and avatar from GitHub; `delete` works only on your
-  own comment (403 otherwise, 404 when it is gone). When the browser sends
-  `login` (the signed-in username), it must be the token's owner, otherwise
-  403 "this token belongs to @…" (signing in only types a username). The answer
-  is the page's new state.
+  `{action: 'like' | 'unlike' | 'comment' | 'delete', page, body?, id?, login?}`.
+  The writer is, in this order:
+  1. the user from `resolveSessionUser(request)`, an optional hook of
+     `createCommunityHandler` (`{login, name, avatarUrl, htmlUrl} | null`; it
+     returns null until the sign-in code wires it to its session cookie);
+  2. otherwise, when there is an `Authorization` header, the owner of the
+     Bearer token: the function calls `GET https://api.github.com/user` with it
+     to learn the login (cached for 10 minutes under the token's SHA-256, never
+     the token itself). A header that is not a token GitHub accepts is 401: it
+     is never quietly turned into a guest write;
+  3. otherwise a **guest**, from `X-Guest-Id` (required then; it must be a
+     UUID v4, else 400). The function keeps only
+     `guestKey` = the first 16 hex characters of the SHA-256 of the id (lower
+     case), never the id.
+
+  The write is made with the function's **own** token. `like` and `unlike` are
+  idempotent and only touch the caller's own like; a comment is stored with
+  the name and avatar from the session or GitHub, or as `Guest`; `delete`
+  works only on your own comment: a user's by its login, a guest's by the same
+  guest id (also sent along by a signed-in browser), 403 otherwise, 404 when it
+  is gone. When the browser sends `login` (the signed-in username), it must be
+  the verified user, otherwise 403 "this token belongs to @…"; a guest's
+  `login`, `name` or `avatarUrl` in the body is ignored. The answer is the
+  page's new state, seen by the caller.
 - **Errors.** 400 for a bad page id (`^/[A-Za-z0-9/_.~%-]{0,300}$`), an unknown
-  action or a comment that is not 1-5,000 characters after trimming; 401
-  without a valid token; 405 for methods other than GET and POST; 409 when a
-  page is full (1,000 comments, or a page file over 900,000 bytes); 413 for a
-  body over 16 KB; 429 when rate limited (with `Retry-After`); 502 when GitHub
-  cannot be reached; 503 `{configured: false}` without the server token, and
-  503 "busy, try again" after repeated write conflicts. No message ever
-  contains a token. The function sends no CORS headers: only the site itself
-  can call it from a browser.
+  action, a comment that is not 1-5,000 characters after trimming, or a guest
+  write without a valid `X-Guest-Id`; 401 for a token GitHub does not accept;
+  403 for someone else's comment or a `login` that is not yours; 405 for
+  methods other than GET and POST; 409 when a page is full (1,000 comments, or
+  a page file over 900,000 bytes); 413 for a body over 16 KB; 429 when rate
+  limited (with `Retry-After`); 502 when GitHub cannot be reached; 503
+  `{configured: false}` without the server token, and 503 "busy, try again"
+  after repeated write conflicts. No message ever contains a token or a guest
+  id. The function sends no CORS headers: only the site itself can call it
+  from a browser.
 - **The page id.** The site's page id is the page's repository path
   (`docs/overview/introduction.md`, `docs/site/blog/<file>.md`); the API uses
   it with a leading slash (`/docs/overview/introduction.md`), other
@@ -277,7 +325,10 @@ hex characters of the SHA-256 of the API page id:
 {
   "version": 1,
   "pageId": "/docs/overview/introduction.md",
-  "likes": [{"login": "octocat", "at": "2026-10-16T12:00:00.000Z"}],
+  "likes": [
+    {"login": "octocat", "at": "2026-10-16T12:00:00.000Z"},
+    {"login": null, "guestKey": "3f9c0a7d51e2b864", "at": "2026-10-16T12:05:00.000Z"}
+  ],
   "comments": [
     {
       "id": "6f1c…",
@@ -286,12 +337,25 @@ hex characters of the SHA-256 of the API page id:
       "avatarUrl": "https://avatars.githubusercontent.com/u/583231?v=4",
       "body": "Clear and useful, thanks.",
       "createdAt": "2026-10-16T12:01:00.000Z"
+    },
+    {
+      "id": "9a2e…",
+      "login": null,
+      "name": "Guest",
+      "guestKey": "3f9c0a7d51e2b864",
+      "avatarUrl": null,
+      "body": "Same question as above.",
+      "createdAt": "2026-10-16T12:06:00.000Z"
     }
   ]
 }
 ```
 
-Likes are unique by login; comments are oldest first. Every update goes
+A guest entry has `login: null` and a `guestKey` (16 hex characters of the
+SHA-256 of the browser's random guest id; the id itself is never written).
+Likes are unique by login or guest key; comments are oldest first. The format
+only gained the guest fields, so files written before guests existed read
+unchanged. Every update goes
 through the contents API with the file's `sha` (compare and swap): when
 someone else changed the file first (409 or 422), the function reads it again
 and retries up to 4 times with a small random pause, then answers 503
@@ -347,13 +411,32 @@ variables in a local `.env` file that is never committed, or read
 `docs/site/test/communityServer.test.mjs`, which runs it on a local HTTP server
 against a fake GitHub.
 
-### Rate limits
+### Rate limits and spam
 
-Per client IP, in each function instance's memory (best effort): **20 writes
-per 10 minutes** and **120 reads per minute**; beyond that the function answers
-429 with `Retry-After`. Failed writes count too. GitHub's own limits apply to
-the server token (5,000 requests an hour, and fewer for content-creating
-requests); when GitHub rate limits the function it answers 503.
+In each function instance's memory (best effort), for guests and users alike:
+
+- **20 writes per 10 minutes per client IP**, every write counted (failed and
+  refused ones too), whoever makes it;
+- on top of that, **10 guest writes per 10 minutes per client IP and guest
+  id**;
+- **120 reads per minute per client IP**.
+
+Beyond that the function answers 429 with `Retry-After`. GitHub's own limits
+apply to the server token (5,000 requests an hour, and fewer for
+content-creating requests); when GitHub rate limits the function it answers
+503.
+
+Guest writes make the site easy to use and also easy to spam: a guest id is
+free, so the per-IP limit is what really bounds one network, and the limits
+live in each instance's memory, so a burst spread over many instances or IPs
+gets further. Every write is still one commit on the data branch, with its
+time, which makes spam easy to see and to undo (see Moderation). A comment is
+plain text (1-5,000 characters, never rendered as HTML or Markdown), so links
+in it are not clickable. A page refuses new comments once it has 1,000 or its
+file reaches 900,000 bytes. If a spam wave gets through, the quickest stop is
+to remove `COMMUNITY_GITHUB_TOKEN` from the deployment and redeploy: the API
+then answers `configured: false` and every browser falls back to keeping its
+own likes and comments, while the shared data stays readable on the branch.
 
 ### Moderation
 
@@ -365,13 +448,51 @@ write to it (500) until it is fixed, so nothing is lost. The branch history
 keeps every change, including removed comments; rewriting that history is the
 only way to erase a comment completely.
 
+Guest entries carry a `guestKey`: everything one browser wrote as a guest has
+the same key, so a spammer's comments are easy to find and remove together
+(search the branch for the key). The key cannot be turned back into the guest
+id, so it gives nobody the power to delete or unlike as that guest. A comment
+removed by hand disappears from the site within 20 seconds (the function's
+read cache).
+
 ### Privacy
 
 Shared likes and comments are public: the login, display name and avatar URL
-from GitHub, the comment text and the dates are committed to a public
-repository and stay in its history after a deletion. The visitor's token is
-used only to ask GitHub who they are and is never stored. Drafts never leave
-the browser. See also [Privacy: what is stored where](#privacy-what-is-stored-where).
+from GitHub (or, for a guest, only "Guest" and the guest key), the comment
+text and the dates are committed to a public repository and stay in its
+history after a deletion. The guest id stays in the browser and goes only to
+this site's `/api/community`, which keeps only its hash and never returns it;
+the guest key is never shown on the site, but it is in the public branch, so
+someone reading the branch can tell which guest comments came from the same
+browser. The visitor's token is used only to ask GitHub who they are and is
+never stored. Drafts never leave the browser.
+
+### Contract for the sign-in merge
+
+The function is ready for a real sign-in (an OAuth session cookie):
+`createCommunityHandler({resolveSessionUser})` takes
+`(request) => {login, name, avatarUrl, htmlUrl} | null` (sync or async; the
+request carries `method`, `query`, `headers`, `body` and `ip`) and tries it
+before the Bearer token, on reads too (for `liked` and `canDelete`). Wire it in
+`api/community.mjs` to the session code's `getSessionUser(request)`. What it
+returns is checked (a valid GitHub login, an https avatar, else ignored); the
+author of a write always comes from it or from GitHub, never from the request
+body. Guests keep working as they are: author
+`{login: null, name: 'Guest'}`, likes keyed by `guest:<guestKey>` from
+`X-Guest-Id`, deletion only with the same guest id, and the rate limits apply
+to both. A resolver that throws fails a write with 500 (it is never turned
+into a guest write) and leaves reads working.
+
+A cookie goes with any request to the site, including a form or `text/plain`
+POST from another site, so a write by a session user is refused (403) unless
+a cross-site page could not have made it: its `Content-Type` must be
+`application/json` (which needs a CORS preflight, and the function grants
+none), `Sec-Fetch-Site` must not be `cross-site`, and an `Origin` header, when
+sent, must be this host (`X-Forwarded-Host`, else `Host`). The site's own
+writes meet all three. Guest and token writes need `X-Guest-Id` or
+`Authorization`, custom headers that already force a preflight. Set the
+session cookie with `SameSite=Lax` (and `HttpOnly`, `Secure`, `Path=/`) as a
+second layer. See also [Privacy: what is stored where](#privacy-what-is-stored-where).
 
 ### The storage adapter
 
@@ -383,8 +504,8 @@ All three kinds of data go through one interface, `CommunityStore`, in
 | Method | Returns |
 | --- | --- |
 | `getLikes(pageId)` | `{count, likedBy}` |
-| `toggleLike(pageId, userKey)` | `{count, likedBy}`; `userKey` is the GitHub login (or `'guest'` in the browser store) |
-| `listComments(pageId)` | comments, oldest first: `{id, pageId, author: {login, name, avatarUrl}, body, createdAt}` |
+| `toggleLike(pageId, userKey)` | `{count, likedBy, liked?}`; `userKey` is the GitHub login, or `'guest'`. `liked` is set by the shared store for a guest (guests are not in `likedBy`) |
+| `listComments(pageId)` | comments, oldest first: `{id, pageId, author: {login, name, avatarUrl}, body, createdAt, canDelete?}` (`canDelete` from the shared API) |
 | `addComment(pageId, {author, body})` | the new comment; throws when the trimmed body is not 1-5000 characters |
 | `deleteComment(pageId, id, userKey)` | `true` when the comment was the user's and was deleted |
 | `getDraft(key)`, `saveDraft(key, {content, format})` | a draft `{key, content, format, updatedAt}` (or `null`) |
@@ -395,14 +516,21 @@ All three kinds of data go through one interface, `CommunityStore`, in
 `createCommunityStore({kind})` picks the implementation; `kind` comes from
 `customFields.communityStore` in `docusaurus.config.ts`:
 
-- **`'shared'`** (the site's setting): `createSharedStore({baseUrl = '/api/community', getToken, fetchImpl, fallback})`.
+- **`'shared'`** (the site's setting): `createSharedStore({baseUrl = '/api/community', getToken, getGuestId, fetchImpl, fallback})`.
   Likes and comments go to the API; `toggleLike` sends `like` or `unlike`
-  from the last state it saw; writes send the token from the account menu
-  (read at each write) and reject with `CommunityApiError` (with the HTTP
-  `status`) when the API refuses. Drafts always go to `fallback`, the browser
-  store. When the API does not answer `configured: true`, everything goes to
-  `fallback`. `baseUrl` must be a path on this site, so the token is never sent
-  to another origin.
+  from the last state it saw. Every write sends `X-Guest-Id`, and so do page
+  reads once the browser has one (`getGuestId({create})`;
+  `createCommunityStore` keeps it in `localStorage` through
+  `createGuestIdSource`, or in memory when storage is blocked; a read never
+  creates one). Without a token a write is a guest write and sends no name; with
+  the token from the account menu (read at each write, and only while signed
+  in) it also sends `Authorization: Bearer …` and `login`. Refusals reject
+  with `CommunityApiError` (with the HTTP `status`). Drafts always go to
+  `fallback`, the browser store. When the API does not answer
+  `configured: true`, everything goes to `fallback` (and no guest id is made).
+  `baseUrl` must be a path on this site and every request is sent with
+  `redirect: 'error'`, so neither the token nor the guest id is ever sent to
+  another origin.
 - **`'browser'`**: everything in this browser: **IndexedDB** (database
   `rid-community`, version 1, object stores `likes`, `comments` and `drafts`),
   otherwise **`localStorage`** (keys prefixed `rid-community:v1:`), otherwise
@@ -474,8 +602,9 @@ The editor writes a post in the browser, with a **live preview on the right**
 | Data | Stored | Sent to |
 | --- | --- | --- |
 | GitHub username, name, avatar URL, profile URL | `localStorage` | `api.github.com`: the username, to read the public profile |
-| GitHub token | `localStorage`, this device only | `api.github.com`, as the `Authorization` header; this site's `/api/community` with each like or comment, only to confirm the login (never stored there) |
-| Likes and comments (shared store) | The `community-data` branch of this public repository: login, name, avatar URL, comment text, dates | Everyone: they are public, and stay in the branch history even after a deletion |
+| GitHub token | `localStorage`, this device only | `api.github.com`, as the `Authorization` header; while signed in, this site's `/api/community` with each like or comment, only to confirm the login (never stored there) |
+| Guest id (random UUID) | `localStorage` (`rid-community:v1:guest-id`), this browser only | This site's `/api/community` as `X-Guest-Id`, which keeps only a 16-hex SHA-256 prefix of it (the guest key) |
+| Likes and comments (shared store) | The `community-data` branch of this public repository: login, name, avatar URL (or "Guest" and the guest key), comment text, dates | Everyone: they are public, and stay in the branch history even after a deletion |
 | Likes and comments (without the server token), editor drafts | IndexedDB (or `localStorage`, or memory) | Nowhere |
 | Page history from GitHub | `localStorage`, one hour per page | `api.github.com`: the page's file path, to read its commits |
 | Blog post sent with **Open pull request** | Not stored by the site | `api.github.com`, as a commit and a pull request |
@@ -484,8 +613,8 @@ The editor writes a post in the browser, with a **live preview on the right**
 Requests to `api.github.com`, and the avatar images (served by GitHub), go
 from the visitor's browser to GitHub, which sees them like any other visit to
 GitHub. The site's only server code is `/api/community`: it receives the page
-id, the action, the comment text and the token of a write, and the client IP
-(kept in memory for the rate limits). It logs only short status lines (a step
+id, the action, the comment text, the token or guest id of a write, and the
+client IP (kept in memory, with the guest key, for the rate limits). It logs only short status lines (a step
 and an HTTP status), never request bodies, headers or tokens.
 
 ## Styling

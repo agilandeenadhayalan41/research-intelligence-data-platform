@@ -8,11 +8,18 @@
 // How it works:
 // - Reads: GET /api/community?page=<pageId> returns the likes and comments of
 //   one page. Anyone can read; no sign-in.
-// - Writes: POST /api/community {action, page, body?, id?, login?} with the
-//   visitor's GitHub token as `Authorization: Bearer <token>`. The token is
-//   only used to call GET https://api.github.com/user, which tells us who the
-//   visitor is. It is never stored, logged or sent anywhere else. The write is
-//   then made with the server's own token (COMMUNITY_GITHUB_TOKEN).
+// - Writes: POST /api/community {action, page, body?, id?, login?}. Guests
+//   come first: a write without Authorization is a GUEST write, identified by
+//   the random per-browser id in `X-Guest-Id` (a UUID v4 the site keeps in
+//   localStorage). Only its hash is kept ("guest:<16 hex of sha256>"), so a
+//   guest can unlike their own like and delete their own comments, and nobody
+//   else can. A visitor who wants to show who they are is a verified user:
+//   first `resolveSessionUser(request)` (a session cookie, wired by the
+//   sign-in code; null by default), else a GitHub token as
+//   `Authorization: Bearer <token>`, which is only used to call
+//   GET https://api.github.com/user to learn the login and is never stored,
+//   logged or sent anywhere else. Names never come from the request body. The
+//   write is made with the server's own token (COMMUNITY_GITHUB_TOKEN).
 // - Storage: one file per page, community/pages/<32 hex of sha256(pageId)>.json,
 //   on the branch community-data (an orphan branch, created on the first
 //   write). Every write is a commit made through the contents API with the
@@ -21,7 +28,8 @@
 //
 // The module has no dependencies (node:crypto and the global fetch only) and
 // every outside effect is injected, so `node --test` covers it without network
-// access: createCommunityHandler({env, fetchImpl, now, random, sleep, newId, log}).
+// access: createCommunityHandler({env, fetchImpl, now, random, sleep, newId,
+// log, resolveSessionUser}).
 
 import {createHash, randomUUID} from 'node:crypto';
 
@@ -48,12 +56,24 @@ export const PAGE_SIZE_ERROR = 'this page has reached its size limit';
 
 export const READ_CACHE_MS = 20 * 1000;
 export const LOGIN_CACHE_MS = 10 * 60 * 1000;
+/** Every write, per client IP (guests and users). */
 export const WRITE_LIMIT = Object.freeze({max: 20, windowMs: 10 * 60 * 1000});
+/** Guest writes, per client IP and guest id (on top of WRITE_LIMIT). */
+export const GUEST_WRITE_LIMIT = Object.freeze({max: 10, windowMs: 10 * 60 * 1000});
 export const READ_LIMIT = Object.freeze({max: 120, windowMs: 60 * 1000});
 /** Retries after a write conflict (so at most MAX_RETRIES + 1 attempts). */
 export const MAX_RETRIES = 4;
 
-export const UNAUTHORIZED_ERROR = 'sign in with a GitHub token to like or comment';
+export const UNAUTHORIZED_ERROR = 'GitHub did not accept this token; replace it, or remove it to like and comment as a guest';
+export const GUEST_ID_ERROR = 'X-Guest-Id must be a random UUID (version 4); the site sends one for guest likes and comments';
+export const OWN_COMMENTS_ERROR = 'you can only delete your own comments';
+export const CROSS_SITE_ERROR = 'a signed-in write must come from this site as application/json';
+/** Request header with the guest's random per-browser id. */
+export const GUEST_ID_HEADER = 'X-Guest-Id';
+/** A UUID version 4 (any case). */
+export const GUEST_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+/** Display name of every guest. */
+export const GUEST_NAME = 'Guest';
 export const BUSY_ERROR = 'busy, try again';
 export const NOT_CONFIGURED_ERROR = 'shared likes and comments are not configured on this deployment';
 
@@ -64,6 +84,7 @@ export const BODY_INVALID = Symbol('community body invalid');
 
 const ACTIONS = new Set(['like', 'unlike', 'comment', 'delete']);
 const LOGIN_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+const GUEST_KEY_PATTERN = /^[0-9a-f]{16}$/;
 const TOKEN_PATTERN = /^[\x21-\x7E]{1,1000}$/;
 const REPO_PATTERN = /^([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100})$/;
 const BRANCH_PATTERN = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
@@ -127,16 +148,22 @@ export const BRANCH_VERCEL_JSON = `${JSON.stringify({git: {deploymentEnabled: fa
  */
 
 /**
+ * A user's like is {login, at}; a guest's is {login: null, guestKey, at}.
+ *
  * @typedef {object} StoredLike
- * @property {string} login
+ * @property {string | null} login GitHub login, or null for a guest.
+ * @property {string} [guestKey] Guests only: guestKeyOf(the guest id), never the id itself.
  * @property {string} at ISO 8601.
  */
 
 /**
+ * A guest's comment has login null, name 'Guest', a guestKey and no avatar.
+ *
  * @typedef {object} StoredComment
  * @property {string} id
- * @property {string} login
+ * @property {string | null} login GitHub login, or null for a guest.
  * @property {string} name
+ * @property {string} [guestKey] Guests only: guestKeyOf(the guest id).
  * @property {string | null} avatarUrl
  * @property {string} body
  * @property {string} createdAt ISO 8601.
@@ -153,11 +180,35 @@ export const BRANCH_VERCEL_JSON = `${JSON.stringify({git: {deploymentEnabled: fa
  */
 
 /**
+ * A verified user (from the session resolver or from a GitHub token).
+ *
  * @typedef {object} Viewer
  * @property {string} login
  * @property {string} name
  * @property {string | null} avatarUrl
  */
+
+/**
+ * What resolveSessionUser returns for a signed-in visitor.
+ *
+ * @typedef {object} SessionUser
+ * @property {string} login
+ * @property {string | null} [name]
+ * @property {string | null} [avatarUrl]
+ * @property {string | null} [htmlUrl]
+ */
+
+/**
+ * Who is asking. `user` acts when present; `guestKey` (from a valid
+ * X-Guest-Id) still proves ownership of that guest's comments.
+ *
+ * @typedef {object} Caller
+ * @property {Viewer | null} user
+ * @property {string | null} guestKey
+ */
+
+/** @type {Caller} */
+const NOBODY = Object.freeze({user: null, guestKey: null});
 
 /** A GitHub API call that failed. Its message never holds a token. */
 export class GitHubFailure extends Error {
@@ -189,6 +240,21 @@ export function pageFilePath(pageId, dir = DEFAULT_DIR) {
 /** @param {unknown} value */
 export function isPageId(value) {
   return typeof value === 'string' && PAGE_ID_PATTERN.test(value);
+}
+
+/** @param {unknown} value */
+export function isGuestId(value) {
+  return typeof value === 'string' && GUEST_ID_PATTERN.test(value);
+}
+
+/**
+ * The only thing kept about a guest: the first 16 hex characters of the
+ * SHA-256 of their id (lower case), so the id itself is never stored.
+ *
+ * @param {string} guestId A valid guest id.
+ */
+export function guestKeyOf(guestId) {
+  return sha256(guestId.toLowerCase()).slice(0, 16);
 }
 
 /**
@@ -242,34 +308,101 @@ export function normalizePageFile(raw, pageId) {
   const likes = [];
   const seen = new Set();
   for (const like of Array.isArray(value.likes) ? value.likes : []) {
-    if (like && typeof like.login === 'string' && LOGIN_PATTERN.test(like.login) && !seen.has(like.login)) {
-      seen.add(like.login);
-      likes.push({login: like.login, at: typeof like.at === 'string' ? like.at : ''});
+    const owner = ownerOf(like);
+    const key = owner && (owner.login ?? `guest:${owner.guestKey}`);
+    if (owner && key && !seen.has(key)) {
+      seen.add(key);
+      const at = typeof like.at === 'string' ? like.at : '';
+      likes.push(owner.login ? {login: owner.login, at} : {login: null, guestKey: owner.guestKey, at});
     }
   }
   /** @type {StoredComment[]} */
   const comments = [];
   for (const comment of Array.isArray(value.comments) ? value.comments : []) {
+    const owner = ownerOf(comment);
     if (
-      comment &&
+      owner &&
       typeof comment.id === 'string' &&
       comment.id &&
-      typeof comment.login === 'string' &&
-      LOGIN_PATTERN.test(comment.login) &&
       typeof comment.body === 'string' &&
       typeof comment.createdAt === 'string'
     ) {
-      comments.push({
-        id: comment.id.slice(0, ID_MAX_LENGTH),
-        login: comment.login,
-        name: typeof comment.name === 'string' && comment.name.trim() ? comment.name.trim().slice(0, NAME_MAX_LENGTH) : comment.login,
-        avatarUrl: httpsUrl(comment.avatarUrl),
-        body: comment.body,
-        createdAt: comment.createdAt,
-      });
+      const id = comment.id.slice(0, ID_MAX_LENGTH);
+      comments.push(
+        owner.login
+          ? {
+              id,
+              login: owner.login,
+              name: cleanName(comment.name) ?? owner.login,
+              avatarUrl: httpsUrl(comment.avatarUrl),
+              body: comment.body,
+              createdAt: comment.createdAt,
+            }
+          : {
+              id,
+              login: null,
+              name: GUEST_NAME,
+              guestKey: /** @type {string} */ (owner.guestKey),
+              avatarUrl: null,
+              body: comment.body,
+              createdAt: comment.createdAt,
+            },
+      );
     }
   }
   return {version: FILE_VERSION, pageId, likes, comments};
+}
+
+/**
+ * Whose a stored like or comment is: a valid login, or (login null) a valid
+ * guest key. Anything else is dropped.
+ *
+ * @param {any} record
+ * @returns {{login: string, guestKey: null} | {login: null, guestKey: string} | null}
+ */
+function ownerOf(record) {
+  if (!record || typeof record !== 'object') {
+    return null;
+  }
+  if (typeof record.login === 'string' && LOGIN_PATTERN.test(record.login)) {
+    return {login: record.login, guestKey: null};
+  }
+  if (
+    (record.login === null || record.login === undefined) &&
+    typeof record.guestKey === 'string' &&
+    GUEST_KEY_PATTERN.test(record.guestKey)
+  ) {
+    return {login: null, guestKey: record.guestKey};
+  }
+  return null;
+}
+
+/**
+ * The like that belongs to the caller: the user's when one is acting, else
+ * the guest's.
+ *
+ * @param {StoredLike} like
+ * @param {Caller} caller
+ */
+function ownsLike(like, caller) {
+  if (caller.user) {
+    return like.login === caller.user.login;
+  }
+  return caller.guestKey !== null && like.login === null && like.guestKey === caller.guestKey;
+}
+
+/**
+ * A verified user may delete their comments; a guest id (also sent along with
+ * a user) may delete the comments written with it.
+ *
+ * @param {StoredComment} comment
+ * @param {Caller} caller
+ */
+function ownsComment(comment, caller) {
+  if (caller.user && comment.login === caller.user.login) {
+    return true;
+  }
+  return caller.guestKey !== null && comment.login === null && comment.guestKey === caller.guestKey;
 }
 
 /**
@@ -281,31 +414,41 @@ export function emptyPageFile(pageId) {
 }
 
 /**
- * What GET and POST return for a page.
+ * What GET and POST return for a page, as seen by `caller`. Guest keys never
+ * leave the server: `likes.likedBy` lists users' logins only (`count`
+ * includes guests), and the caller's own like and comments show only as the
+ * `likes.liked` and `canDelete` flags, computed for this request.
  *
  * @param {string} pageId
  * @param {PageFile} file
+ * @param {Caller} [caller]
  */
-export function pageView(pageId, file) {
+export function pageView(pageId, file, caller = NOBODY) {
   return {
     configured: true,
     pageId,
-    likes: {count: file.likes.length, likedBy: file.likes.map((like) => like.login)},
-    comments: file.comments.map((comment) => commentView(pageId, comment)),
+    likes: {
+      count: file.likes.length,
+      likedBy: file.likes.flatMap((like) => (like.login ? [like.login] : [])),
+      liked: file.likes.some((like) => ownsLike(like, caller)),
+    },
+    comments: file.comments.map((comment) => commentView(pageId, comment, caller)),
   };
 }
 
 /**
  * @param {string} pageId
  * @param {StoredComment} comment
+ * @param {Caller} caller
  */
-function commentView(pageId, comment) {
+function commentView(pageId, comment, caller) {
   return {
     id: comment.id,
     pageId,
     author: {login: comment.login, name: comment.name, avatarUrl: comment.avatarUrl},
     body: comment.body,
     createdAt: comment.createdAt,
+    canDelete: ownsComment(comment, caller),
   };
 }
 
@@ -336,6 +479,9 @@ export function normalizeCommentBody(body) {
  * @property {(ms: number) => Promise<void>} [sleep]
  * @property {() => string} [newId] Comment ids.
  * @property {(message: string) => void} [log] Gets short messages (step and status only).
+ * @property {(request: HandlerRequest) => SessionUser | null | undefined | Promise<SessionUser | null | undefined>} [resolveSessionUser]
+ *   The signed-in user of a request (for example from a session cookie), tried
+ *   before the Bearer token. Default: nobody.
  */
 
 /**
@@ -350,6 +496,7 @@ export function createCommunityHandler({
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   newId = randomUUID,
   log = (message) => console.error(`[community] ${message}`),
+  resolveSessionUser = () => null,
 } = {}) {
   const config = readConfig(env);
   const clock = () => {
@@ -363,6 +510,7 @@ export function createCommunityHandler({
   const loginCache = new Map();
   const readLimiter = createRateLimiter(READ_LIMIT);
   const writeLimiter = createRateLimiter(WRITE_LIMIT);
+  const guestLimiter = createRateLimiter(GUEST_WRITE_LIMIT);
   /** @type {Promise<void> | null} */
   let branchReady = null;
 
@@ -569,33 +717,37 @@ export function createCommunityHandler({
       throw new GitHubFailure('verify', response.status);
     }
     const data = response.data ?? {};
-    if (typeof data.login !== 'string' || !LOGIN_PATTERN.test(data.login)) {
+    const viewer = toViewer({login: data.login, name: data.name, avatarUrl: data.avatar_url});
+    if (!viewer) {
       return null;
     }
-    /** @type {Viewer} */
-    const viewer = {
-      login: data.login,
-      name:
-        typeof data.name === 'string' && data.name.trim()
-          ? data.name.trim().slice(0, NAME_MAX_LENGTH)
-          : data.login,
-      avatarUrl: httpsUrl(data.avatar_url),
-    };
     loginCache.set(key, {expires: time + LOGIN_CACHE_MS, viewer});
     trimMap(loginCache, LOGIN_CACHE_MAX_ENTRIES);
     return viewer;
   }
 
   /**
+   * The user signed in through the session resolver, checked (null when the
+   * resolver has nobody or answers something that is not a user).
+   *
+   * @param {HandlerRequest} request
+   * @returns {Promise<Viewer | null>}
+   */
+  async function sessionUser(request) {
+    return toViewer(await resolveSessionUser(request));
+  }
+
+  /**
    * Read, change, compare-and-swap write; on a conflict, read again and retry.
    *
    * @param {string} pageId
+   * @param {Caller} caller Whose view of the page is returned.
    * @param {string} action
    * @param {(file: PageFile) => {error: string, status: number} | {changed: boolean, extra?: (file: PageFile) => Record<string, unknown>}} change
    *   Mutates `file` in place.
    * @returns {Promise<HandlerResponse>}
    */
-  async function write(pageId, action, change) {
+  async function write(pageId, caller, action, change) {
     if (!config.configured) {
       throw new Error('not configured');
     }
@@ -620,7 +772,7 @@ export function createCommunityHandler({
       const extra = outcome.extra ? outcome.extra(file) : {};
       if (!outcome.changed) {
         remember(pageId, file);
-        return reply(200, {...pageView(pageId, file), ...extra});
+        return reply(200, {...pageView(pageId, file, caller), ...extra});
       }
       const json = `${JSON.stringify(file, null, 2)}\n`;
       // Only a new comment can be refused for size, so likes, unlikes and
@@ -637,7 +789,7 @@ export function createCommunityHandler({
       const put = await repoApi('PUT', `/contents/${path}`, 'write', body);
       if (put.ok) {
         remember(pageId, file);
-        return reply(200, {...pageView(pageId, file), ...extra});
+        return reply(200, {...pageView(pageId, file, caller), ...extra});
       }
       if (put.status === 409 || put.status === 422) {
         continue; // someone else changed the file (or created it) first
@@ -665,11 +817,25 @@ export function createCommunityHandler({
     if (!isPageId(page)) {
       return badRequest('page must be a site path such as /docs/overview/introduction.md');
     }
-    return reply(200, pageView(page, await readCached(page)));
+    // Only for the caller's own flags: a missing or malformed guest id, or a
+    // failing session lookup, never stops a read.
+    const guestId = header(request.headers, GUEST_ID_HEADER.toLowerCase())?.trim();
+    /** @type {Viewer | null} */
+    let user = null;
+    try {
+      user = await sessionUser(request);
+    } catch {
+      log('session lookup failed on a read');
+    }
+    const caller = {user, guestKey: isGuestId(guestId) ? guestKeyOf(/** @type {string} */ (guestId)) : null};
+    return reply(200, pageView(page, await readCached(page), caller));
   }
 
-  /** @param {HandlerRequest} request */
-  async function post(request) {
+  /**
+   * @param {HandlerRequest} request
+   * @param {string} ip
+   */
+  async function post(request, ip) {
     const declared = Number(header(request.headers, 'content-length'));
     if (request.body === BODY_TOO_LARGE || (Number.isFinite(declared) && declared > BODY_MAX_BYTES)) {
       return tooLarge();
@@ -688,10 +854,6 @@ export function createCommunityHandler({
     if (!isPageId(page)) {
       return badRequest('page must be a site path such as /docs/overview/introduction.md');
     }
-    const token = bearerToken(request.headers);
-    if (!token) {
-      return unauthorized();
-    }
     /** @type {string | null} */
     let body = null;
     if (action === 'comment') {
@@ -704,31 +866,79 @@ export function createCommunityHandler({
     if (action === 'delete' && (typeof id !== 'string' || !id || id.length > ID_MAX_LENGTH)) {
       return badRequest('id must be the id of a comment');
     }
-    const viewer = await verify(token);
-    if (!viewer) {
-      return unauthorized();
+
+    // Who is writing. The request body never names anyone: a verified user
+    // comes from the session resolver or from GitHub (the token), a guest is
+    // only the hash of their random id.
+    const guestHeader = header(request.headers, GUEST_ID_HEADER.toLowerCase());
+    /** @type {string | null} */
+    let guestKey = null;
+    if (guestHeader !== undefined) {
+      const guestId = guestHeader.trim();
+      if (!isGuestId(guestId)) {
+        return badRequest(GUEST_ID_ERROR);
+      }
+      guestKey = guestKeyOf(guestId);
     }
-    // The site's sign-in is only a typed username: when the browser says who
-    // it thinks it is, it must be the owner of the token.
-    if (typeof parsed.login === 'string' && parsed.login.toLowerCase() !== viewer.login.toLowerCase()) {
+    /** @type {Viewer | null} */
+    let user = await sessionUser(request);
+    let source = 'session';
+    // A session cookie travels with any cross-site form or text/plain POST,
+    // so a session write must be one a cross-site page cannot make without a
+    // CORS preflight (which this function never grants).
+    if (user && !sameSiteWrite(request.headers)) {
+      return reply(403, {configured: true, error: CROSS_SITE_ERROR});
+    }
+    if (!user && header(request.headers, 'authorization')) {
+      const token = bearerToken(request.headers);
+      if (!token) {
+        return unauthorized();
+      }
+      user = await verify(token);
+      if (!user) {
+        return unauthorized();
+      }
+      source = 'token';
+    }
+    if (!user && guestKey === null) {
+      return badRequest(GUEST_ID_ERROR);
+    }
+    // The site's username sign-in is only typed: when the browser says who it
+    // thinks it is, it must be the verified user. (A guest's `login` is ignored.)
+    if (user && typeof parsed.login === 'string' && parsed.login.toLowerCase() !== user.login.toLowerCase()) {
       return reply(403, {
         configured: true,
-        error: `this token belongs to @${viewer.login}; sign in as @${viewer.login} to like or comment`,
+        error:
+          source === 'token'
+            ? `this token belongs to @${user.login}; sign in as @${user.login} to like or comment`
+            : `you are signed in as @${user.login}`,
       });
     }
+    if (!user) {
+      const wait = guestLimiter.take(`${ip}\n${guestKey}`, clock());
+      if (wait > 0) {
+        return tooManyRequests(wait);
+      }
+    }
+    /** @type {Caller} */
+    const caller = {user, guestKey};
+    const actor = user;
+    const actorGuestKey = /** @type {string} */ (guestKey);
 
     switch (action) {
       case 'like':
-        return write(page, action, (file) => {
-          if (file.likes.some((like) => like.login === viewer.login)) {
+        return write(page, caller, action, (file) => {
+          if (file.likes.some((like) => ownsLike(like, caller))) {
             return {changed: false};
           }
-          file.likes.push({login: viewer.login, at: isoNow()});
+          file.likes.push(
+            actor ? {login: actor.login, at: isoNow()} : {login: null, guestKey: actorGuestKey, at: isoNow()},
+          );
           return {changed: true};
         });
       case 'unlike':
-        return write(page, action, (file) => {
-          const index = file.likes.findIndex((like) => like.login === viewer.login);
+        return write(page, caller, action, (file) => {
+          const index = file.likes.findIndex((like) => ownsLike(like, caller));
           if (index === -1) {
             return {changed: false};
           }
@@ -736,17 +946,15 @@ export function createCommunityHandler({
           return {changed: true};
         });
       case 'comment': {
+        const commentId = String(newId()).slice(0, ID_MAX_LENGTH);
+        const text = /** @type {string} */ (body);
+        const createdAt = isoNow();
         /** @type {StoredComment} */
-        const comment = {
-          id: String(newId()).slice(0, ID_MAX_LENGTH),
-          login: viewer.login,
-          name: viewer.name,
-          avatarUrl: viewer.avatarUrl,
-          body: /** @type {string} */ (body),
-          createdAt: isoNow(),
-        };
-        const extra = () => ({comment: commentView(page, comment)});
-        return write(page, action, (file) => {
+        const comment = actor
+          ? {id: commentId, login: actor.login, name: actor.name, avatarUrl: actor.avatarUrl, body: text, createdAt}
+          : {id: commentId, login: null, name: GUEST_NAME, guestKey: actorGuestKey, avatarUrl: null, body: text, createdAt};
+        const extra = () => ({comment: commentView(page, comment, caller)});
+        return write(page, caller, action, (file) => {
           if (file.comments.some((item) => item.id === comment.id)) {
             return {changed: false, extra};
           }
@@ -758,13 +966,13 @@ export function createCommunityHandler({
         });
       }
       default:
-        return write(page, action, (file) => {
+        return write(page, caller, action, (file) => {
           const index = file.comments.findIndex((item) => item.id === id);
           if (index === -1) {
             return {status: 404, error: 'comment not found'};
           }
-          if (file.comments[index].login !== viewer.login) {
-            return {status: 403, error: 'you can only delete your own comments'};
+          if (!ownsComment(file.comments[index], caller)) {
+            return {status: 403, error: OWN_COMMENTS_ERROR};
           }
           file.comments.splice(index, 1);
           return {changed: true, extra: () => ({deleted: true})};
@@ -791,15 +999,10 @@ export function createCommunityHandler({
     const ip = typeof request.ip === 'string' && request.ip ? request.ip.slice(0, 100) : 'unknown';
     const wait = (method === 'GET' ? readLimiter : writeLimiter).take(ip, clock());
     if (wait > 0) {
-      const seconds = Math.max(1, Math.ceil(wait / 1000));
-      return reply(
-        429,
-        {configured: true, error: `too many requests, try again in ${seconds} seconds`},
-        {'Retry-After': String(seconds)},
-      );
+      return tooManyRequests(wait);
     }
     try {
-      return method === 'GET' ? await get(request) : await post(request);
+      return method === 'GET' ? await get(request) : await post(request, ip);
     } catch (error) {
       if (error instanceof GitHubFailure) {
         log(`${error.step}: ${error.status === 0 ? 'network error' : `HTTP ${error.status}`}`);
@@ -817,7 +1020,11 @@ export function createCommunityHandler({
   }
 
   return async function handleCommunityRequest(request) {
-    const secrets = [config.configured ? config.token : null, bearerToken(request?.headers)];
+    const secrets = [
+      config.configured ? config.token : null,
+      bearerToken(request?.headers),
+      header(request?.headers, GUEST_ID_HEADER.toLowerCase())?.trim(),
+    ];
     let response;
     try {
       response = await route(request ?? {});
@@ -952,6 +1159,41 @@ function unauthorized() {
   return reply(401, {configured: true, error: UNAUTHORIZED_ERROR}, {'WWW-Authenticate': 'Bearer'});
 }
 
+/** @param {number} waitMs */
+function tooManyRequests(waitMs) {
+  const seconds = Math.max(1, Math.ceil(waitMs / 1000));
+  return reply(
+    429,
+    {configured: true, error: `too many requests, try again in ${seconds} seconds`},
+    {'Retry-After': String(seconds)},
+  );
+}
+
+/**
+ * A checked user from GitHub or from the session resolver, or null.
+ *
+ * @param {unknown} value {login, name?, avatarUrl?}
+ * @returns {Viewer | null}
+ */
+function toViewer(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const {login, name, avatarUrl} = /** @type {Record<string, unknown>} */ (value);
+  if (typeof login !== 'string' || !LOGIN_PATTERN.test(login)) {
+    return null;
+  }
+  return {login, name: cleanName(name) ?? login, avatarUrl: httpsUrl(avatarUrl)};
+}
+
+/**
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+function cleanName(value) {
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, NAME_MAX_LENGTH) : null;
+}
+
 function tooLarge() {
   return reply(413, {configured: true, error: `the request body must be at most ${BODY_MAX_BYTES / 1024} KB`});
 }
@@ -1032,6 +1274,33 @@ function header(headers, name) {
     }
   }
   return undefined;
+}
+
+/**
+ * Whether a write identified by a session cookie came from this site: it is
+ * application/json (a cross-site page cannot send that without a preflight),
+ * not marked cross-site by the browser, and any Origin is this host.
+ *
+ * @param {HandlerRequest['headers']} headers
+ */
+function sameSiteWrite(headers) {
+  const type = (header(headers, 'content-type') ?? '').trim().toLowerCase();
+  if (!/^application\/json\s*(;|$)/.test(type)) {
+    return false;
+  }
+  if ((header(headers, 'sec-fetch-site') ?? '').trim().toLowerCase() === 'cross-site') {
+    return false;
+  }
+  const origin = header(headers, 'origin');
+  if (origin === undefined) {
+    return true;
+  }
+  const host = (header(headers, 'x-forwarded-host') ?? header(headers, 'host') ?? '').split(',')[0].trim().toLowerCase();
+  try {
+    return Boolean(host) && new URL(origin).host.toLowerCase() === host;
+  } catch {
+    return false; // 'null' or not a URL
+  }
 }
 
 /** @param {HandlerRequest['headers']} headers */

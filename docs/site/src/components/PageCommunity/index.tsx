@@ -2,11 +2,13 @@
 //
 // Everything goes through the CommunityStore (useCommunityStore). With the
 // shared store (backend 'shared') likes and comments are kept in the site's
-// GitHub repository and everyone sees them: anyone can read, and liking or
-// commenting needs a signed-in user with a GitHub token (the site's
-// /api/community checks the token with GitHub). Otherwise they are kept in
-// this browser only (IndexedDB, else localStorage, else memory). The section
-// says which.
+// GitHub repository and everyone sees them. Guests come first: anyone can
+// like and comment right away, as "Guest" (the store sends this browser's
+// random guest id, so a guest can unlike and delete their own). A visitor who
+// is signed in with a GitHub token is shown by their verified GitHub name (the
+// site's /api/community checks the token with GitHub). Otherwise they are
+// kept in this browser only (IndexedDB, else localStorage, else memory). The
+// section says which.
 
 import React, {useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent} from 'react';
 import clsx from 'clsx';
@@ -64,7 +66,7 @@ function sentence(text: string): string {
  * What to tell the visitor when a write to the shared store failed (null:
  * not an API error, use the caller's wording).
  */
-function apiFailure(error: unknown, hasToken: boolean): string | null {
+function apiFailure(error: unknown): string | null {
   if (!(error instanceof CommunityApiError)) {
     return null;
   }
@@ -72,9 +74,7 @@ function apiFailure(error: unknown, hasToken: boolean): string | null {
     case 0:
       return 'Could not reach the site. Check your connection and try again.';
     case 401:
-      return hasToken
-        ? 'GitHub did not accept the token saved in the account menu. Replace it to like or comment.'
-        : 'Add a GitHub token in the account menu to like or comment.';
+      return 'GitHub did not accept the token saved in the account menu. Replace it, or remove it to like and comment as a guest.';
     case 413:
       return 'That comment is too long to send.';
     case 429:
@@ -137,6 +137,7 @@ function CommentItem({
           {author.login && author.login !== author.name && (
             <span className={styles.commentLogin}>@{author.login}</span>
           )}
+          {!author.login && canDelete && <span className={styles.commentLogin}>(you)</span>}
           {when && (
             <time className={styles.commentDate} dateTime={comment.createdAt} title={comment.createdAt}>
               {when}
@@ -166,8 +167,9 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
   const {user, userKey, status, token} = useGitHubUser();
   const openAccountMenu = useOpenAccountMenu();
   const shared = backend === 'shared';
-  // Shared likes and comments are checked with GitHub: they need the token.
-  const canWrite = !shared || Boolean(user && token);
+  // Shared: signed in with a token, writes go as this verified login (the
+  // store sends the token); otherwise as a guest.
+  const verifiedLogin = shared && user && token ? user.login : null;
 
   const [likes, setLikes] = useState<Likes | null>(null);
   const [comments, setComments] = useState<Comment[] | null>(null);
@@ -185,6 +187,8 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
   const hintId = useId();
   const errorId = useId();
 
+  // Read again when verifiedLogin changes: adding or removing the token
+  // changes whose like and which comments are the visitor's.
   useEffect(() => {
     let active = true;
     Promise.allSettled([store.getLikes(pageId), store.listComments(pageId)]).then(
@@ -216,16 +220,28 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
     return () => {
       active = false;
     };
-  }, [store, pageId]);
+  }, [store, pageId, verifiedLogin]);
 
-  const liked = likes ? likes.likedBy.includes(userKey) : false;
+  // Whether the current identity likes the page: a verified login is in
+  // likedBy; a guest's like is not (guests are only counted), the API says.
+  const likesThisPage = (value: Likes): boolean =>
+    verifiedLogin
+      ? value.likedBy.includes(verifiedLogin)
+      : shared
+        ? value.liked === true
+        : value.likedBy.includes(userKey);
+  const liked = likes ? likesThisPage(likes) : false;
+  const mayDelete = (comment: Comment): boolean =>
+    shared
+      ? comment.canDelete === true || (verifiedLogin !== null && comment.author.login === verifiedLogin)
+      : canDeleteComment(comment, userKey);
   // Until the store knows whether it is shared, nothing can be written.
   const ready = isBrowser && status !== 'loading' && backend !== null;
 
   // The buttons stay enabled while the store works (a disabled focused button
   // drops the keyboard focus to the page); the handlers ignore repeats.
   const toggleLike = async () => {
-    if (liking || !canWrite) {
+    if (liking) {
       return;
     }
     setLiking(true);
@@ -233,9 +249,10 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
       const next = await store.toggleLike(pageId, userKey);
       setLikes(next);
       setLikeError(null);
-      setAnnouncement(next.likedBy.includes(userKey) ? 'You like this page.' : 'Like removed.');
+      const nowLiked = likesThisPage(next);
+      setAnnouncement(nowLiked ? 'You like this page.' : 'Like removed.');
     } catch (error) {
-      const message = apiFailure(error, Boolean(token)) ?? 'Could not save the like in this browser.';
+      const message = apiFailure(error) ?? 'Could not save the like in this browser.';
       setLikeError(shared ? message : null);
       setAnnouncement(message);
     } finally {
@@ -248,7 +265,7 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
 
   const post = async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
-    if (posting || !canWrite) {
+    if (posting) {
       return;
     }
     if (count < 1 || tooLong) {
@@ -274,7 +291,7 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
       setAnnouncement('Comment posted.');
     } catch (error) {
       setFormError(
-        apiFailure(error, Boolean(token)) ??
+        apiFailure(error) ??
           (error instanceof Error && error.message === COMMENT_LENGTH_ERROR
             ? `A comment must be 1 to ${NUMBER.format(COMMENT_MAX_LENGTH)} characters.`
             : 'Could not save the comment in this browser.'),
@@ -311,7 +328,7 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
         }
       }
     } catch (error) {
-      const message = apiFailure(error, Boolean(token)) ?? 'Could not delete the comment in this browser.';
+      const message = apiFailure(error) ?? 'Could not delete the comment in this browser.';
       setDeleteError(message);
       setAnnouncement(message);
     }
@@ -327,7 +344,7 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
           className={clsx(styles.likeButton, liked && styles.liked)}
           aria-pressed={liked}
           onClick={toggleLike}
-          disabled={!ready || likes === null || !canWrite}
+          disabled={!ready || likes === null}
           aria-busy={liking || undefined}>
           <HeartIcon filled={liked} />
           <span>Like</span>
@@ -363,7 +380,7 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
             <CommentItem
               key={comment.id}
               comment={comment}
-              canDelete={canWrite && canDeleteComment(comment, userKey)}
+              canDelete={mayDelete(comment)}
               onDelete={remove}
               locale={i18n.currentLocale}
             />
@@ -377,67 +394,76 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
         </p>
       )}
 
-      {ready && !canWrite ? (
-        <div className={styles.gate}>
-          <p className={styles.gateText}>
-            {token
-              ? 'Sign in with your GitHub username in the account menu to like or comment.'
-              : 'Add a GitHub token in the account menu to like or comment.'}
-          </p>
-          <button type="button" className="button button--primary button--sm" onClick={openAccountMenu}>
-            Open the account menu
-          </button>
-        </div>
-      ) : (
-        <form className={styles.form} onSubmit={post} noValidate>
-          <label htmlFor={textareaId} className={styles.label}>
-            Add a comment
-          </label>
-          <textarea
-            ref={textarea}
-            id={textareaId}
-            className={styles.textarea}
-            rows={4}
-            value={text}
-            onChange={(event) => {
-              setText(event.target.value);
-              if (formError) {
-                setFormError(null);
-              }
-            }}
-            onKeyDown={onKeyDown}
-            disabled={!ready}
-            aria-invalid={formError || tooLong ? true : undefined}
-            aria-describedby={clsx(hintId, formError && errorId)}
-          />
-          <div className={styles.formRow}>
-            <p id={hintId} className={clsx('rid-muted-note', styles.hint)}>
-              {user ? (
+      <form className={styles.form} onSubmit={post} noValidate>
+        <label htmlFor={textareaId} className={styles.label}>
+          Add a comment
+        </label>
+        <textarea
+          ref={textarea}
+          id={textareaId}
+          className={styles.textarea}
+          rows={4}
+          value={text}
+          onChange={(event) => {
+            setText(event.target.value);
+            if (formError) {
+              setFormError(null);
+            }
+          }}
+          onKeyDown={onKeyDown}
+          disabled={!ready}
+          aria-invalid={formError || tooLong ? true : undefined}
+          aria-describedby={clsx(hintId, formError && errorId)}
+        />
+        <div className={styles.formRow}>
+          <p id={hintId} className={clsx('rid-muted-note', styles.hint)}>
+            {shared ? (
+              verifiedLogin ? (
                 <>
-                  Commenting as <strong>@{user.login}</strong>.{shared && ' Everyone can read your comment.'}
+                  Commenting as <strong>@{verifiedLogin}</strong>. Everyone can read your comment.
+                </>
+              ) : user ? (
+                <>
+                  Commenting as a guest ·{' '}
+                  <button type="button" className={styles.linkButton} onClick={openAccountMenu}>
+                    Add a GitHub token
+                  </button>{' '}
+                  to comment as @{user.login}.
                 </>
               ) : (
-                <>Commenting as a guest. Sign in from the navbar to use your GitHub name.</>
-              )}{' '}
-              <span className={tooLong ? styles.overLimit : undefined}>
-                {NUMBER.format(count)} / {NUMBER.format(COMMENT_MAX_LENGTH)}
-              </span>
-            </p>
-            <button
-              type="submit"
-              className="button button--primary button--sm"
-              disabled={!ready || count < 1 || tooLong}
-              aria-busy={posting || undefined}>
-              {posting ? 'Posting…' : 'Post comment'}
-            </button>
-          </div>
-          {formError && (
-            <p id={errorId} className={styles.error} role="alert">
-              {formError}
-            </p>
-          )}
-        </form>
-      )}
+                <>
+                  Commenting as a guest ·{' '}
+                  <button type="button" className={styles.linkButton} onClick={openAccountMenu}>
+                    Sign in with GitHub
+                  </button>{' '}
+                  to show your name.
+                </>
+              )
+            ) : user ? (
+              <>
+                Commenting as <strong>@{user.login}</strong>.
+              </>
+            ) : (
+              <>Commenting as a guest. Sign in from the navbar to use your GitHub name.</>
+            )}{' '}
+            <span className={tooLong ? styles.overLimit : undefined}>
+              {NUMBER.format(count)} / {NUMBER.format(COMMENT_MAX_LENGTH)}
+            </span>
+          </p>
+          <button
+            type="submit"
+            className="button button--primary button--sm"
+            disabled={!ready || count < 1 || tooLong}
+            aria-busy={posting || undefined}>
+            {posting ? 'Posting…' : 'Post comment'}
+          </button>
+        </div>
+        {formError && (
+          <p id={errorId} className={styles.error} role="alert">
+            {formError}
+          </p>
+        )}
+      </form>
 
       <p className="rid-sr-only" aria-live="polite">
         {announcement}

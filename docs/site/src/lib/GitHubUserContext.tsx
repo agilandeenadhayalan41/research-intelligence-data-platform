@@ -9,9 +9,11 @@
 // An optional GitHub token can be kept too (localStorage, this device only).
 // It is used for the blog editor's "Open pull request" and for higher GitHub
 // API rate limits (src/lib/github.mjs sends it to api.github.com), and, with
-// the shared community store, it is sent with each like or comment to this
-// site's own /api/community, which checks it with GitHub to learn the
-// visitor's login and never stores it. Nothing else receives it.
+// the shared community store and a signed-in user, it is sent with each like
+// or comment to this site's own /api/community, which checks it with GitHub
+// to show the visitor's verified name and never stores it. Nothing else
+// receives it. Likes and comments do not need it: without it they are made as
+// a guest.
 //
 // SSR-safe: localStorage is read in an effect after mount, so the server and
 // the first client render both start signed out (status 'loading').

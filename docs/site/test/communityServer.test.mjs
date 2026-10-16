@@ -17,6 +17,8 @@ const BRANCH = 'community-data';
 const PAGE = 'docs/overview/introduction.md';
 const API_PAGE = `/${PAGE}`;
 const FILE = `community/pages/${createHash('sha256').update(API_PAGE).digest('hex').slice(0, 32)}.json`;
+const GUEST_A = '0f8a5a4e-1b2c-4d3e-8f90-a1b2c3d4e5f6';
+const GUEST_B = '7c6b5a49-3827-4165-9443-322110fedcba';
 
 const realFetch = globalThis.fetch;
 const github = createFakeGitHub();
@@ -26,10 +28,13 @@ let origin = '';
 /** fetch against the local server. */
 const local = (path, init) => realFetch(`${origin}${path}`, init);
 
-async function call(method, {page, body, token, raw} = {}) {
+async function call(method, {page, body, token, guestId, raw} = {}) {
   const headers = {'content-type': 'application/json'};
   if (token) {
     headers.authorization = `Bearer ${token}`;
+  }
+  if (guestId) {
+    headers['x-guest-id'] = guestId;
   }
   const response = await local(page === undefined ? '/api/community' : `/api/community?page=${encodeURIComponent(page)}`, {
     method,
@@ -39,10 +44,11 @@ async function call(method, {page, body, token, raw} = {}) {
   return {status: response.status, headers: response.headers, json: await response.json()};
 }
 
-const visitor = (token) =>
+const visitor = (token, guestId = GUEST_A) =>
   createSharedStore({
     fetchImpl: (url, init) => local(url, init),
     getToken: () => token,
+    getGuestId: () => guestId,
     fallback: createMemoryStore(),
   });
 
@@ -92,14 +98,19 @@ describe('api/community.mjs over HTTP', () => {
     assert.equal(probe.headers.get('access-control-allow-origin'), null);
 
     const empty = await call('GET', {page: API_PAGE});
-    assert.deepEqual(empty.json, {configured: true, pageId: API_PAGE, likes: {count: 0, likedBy: []}, comments: []});
+    assert.deepEqual(empty.json, {
+      configured: true,
+      pageId: API_PAGE,
+      likes: {count: 0, likedBy: [], liked: false},
+      comments: [],
+    });
     assert.equal(github.branches.has(BRANCH), false, 'reads never create the branch');
   });
 
   test('the first like creates the orphan data branch', async () => {
     const liked = await call('POST', {body: {action: 'like', page: API_PAGE}, token: ALICE_TOKEN});
     assert.equal(liked.status, 200);
-    assert.deepEqual(liked.json.likes, {count: 1, likedBy: ['alice']});
+    assert.deepEqual(liked.json.likes, {count: 1, likedBy: ['alice'], liked: true});
     const history = github.history(BRANCH);
     assert.deepEqual(history, [
       {message: `community: like on ${API_PAGE}`, parents: 1},
@@ -161,10 +172,27 @@ describe('api/community.mjs over HTTP', () => {
     }
   });
 
-  test('errors over HTTP: 401, 403, 400, 405, 413', async () => {
-    const noToken = await call('POST', {body: {action: 'like', page: API_PAGE}});
-    assert.equal(noToken.status, 401);
-    assert.equal(noToken.json.error, 'sign in with a GitHub token to like or comment');
+  test('guests over HTTP: like, comment and delete their own, nobody else\'s', async () => {
+    const guest = visitor(null, GUEST_A);
+    const other = visitor(null, GUEST_B);
+    assert.deepEqual(await guest.toggleLike(PAGE, 'guest'), {count: 3, likedBy: ['bob', 'carol'], liked: true});
+    const comment = await guest.addComment(PAGE, {body: 'Guest here'});
+    assert.deepEqual(comment.author, {login: null, name: 'Guest', avatarUrl: null});
+    assert.equal(await other.deleteComment(PAGE, comment.id, 'guest'), false);
+    assert.equal(await visitor(BOB_TOKEN, GUEST_B).deleteComment(PAGE, comment.id, 'bob'), false);
+    assert.equal(await guest.deleteComment(PAGE, comment.id, 'guest'), true);
+    assert.deepEqual(await guest.toggleLike(PAGE, 'guest'), {count: 2, likedBy: ['bob', 'carol'], liked: false});
+
+    const saved = JSON.stringify(github.readJson(BRANCH, FILE));
+    assert.ok(!saved.includes(GUEST_A) && !saved.includes(GUEST_B), 'raw guest ids are never stored');
+  });
+
+  test('errors over HTTP: 400, 401, 403, 405, 413', async () => {
+    const noIdentity = await call('POST', {body: {action: 'like', page: API_PAGE}});
+    assert.equal(noIdentity.status, 400);
+    assert.match(noIdentity.json.error, /X-Guest-Id/);
+    const refused = await call('POST', {body: {action: 'like', page: API_PAGE}, token: 'fake-token-github-refuses', guestId: GUEST_A});
+    assert.equal(refused.status, 401);
 
     const mismatch = await call('POST', {body: {action: 'like', page: API_PAGE, login: 'bob'}, token: ALICE_TOKEN});
     assert.equal(mismatch.status, 403);
@@ -180,7 +208,7 @@ describe('api/community.mjs over HTTP', () => {
     const tooLarge = await call('POST', {raw: big, token: ALICE_TOKEN});
     assert.equal(tooLarge.status, 413);
 
-    for (const response of [noToken, mismatch, tooLarge]) {
+    for (const response of [noIdentity, refused, mismatch, tooLarge]) {
       const text = JSON.stringify(response.json);
       for (const secret of [SERVER_TOKEN, ALICE_TOKEN, BOB_TOKEN]) {
         assert.ok(!text.includes(secret));
@@ -199,10 +227,14 @@ describe('api/community.mjs over HTTP', () => {
       `community: comment on ${API_PAGE}`,
       `community: delete on ${API_PAGE}`,
       `community: comment on ${API_PAGE}`,
+      `community: like on ${API_PAGE}`,
+      `community: comment on ${API_PAGE}`,
+      `community: delete on ${API_PAGE}`,
+      `community: unlike on ${API_PAGE}`,
     ]);
     for (const request of github.requests) {
       if (request.path === '/user') {
-        assert.match(request.auth, /^visitor:/, 'visitor tokens only go to GET /user');
+        assert.match(request.auth, /^(visitor:|unknown-token$)/, 'visitor tokens only go to GET /user');
       } else {
         assert.equal(request.auth, 'server', `${request.method} ${request.path}`);
       }

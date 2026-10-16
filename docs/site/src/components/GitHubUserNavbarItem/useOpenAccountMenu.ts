@@ -1,5 +1,5 @@
 // Opens the navbar account menu from anywhere in the page (for example the
-// "Open the account menu" button under the comments), with the token field
+// "Sign in with GitHub" link under the comment form), with the token field
 // shown. On a wide screen the navbar item opens its popover; on a narrow one
 // the mobile sidebar opens on its main menu and the item opens its panel there.
 

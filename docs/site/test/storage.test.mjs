@@ -534,6 +534,16 @@ describe('canDeleteComment', () => {
     assert.equal(canDeleteComment({author: {login: 'octocat', name: 'o', avatarUrl: null}}, ''), false);
     assert.equal(canDeleteComment(null, 'octocat'), false);
   });
+
+  test("follows the shared API's canDelete for guest comments (every guest's userKey is 'guest')", () => {
+    const guest = {author: {login: null, name: 'Guest', avatarUrl: null}};
+    assert.equal(canDeleteComment({...guest, canDelete: false}, 'guest'), false, "another browser's guest comment");
+    assert.equal(canDeleteComment({...guest, canDelete: true}, 'guest'), true);
+    assert.equal(canDeleteComment({...guest, canDelete: true}, 'octocat'), true, 'written as a guest, then signed in');
+    const user = {author: {login: 'octocat', name: 'o', avatarUrl: null}};
+    assert.equal(canDeleteComment({...user, canDelete: false}, 'octocat'), true);
+    assert.equal(canDeleteComment({...user, canDelete: false}, 'guest'), false);
+  });
 });
 
 describe('constants', () => {

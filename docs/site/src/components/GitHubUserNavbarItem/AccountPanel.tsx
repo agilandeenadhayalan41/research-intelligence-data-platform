@@ -18,7 +18,7 @@ type Props = {
  */
 export default function AccountPanel({autoFocus = false, revealToken = false}: Props): React.JSX.Element {
   const {user, status, token} = useGitHubUser();
-  // With shared likes and comments the token is what proves who the visitor is.
+  // With shared likes and comments the token is what shows the visitor's verified name.
   const shared = useCommunityBackend() === 'shared';
   // Signing in or out replaces the section that had the focus. Once that has
   // happened, move the focus into the new section (the mobile panel opens
@@ -120,9 +120,9 @@ function SignInForm({
       <p id={hintId} className="rid-muted-note">
         {shared ? (
           <>
-            No password: the site reads your public GitHub profile and keeps it in this browser. To like or
-            comment, also add a GitHub token below; the site checks it with GitHub, so your likes and comments
-            carry your real account.
+            No password: the site reads your public GitHub profile and keeps it in this browser. Liking and
+            commenting work without it, as a guest. To show your name on them, also add a GitHub token below;
+            the site checks it with GitHub, so your likes and comments carry your real account.
           </>
         ) : (
           <>
@@ -136,7 +136,7 @@ function SignInForm({
 }
 
 function SignedIn({autoFocus, shared}: {autoFocus: boolean; shared: boolean}): React.JSX.Element | null {
-  const {user, signOut} = useGitHubUser();
+  const {user, signOut, token} = useGitHubUser();
   const button = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -161,7 +161,9 @@ function SignedIn({autoFocus, shared}: {autoFocus: boolean; shared: boolean}): R
       </div>
       <p className="rid-muted-note">
         {shared
-          ? 'Likes and comments are public: everyone sees them, under the GitHub account your token belongs to.'
+          ? token
+            ? 'Likes and comments are public: everyone sees them, under the GitHub account your token belongs to.'
+            : 'Without a token your likes and comments are posted as a guest. Add one below to show your name.'
           : 'Your likes and comments in this browser carry this username.'}
       </p>
       <button ref={button} type="button" className="button button--secondary button--sm" onClick={signOut}>
@@ -238,14 +240,15 @@ function TokenSection({
       <summary className={styles.tokenSummary}>
         GitHub token{' '}
         <span className={styles.tokenState}>
-          {token ? 'saved' : shared ? 'needed to like and comment' : 'optional'}
+          {token ? 'saved' : shared ? 'optional: shows your name' : 'optional'}
         </span>
       </summary>
       <p id={noteId} className="rid-muted-note">
         {shared ? (
           <>
-            Needed to like and comment; also used for the blog editor&apos;s &ldquo;Open pull request&rdquo; and
-            for higher GitHub API rate limits. It is kept in this browser on this device only. It is used for
+            Optional. Signed in with a token, your likes and comments show your GitHub name instead of
+            &ldquo;Guest&rdquo;; it is also used for the blog editor&apos;s &ldquo;Open pull request&rdquo; and for
+            higher GitHub API rate limits. It is kept in this browser on this device only. It is used for
             api.github.com, and sent to this site&apos;s /api/community only to confirm your login; it is never
             stored there.
           </>
@@ -299,7 +302,7 @@ function TokenSection({
           Create a token on GitHub
         </a>
         .{' '}
-        {shared && 'To like and comment, a fine-grained token with only public, read-only access is enough. '}
+        {shared && 'To show your name on likes and comments, a fine-grained token with only public, read-only access is enough. '}
         Remove it here on a shared computer.
       </p>
     </details>

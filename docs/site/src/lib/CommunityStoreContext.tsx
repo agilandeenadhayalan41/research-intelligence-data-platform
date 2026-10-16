@@ -4,10 +4,12 @@
 // docusaurus.config.ts:
 // - 'shared' (the site's setting): likes and comments are shared by every
 //   visitor through the site's /api/community function, which keeps them in
-//   the GitHub repository; writes send the visitor's GitHub token (from
-//   useGitHubUser) so the function can check who they are. Drafts stay in the
-//   browser. Where the API is missing or not configured (`npm start`), it
-//   behaves like 'browser'.
+//   the GitHub repository. Guests come first: without signing in, writes carry
+//   this browser's random guest id and show as "Guest". A visitor who is
+//   signed in AND has saved a GitHub token (useGitHubUser) writes under their
+//   verified GitHub name: the token goes with each write so the function can
+//   check who they are. Drafts stay in the browser. Where the API is missing
+//   or not configured (`npm start`), it behaves like 'browser'.
 // - 'browser': everything in this browser (IndexedDB, else localStorage, else
 //   memory).
 //
@@ -49,10 +51,11 @@ function makeStore(kind: string, getToken: () => string | null): CommunityStore 
 
 export function CommunityStoreProvider({children}: {children: ReactNode}): React.JSX.Element {
   const {siteConfig} = useDocusaurusContext();
-  const {token} = useGitHubUser();
+  const {user, token} = useGitHubUser();
   // The store reads the token at each write, so it never has to be recreated.
-  const tokenRef = useRef(token);
-  tokenRef.current = token;
+  // Signed out, a saved token is not used: the visitor is a guest.
+  const tokenRef = useRef<string | null>(null);
+  tokenRef.current = user ? token : null;
   const configured = siteConfig.customFields?.communityStore;
   const kind = typeof configured === 'string' && configured ? configured : 'browser';
   // One store for the whole session (it is not recreated on navigation).

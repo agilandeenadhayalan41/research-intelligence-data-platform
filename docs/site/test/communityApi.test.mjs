@@ -11,7 +11,12 @@ import {
   BODY_MAX_BYTES,
   BODY_TOO_LARGE,
   BUSY_ERROR,
+  CROSS_SITE_ERROR,
   COMMENT_LENGTH_ERROR,
+  GUEST_ID_ERROR,
+  GUEST_NAME,
+  GUEST_WRITE_LIMIT,
+  OWN_COMMENTS_ERROR,
   BRANCH_VERCEL_JSON,
   LOGIN_CACHE_MS,
   MAX_RETRIES,
@@ -19,7 +24,10 @@ import {
   PAGE_SIZE_ERROR,
   READ_CACHE_MS,
   UNAUTHORIZED_ERROR,
+  WRITE_LIMIT,
   createCommunityHandler,
+  guestKeyOf,
+  isGuestId,
   isPageId,
   normalizePageFile,
   pageFilePath,
@@ -31,13 +39,18 @@ const PAGE = '/docs/overview/introduction.md';
 const BRANCH = 'community-data';
 const FILE = `community/pages/${createHash('sha256').update(PAGE).digest('hex').slice(0, 32)}.json`;
 const START = Date.parse('2026-10-16T12:00:00.000Z');
+// Guest ids are random UUID v4 strings made by each browser (fake ones here).
+const GUEST_A = '0f8a5a4e-1b2c-4d3e-8f90-a1b2c3d4e5f6';
+const GUEST_B = '7c6b5a49-3827-4165-9443-322110fedcba';
+const GUEST_C = 'aaaaaaaa-bbbb-4ccc-addd-eeeeeeeeeeee';
 
-function setup({env, fake = createFakeGitHub()} = {}) {
+function setup({env, fake = createFakeGitHub(), resolveSessionUser} = {}) {
   let time = START;
   let ids = 0;
   const logs = [];
   const sleeps = [];
   const handle = createCommunityHandler({
+    resolveSessionUser,
     env: env ?? {COMMUNITY_GITHUB_TOKEN: SERVER_TOKEN},
     fetchImpl: fake.fetch,
     now: () => time,
@@ -49,18 +62,24 @@ function setup({env, fake = createFakeGitHub()} = {}) {
     log: (message) => logs.push(message),
   });
 
-  /** GET with ?page= (omit page for the status probe). */
-  const get = (page, {ip = '203.0.113.7', query} = {}) =>
-    handle({method: 'GET', query: query ?? (page === undefined ? {} : {page}), headers: {}, ip});
+  /** GET with ?page= (omit page for the status probe), optionally as a guest. */
+  const get = (page, {ip = '203.0.113.7', query, guestId, headers = {}} = {}) =>
+    handle({
+      method: 'GET',
+      query: query ?? (page === undefined ? {} : {page}),
+      headers: {...(guestId ? {'x-guest-id': guestId} : {}), ...headers},
+      ip,
+    });
 
-  /** POST a JSON body (a string is sent as is). */
-  const post = (body, {token = ALICE_TOKEN, ip = '203.0.113.7', headers = {}} = {}) =>
+  /** POST a JSON body (a string is sent as is). Alice's token unless `token` is null. */
+  const post = (body, {token = ALICE_TOKEN, guestId, ip = '203.0.113.7', headers = {}} = {}) =>
     handle({
       method: 'POST',
       query: {},
       headers: {
         'content-type': 'application/json',
         ...(token ? {authorization: `Bearer ${token}`} : {}),
+        ...(guestId ? {'x-guest-id': guestId} : {}),
         ...headers,
       },
       body: typeof body === 'string' || typeof body === 'symbol' ? body : JSON.stringify(body),
@@ -243,7 +262,7 @@ describe('reads', () => {
     assert.deepEqual(response.json, {
       configured: true,
       pageId: PAGE,
-      likes: {count: 0, likedBy: []},
+      likes: {count: 0, likedBy: [], liked: false},
       comments: [],
     });
     assert.deepEqual(trace(fake), [`GET /contents/${FILE}`]);
@@ -275,7 +294,7 @@ describe('reads', () => {
     const {get, advance} = setup({fake});
     const first = await get(PAGE);
     assert.equal(first.status, 200);
-    assert.deepEqual(first.json.likes, {count: 2, likedBy: ['alice', 'bob']});
+    assert.deepEqual(first.json.likes, {count: 2, likedBy: ['alice', 'bob'], liked: false});
     assert.deepEqual(first.json.comments, [
       {
         id: 'c1',
@@ -283,6 +302,7 @@ describe('reads', () => {
         author: {login: 'bob', name: 'Bob', avatarUrl: 'https://avatars.example.test/b'},
         body: 'First',
         createdAt: '2026-10-03T00:00:00.000Z',
+        canDelete: false,
       },
       {
         id: 'c2',
@@ -290,6 +310,7 @@ describe('reads', () => {
         author: {login: 'alice', name: 'alice', avatarUrl: null},
         body: 'Second',
         createdAt: '2026-10-04T00:00:00.000Z',
+        canDelete: false,
       },
     ]);
     const calls = fake.requests.length;
@@ -306,7 +327,7 @@ describe('reads', () => {
     fake.writeFile(BRANCH, FILE, JSON.stringify({version: 1, pageId: PAGE, likes: [{login: 'bob', at: 'x'}], comments: []}));
     const {get} = setup({fake});
     const response = await get(PAGE);
-    assert.deepEqual(response.json.likes, {count: 1, likedBy: ['bob']});
+    assert.deepEqual(response.json.likes, {count: 1, likedBy: ['bob'], liked: false});
     assert.deepEqual(trace(fake).map((line) => line.replace(/[0-9a-f]{40}/, '<sha>')), [
       `GET /contents/${FILE}`,
       'GET /git/blobs/<sha>',
@@ -344,28 +365,32 @@ describe('reads', () => {
 });
 
 describe('writes', () => {
-  test('401 without a token, with a malformed one, or one GitHub refuses', async () => {
+  test('no token and no guest id is 400; a malformed or refused token is 401 (never a silent guest write)', async () => {
     const {post, fake} = setup();
     const missing = await post({action: 'like', page: PAGE}, {token: null});
-    assert.equal(missing.status, 401);
-    assert.equal(missing.json.error, UNAUTHORIZED_ERROR);
-    assert.equal(missing.headers['WWW-Authenticate'], 'Bearer');
+    assert.equal(missing.status, 400);
+    assert.equal(missing.json.error, GUEST_ID_ERROR);
     const basic = await post({action: 'like', page: PAGE}, {token: null, headers: {authorization: 'Basic abc'}});
     assert.equal(basic.status, 401);
+    assert.equal(basic.json.error, UNAUTHORIZED_ERROR);
+    assert.equal(basic.headers['WWW-Authenticate'], 'Bearer');
+    const basicGuest = await post({action: 'like', page: PAGE}, {token: null, guestId: GUEST_A, headers: {authorization: 'Basic abc'}});
+    assert.equal(basicGuest.status, 401, 'an Authorization header that is not a Bearer token is refused, even with a guest id');
     assert.equal(fake.requests.length, 0, 'no token: GitHub is not asked');
 
-    const invalid = await post({action: 'like', page: PAGE}, {token: 'fake-token-github-refuses'});
+    const invalid = await post({action: 'like', page: PAGE}, {token: 'fake-token-github-refuses', guestId: GUEST_A});
     assert.equal(invalid.status, 401);
     assert.equal(invalid.json.error, UNAUTHORIZED_ERROR);
     assert.deepEqual(trace(fake), ['GET /user']);
     assert.ok(!JSON.stringify(invalid).includes('fake-token-github-refuses'));
+    assert.equal(fake.readJson(BRANCH, FILE), undefined, 'nothing was written as a guest');
   });
 
   test('like and unlike are idempotent and each change is one commit', async () => {
     const {post, fake} = setup();
     const liked = await post({action: 'like', page: PAGE});
     assert.equal(liked.status, 200);
-    assert.deepEqual(liked.json.likes, {count: 1, likedBy: ['alice']});
+    assert.deepEqual(liked.json.likes, {count: 1, likedBy: ['alice'], liked: true});
     assert.deepEqual(liked.json.comments, []);
     assert.deepEqual(fake.readJson(BRANCH, FILE), {
       version: 1,
@@ -377,12 +402,12 @@ describe('writes', () => {
     const puts = () => fake.requests.filter((request) => request.method === 'PUT').length;
     assert.equal(puts(), 1);
     const again = await post({action: 'like', page: PAGE});
-    assert.deepEqual(again.json.likes, {count: 1, likedBy: ['alice']});
+    assert.deepEqual(again.json.likes, {count: 1, likedBy: ['alice'], liked: true});
     assert.equal(puts(), 1, 'liking twice writes nothing');
 
     assert.deepEqual((await post({action: 'like', page: PAGE}, {token: BOB_TOKEN})).json.likes.likedBy, ['alice', 'bob']);
-    assert.deepEqual((await post({action: 'unlike', page: PAGE})).json.likes, {count: 1, likedBy: ['bob']});
-    assert.deepEqual((await post({action: 'unlike', page: PAGE})).json.likes, {count: 1, likedBy: ['bob']});
+    assert.deepEqual((await post({action: 'unlike', page: PAGE})).json.likes, {count: 1, likedBy: ['bob'], liked: false});
+    assert.deepEqual((await post({action: 'unlike', page: PAGE})).json.likes, {count: 1, likedBy: ['bob'], liked: false});
     assert.equal(puts(), 3, 'unliking twice writes once');
 
     const messages = fake.history(BRANCH).map((commit) => commit.message);
@@ -423,6 +448,7 @@ describe('writes', () => {
       author: {login: 'alice', name: 'Alice Example', avatarUrl: 'https://avatars.example.test/u/1'},
       body: 'Hello <b>there</b>',
       createdAt: '2026-10-16T12:00:00.000Z',
+      canDelete: true,
     });
     advance(1000);
     const second = await post({action: 'comment', page: PAGE, body: 'x'.repeat(5000)}, {token: BOB_TOKEN});
@@ -430,6 +456,7 @@ describe('writes', () => {
     // bob has no name and an http avatar: the login, and no avatar.
     assert.deepEqual(second.json.comment.author, {login: 'bob', name: 'bob', avatarUrl: null});
     assert.deepEqual(second.json.comments.map((comment) => comment.id), ['comment-1', 'comment-2']);
+    assert.deepEqual(second.json.comments.map((comment) => comment.canDelete), [false, true], 'canDelete is for the caller (bob)');
     assert.deepEqual(fake.readJson(BRANCH, FILE).comments[0], {
       id: 'comment-1',
       login: 'alice',
@@ -545,7 +572,7 @@ describe('writes', () => {
     const fake = createFakeGitHub();
     fake.writeFile(BRANCH, FILE, '{"likes": [');
     const {post, get} = setup({fake});
-    assert.deepEqual((await get(PAGE)).json.likes, {count: 0, likedBy: []});
+    assert.deepEqual((await get(PAGE)).json.likes, {count: 0, likedBy: [], liked: false});
     const response = await post({action: 'like', page: PAGE});
     assert.equal(response.status, 500);
     assert.equal(fake.requests.filter((request) => request.method === 'PUT').length, 0);
@@ -724,5 +751,388 @@ describe('rate limits (per IP, in memory)', () => {
     assert.equal(limited.headers['Retry-After'], '60');
     advance(60 * 1000);
     assert.equal((await get()).status, 200);
+  });
+});
+
+describe('guests (no sign-in)', () => {
+  test('a guest likes and unlikes with their guest id; only its hash is stored', async () => {
+    const {post, get, fake} = setup();
+    const liked = await post({action: 'like', page: PAGE}, {token: null, guestId: GUEST_A});
+    assert.equal(liked.status, 200);
+    assert.deepEqual(liked.json.likes, {count: 1, likedBy: [], liked: true});
+    assert.equal(guestKeyOf(GUEST_A), createHash('sha256').update(GUEST_A).digest('hex').slice(0, 16));
+    assert.deepEqual(fake.readJson(BRANCH, FILE).likes, [
+      {login: null, guestKey: guestKeyOf(GUEST_A), at: '2026-10-16T12:00:00.000Z'},
+    ]);
+    assert.ok(!fake.requests.some((request) => request.path === '/user'), 'a guest write never calls GitHub /user');
+
+    // Idempotent, also when the browser sends its id in upper case.
+    const puts = () => fake.requests.filter((request) => request.method === 'PUT').length;
+    assert.equal(puts(), 1);
+    await post({action: 'like', page: PAGE}, {token: null, guestId: GUEST_A.toUpperCase()});
+    assert.equal(puts(), 1, 'liking twice writes nothing');
+
+    // Everyone sees the count; only the guest sees that the like is theirs.
+    assert.deepEqual((await get(PAGE, {guestId: GUEST_A})).json.likes, {count: 1, likedBy: [], liked: true});
+    assert.deepEqual((await get(PAGE, {guestId: GUEST_B})).json.likes, {count: 1, likedBy: [], liked: false});
+    assert.deepEqual((await get(PAGE)).json.likes, {count: 1, likedBy: [], liked: false});
+
+    await post({action: 'like', page: PAGE}, {token: null, guestId: GUEST_B});
+    assert.deepEqual((await post({action: 'like', page: PAGE})).json.likes, {count: 3, likedBy: ['alice'], liked: true});
+
+    // Unlike only ever removes the caller's own like.
+    const stranger = await post({action: 'unlike', page: PAGE}, {token: null, guestId: GUEST_C});
+    assert.deepEqual(stranger.json.likes, {count: 3, likedBy: ['alice'], liked: false});
+    assert.equal(puts(), 3, "another guest's unlike writes nothing");
+    const unliked = await post({action: 'unlike', page: PAGE}, {token: null, guestId: GUEST_A});
+    assert.deepEqual(unliked.json.likes, {count: 2, likedBy: ['alice'], liked: false});
+    assert.deepEqual(
+      fake.readJson(BRANCH, FILE).likes.map((like) => like.login ?? like.guestKey),
+      [guestKeyOf(GUEST_B), 'alice'],
+    );
+    assert.equal(fake.history(BRANCH)[0].message, `community: unlike on ${PAGE}`);
+  });
+
+  test('a guest comments as "Guest" and only that guest id can delete it', async () => {
+    const {post, get, fake} = setup();
+    const created = await post({action: 'comment', page: PAGE, body: '  Nice page  '}, {token: null, guestId: GUEST_A});
+    assert.equal(created.status, 200);
+    assert.deepEqual(created.json.comment, {
+      id: 'comment-1',
+      pageId: PAGE,
+      author: {login: null, name: GUEST_NAME, avatarUrl: null},
+      body: 'Nice page',
+      createdAt: '2026-10-16T12:00:00.000Z',
+      canDelete: true,
+    });
+    assert.deepEqual(fake.readJson(BRANCH, FILE).comments, [
+      {
+        id: 'comment-1',
+        login: null,
+        name: 'Guest',
+        guestKey: guestKeyOf(GUEST_A),
+        avatarUrl: null,
+        body: 'Nice page',
+        createdAt: '2026-10-16T12:00:00.000Z',
+      },
+    ]);
+
+    // canDelete is worked out for each request.
+    assert.equal((await get(PAGE, {guestId: GUEST_A})).json.comments[0].canDelete, true);
+    assert.equal((await get(PAGE, {guestId: GUEST_B})).json.comments[0].canDelete, false);
+    assert.equal((await get(PAGE)).json.comments[0].canDelete, false);
+
+    const id = created.json.comment.id;
+    const otherGuest = await post({action: 'delete', page: PAGE, id}, {token: null, guestId: GUEST_B});
+    assert.equal(otherGuest.status, 403);
+    assert.equal(otherGuest.json.error, OWN_COMMENTS_ERROR);
+    const user = await post({action: 'delete', page: PAGE, id});
+    assert.equal(user.status, 403, 'a signed-in user cannot delete a guest comment either');
+    assert.equal(fake.readJson(BRANCH, FILE).comments.length, 1);
+
+    const own = await post({action: 'delete', page: PAGE, id}, {token: null, guestId: GUEST_A.toUpperCase()});
+    assert.equal(own.status, 200);
+    assert.equal(own.json.deleted, true);
+    assert.deepEqual(fake.readJson(BRANCH, FILE).comments, []);
+    assert.equal(fake.history(BRANCH)[0].message, `community: delete on ${PAGE}`);
+  });
+
+  test("a guest cannot delete a user's comment, even by naming the user in the body", async () => {
+    const {post, fake} = setup();
+    const alices = await post({action: 'comment', page: PAGE, body: 'by alice'});
+    const id = alices.json.comment.id;
+    for (const extra of [{}, {login: 'alice'}, {author: {login: 'alice'}}]) {
+      const response = await post({action: 'delete', page: PAGE, id, ...extra}, {token: null, guestId: GUEST_A});
+      assert.equal(response.status, 403, JSON.stringify(extra));
+    }
+    assert.equal(fake.readJson(BRANCH, FILE).comments.length, 1);
+  });
+
+  test('signed in, the guest id still proves which guest comments are yours', async () => {
+    const {post, get} = setup();
+    const asGuest = await post({action: 'comment', page: PAGE, body: 'before signing in'}, {token: null, guestId: GUEST_A});
+    // With a token, new likes and comments are the user's...
+    const signedIn = await post({action: 'comment', page: PAGE, body: 'signed in'}, {guestId: GUEST_A});
+    assert.equal(signedIn.json.comment.author.login, 'alice');
+    assert.deepEqual(signedIn.json.comments.map((comment) => comment.canDelete), [true, true]);
+    assert.deepEqual((await get(PAGE, {guestId: GUEST_B})).json.comments.map((comment) => comment.canDelete), [false, false]);
+    // ...and the old guest comment can still be deleted with the same guest id.
+    assert.equal((await post({action: 'delete', page: PAGE, id: asGuest.json.comment.id})).status, 403, 'not without it');
+    assert.equal((await post({action: 'delete', page: PAGE, id: asGuest.json.comment.id}, {guestId: GUEST_A})).status, 200);
+  });
+
+  test('nobody can be impersonated through body fields', async () => {
+    const {post, fake} = setup();
+    const forged = {
+      login: 'alice',
+      name: 'Alice Example',
+      avatarUrl: 'https://avatars.example.test/u/1',
+      author: {login: 'alice', name: 'Alice Example'},
+      guestKey: guestKeyOf(GUEST_B),
+    };
+    const comment = await post({action: 'comment', page: PAGE, body: 'hi', ...forged}, {token: null, guestId: GUEST_A});
+    assert.equal(comment.status, 200);
+    assert.deepEqual(comment.json.comment.author, {login: null, name: 'Guest', avatarUrl: null});
+    const stored = fake.readJson(BRANCH, FILE).comments[0];
+    assert.deepEqual([stored.login, stored.name, stored.avatarUrl, stored.guestKey], [null, 'Guest', null, guestKeyOf(GUEST_A)]);
+    const like = await post({action: 'like', page: PAGE, ...forged}, {token: null, guestId: GUEST_A});
+    assert.deepEqual(like.json.likes.likedBy, [], 'a guest like never counts as a user');
+    assert.equal(fake.readJson(BRANCH, FILE).likes[0].login, null);
+
+    // A verified user cannot claim another login, and names come from GitHub.
+    const asBob = await post({action: 'comment', page: PAGE, body: 'x', login: 'bob'});
+    assert.equal(asBob.status, 403);
+    const renamed = await post({
+      action: 'comment',
+      page: PAGE,
+      body: 'y',
+      name: 'Bob',
+      avatarUrl: 'https://evil.example.test/x.png',
+      author: {login: 'bob', name: 'Bob'},
+    });
+    assert.deepEqual(renamed.json.comment.author, {
+      login: 'alice',
+      name: 'Alice Example',
+      avatarUrl: 'https://avatars.example.test/u/1',
+    });
+  });
+
+  test('the guest id must be a UUID v4; reads ignore a bad one', async () => {
+    assert.ok(isGuestId(GUEST_A));
+    assert.ok(isGuestId(GUEST_A.toUpperCase()));
+    for (const bad of [
+      '',
+      'guest',
+      'not-a-uuid',
+      '0f8a5a4e-1b2c-1d3e-8f90-a1b2c3d4e5f6', // version 1
+      '0f8a5a4e-1b2c-4d3e-cf90-a1b2c3d4e5f6', // wrong variant
+      `${GUEST_A}0`,
+      'zf8a5a4e-1b2c-4d3e-8f90-a1b2c3d4e5f6',
+      42,
+      null,
+    ]) {
+      assert.equal(isGuestId(bad), false, String(bad));
+    }
+
+    const {post, get, fake} = setup();
+    for (const guestId of ['not-a-uuid', '0f8a5a4e-1b2c-1d3e-8f90-a1b2c3d4e5f6', `${GUEST_A}-extra`]) {
+      const response = await post({action: 'like', page: PAGE}, {token: null, guestId});
+      assert.equal(response.status, 400, guestId);
+      assert.equal(response.json.error, GUEST_ID_ERROR);
+    }
+    const empty = await post({action: 'like', page: PAGE}, {token: null, headers: {'x-guest-id': ''}});
+    assert.equal(empty.status, 400);
+    assert.equal((await post({action: 'like', page: PAGE}, {guestId: 'not-a-uuid'})).status, 400, 'also next to a token');
+    assert.equal(fake.requests.length, 0, 'nothing reaches GitHub');
+
+    const read = await get(PAGE, {guestId: 'not-a-uuid'});
+    assert.equal(read.status, 200);
+    assert.equal(read.json.likes.liked, false);
+  });
+
+  test('the raw guest id is never stored, sent to GitHub, returned or logged, and guest keys are never returned', async () => {
+    const {post, get, fake, logs} = setup();
+    const responses = [];
+    responses.push(await post({action: 'like', page: PAGE}, {token: null, guestId: GUEST_A}));
+    const first = await post({action: 'comment', page: PAGE, body: 'hello'}, {token: null, guestId: GUEST_A});
+    responses.push(first);
+    responses.push(await post({action: 'comment', page: PAGE, body: 'second'}, {token: null, guestId: GUEST_A}));
+    responses.push(await post({action: 'like', page: PAGE}, {token: null, guestId: GUEST_B}));
+    responses.push(await post({action: 'delete', page: PAGE, id: first.json.comment.id}, {token: null, guestId: GUEST_A}));
+    responses.push(await post({action: 'delete', page: PAGE, id: 'missing'}, {token: null, guestId: GUEST_A}));
+    responses.push(await post({action: 'unlike', page: PAGE}, {token: null, guestId: GUEST_A}));
+    responses.push(await get(PAGE, {guestId: GUEST_A}), await get(PAGE, {guestId: GUEST_B}), await get(PAGE));
+    fake.hooks.override = ({method}) => (method === 'PUT' ? {status: 500, body: {message: `echo ${GUEST_A}`}} : null);
+    responses.push(await post({action: 'comment', page: PAGE, body: 'fails'}, {token: null, guestId: GUEST_A}));
+    fake.hooks.override = null;
+    assert.equal(responses.at(-1).status, 502);
+
+    // Everything that reached GitHub (file contents decoded), everything on
+    // the data branch, every answer and every log line.
+    const sent = fake.requests
+      .map((request) => {
+        const content = request.body?.content ? Buffer.from(request.body.content, 'base64').toString('utf8') : '';
+        return `${JSON.stringify(request)}\n${content}`;
+      })
+      .join('\n');
+    const stored = [...fake.branches.values()].flatMap((branch) => [...branch.files.values()].map((file) => file.text)).join('\n');
+    const answered = JSON.stringify(responses);
+    for (const id of [GUEST_A, GUEST_B]) {
+      for (const form of [id, id.toUpperCase(), id.replaceAll('-', '')]) {
+        for (const [where, text] of Object.entries({sent, stored, answered, logs: logs.join('\n')})) {
+          assert.ok(!text.includes(form), `a raw guest id reached ${where}`);
+        }
+      }
+    }
+    assert.ok(stored.includes(guestKeyOf(GUEST_B)), 'only the hash is kept');
+    for (const id of [GUEST_A, GUEST_B]) {
+      assert.ok(!answered.includes(guestKeyOf(id)), 'a guest key is never returned');
+    }
+    assert.ok(!answered.includes('guestKey'));
+  });
+});
+
+describe('session users (resolveSessionUser)', () => {
+  const CAROL = {
+    login: 'carol',
+    name: 'Carol Example',
+    avatarUrl: 'https://avatars.example.test/u/3',
+    htmlUrl: 'https://github.com/carol',
+  };
+  const COOKIE = {cookie: 'session=fake-session-for-carol'};
+  const fromCookie = (request) => (request.headers?.cookie === COOKIE.cookie ? CAROL : null);
+
+  test('the resolver is tried first: its user writes, and the Bearer token is not even checked', async () => {
+    const seen = [];
+    const {post, fake} = setup({
+      resolveSessionUser: async (request) => {
+        seen.push(request);
+        return fromCookie(request);
+      },
+    });
+    const liked = await post({action: 'like', page: PAGE}, {headers: COOKIE, guestId: GUEST_A}); // and alice's token
+    assert.equal(liked.status, 200);
+    assert.deepEqual(liked.json.likes, {count: 1, likedBy: ['carol'], liked: true});
+    assert.ok(!fake.requests.some((request) => request.path === '/user'), 'the token was not verified');
+    assert.equal(seen[0].method, 'POST');
+    assert.equal(seen[0].headers.cookie, COOKIE.cookie, 'the resolver gets the request');
+
+    const comment = await post({action: 'comment', page: PAGE, body: 'from a session'}, {token: null, headers: COOKIE});
+    assert.deepEqual(comment.json.comment.author, {
+      login: 'carol',
+      name: 'Carol Example',
+      avatarUrl: 'https://avatars.example.test/u/3',
+    });
+    assert.equal(fake.readJson(BRANCH, FILE).comments[0].login, 'carol');
+    assert.equal(fake.readJson(BRANCH, FILE).comments[0].guestKey, undefined);
+
+    // Without a session: the token, and without a token: the guest id.
+    assert.deepEqual((await post({action: 'like', page: PAGE})).json.likes.likedBy, ['carol', 'alice']);
+    const guest = await post({action: 'like', page: PAGE}, {token: null, guestId: GUEST_A});
+    assert.deepEqual(guest.json.likes, {count: 3, likedBy: ['carol', 'alice'], liked: true});
+  });
+
+  test("reads show a session user's own like and comments; the body cannot rename them", async () => {
+    const {post, get} = setup({resolveSessionUser: fromCookie});
+    await post({action: 'like', page: PAGE}, {token: null, headers: COOKIE});
+    const created = await post({action: 'comment', page: PAGE, body: 'mine'}, {token: null, headers: COOKIE});
+    const mine = await get(PAGE, {headers: COOKIE});
+    assert.equal(mine.json.likes.liked, true);
+    assert.equal(mine.json.comments[0].canDelete, true);
+    const theirs = await get(PAGE, {guestId: GUEST_A});
+    assert.equal(theirs.json.likes.liked, false);
+    assert.equal(theirs.json.comments[0].canDelete, false);
+
+    const renamed = await post({action: 'comment', page: PAGE, body: 'x', login: 'alice'}, {token: null, headers: COOKIE});
+    assert.equal(renamed.status, 403);
+    assert.match(renamed.json.error, /signed in as @carol/);
+    const forged = await post(
+      {action: 'comment', page: PAGE, body: 'y', name: 'Someone Else', avatarUrl: 'https://evil.example.test/a.png'},
+      {token: null, headers: COOKIE},
+    );
+    assert.equal(forged.json.comment.author.name, 'Carol Example');
+
+    const id = created.json.comment.id;
+    assert.equal((await post({action: 'delete', page: PAGE, id}, {token: null, guestId: GUEST_A})).status, 403);
+    assert.equal((await post({action: 'delete', page: PAGE, id})).status, 403, 'alice cannot delete it');
+    assert.equal((await post({action: 'delete', page: PAGE, id}, {token: null, headers: COOKIE})).status, 200);
+  });
+
+  test('answers that are not a user are ignored; a failing resolver fails writes, not reads', async () => {
+    for (const answer of [undefined, null, {}, {login: 'not a login!'}, {login: 42}, 'carol']) {
+      const {post} = setup({resolveSessionUser: async () => answer});
+      const response = await post({action: 'like', page: PAGE}, {token: null, guestId: GUEST_A});
+      assert.deepEqual(response.json.likes, {count: 1, likedBy: [], liked: true}, JSON.stringify(answer));
+    }
+    const plain = setup({resolveSessionUser: () => ({login: 'dave', name: '  ', avatarUrl: 'http://insecure.example.test/d.png'})});
+    const dave = await plain.post({action: 'comment', page: PAGE, body: 'hi'}, {token: null});
+    assert.deepEqual(dave.json.comment.author, {login: 'dave', name: 'dave', avatarUrl: null});
+
+    const {post, get, fake, logs} = setup({
+      resolveSessionUser: () => {
+        throw new Error('session store down');
+      },
+    });
+    const write = await post({action: 'like', page: PAGE}, {token: null, guestId: GUEST_A});
+    assert.equal(write.status, 500);
+    assert.equal(fake.readJson(BRANCH, FILE), undefined, 'not written as a guest instead');
+    const read = await get(PAGE, {guestId: GUEST_A});
+    assert.equal(read.status, 200);
+    assert.ok(logs.some((line) => line.includes('session lookup failed')));
+  });
+
+  test('a session write a cross-site page could make is refused with 403 (CSRF)', async () => {
+    const {post, fake} = setup({resolveSessionUser: fromCookie});
+    const like = JSON.stringify({action: 'like', page: PAGE});
+    const refused = [
+      ['text/plain', {'content-type': 'text/plain'}],
+      ['a form', {'content-type': 'application/x-www-form-urlencoded'}],
+      ['no content type', {'content-type': ''}],
+      ['a foreign Origin', {origin: 'https://evil.example.test', host: 'docs.example.test'}],
+      ['Origin null', {origin: 'null', host: 'docs.example.test'}],
+      ['an Origin without a host header', {origin: 'https://docs.example.test'}],
+      ['Sec-Fetch-Site: cross-site', {'sec-fetch-site': 'cross-site'}],
+    ];
+    for (const [label, headers] of refused) {
+      const response = await post(like, {token: null, headers: {...COOKIE, ...headers}});
+      assert.equal(response.status, 403, label);
+      assert.equal(response.json.error, CROSS_SITE_ERROR, label);
+    }
+    // The platform may hand over a parsed form object: still refused.
+    const handled = await setup({resolveSessionUser: fromCookie}).handle({
+      method: 'POST',
+      query: {},
+      headers: {...COOKIE, 'content-type': 'application/x-www-form-urlencoded'},
+      body: {action: 'like', page: PAGE},
+      ip: '203.0.113.7',
+    });
+    assert.equal(handled.status, 403);
+    assert.equal(fake.readJson(BRANCH, FILE), undefined, 'nothing was written');
+
+    for (const headers of [
+      {'content-type': 'application/json; charset=utf-8'},
+      {origin: 'https://docs.example.test', host: 'docs.example.test', 'sec-fetch-site': 'same-origin'},
+      {origin: 'https://docs.example.test', host: 'internal:3000', 'x-forwarded-host': 'docs.example.test'},
+    ]) {
+      const response = await post({action: 'like', page: PAGE}, {token: null, headers: {...COOKIE, ...headers}});
+      assert.equal(response.status, 200, JSON.stringify(headers));
+    }
+    assert.deepEqual(fake.readJson(BRANCH, FILE).likes.map((item) => item.login), ['carol']);
+
+    // Guests and tokens need a custom header, which already forces a preflight.
+    const guest = await post(like, {token: null, guestId: GUEST_A, headers: {'content-type': 'text/plain'}});
+    assert.equal(guest.status, 200);
+  });
+});
+
+describe('rate limits for guests', () => {
+  test(`${GUEST_WRITE_LIMIT.max} guest writes per 10 minutes per IP and guest id, then 429`, async () => {
+    const {post, advance} = setup();
+    for (let index = 0; index < GUEST_WRITE_LIMIT.max; index += 1) {
+      const response = await post({action: index % 2 ? 'unlike' : 'like', page: PAGE}, {token: null, guestId: GUEST_A});
+      assert.equal(response.status, 200, `guest write ${index + 1}`);
+      advance(1000);
+    }
+    const limited = await post({action: 'like', page: PAGE}, {token: null, guestId: GUEST_A});
+    assert.equal(limited.status, 429);
+    assert.equal(limited.headers['Retry-After'], String(10 * 60 - 10));
+    assert.match(limited.json.error, /too many requests/);
+    // The same guest elsewhere, another guest, and a signed-in user on this IP go on.
+    assert.equal((await post({action: 'like', page: PAGE}, {token: null, guestId: GUEST_A, ip: '198.51.100.9'})).status, 200);
+    assert.equal((await post({action: 'like', page: PAGE}, {token: null, guestId: GUEST_B})).status, 200);
+    assert.equal((await post({action: 'like', page: PAGE})).status, 200);
+    advance(10 * 60 * 1000 - 10 * 1000); // 10 min after the first guest write: it leaves the window
+    assert.equal((await post({action: 'unlike', page: PAGE}, {token: null, guestId: GUEST_A})).status, 200);
+    assert.equal((await post({action: 'like', page: PAGE}, {token: null, guestId: GUEST_A})).status, 429, 'only one slot came free');
+  });
+
+  test(`a guest who keeps changing their id still meets the per-IP limit (${WRITE_LIMIT.max})`, async () => {
+    const {post} = setup();
+    const statuses = [];
+    for (let index = 0; index < WRITE_LIMIT.max + 5; index += 1) {
+      const guestId = `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+      statuses.push((await post({action: 'like', page: PAGE}, {token: null, guestId})).status);
+    }
+    assert.deepEqual(statuses, [...Array(WRITE_LIMIT.max).fill(200), ...Array(5).fill(429)]);
   });
 });
