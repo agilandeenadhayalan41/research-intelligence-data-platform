@@ -6,7 +6,7 @@ An architecture decision record (ADR) records one decision, or one closely linke
 
 | ADR | Title | Status | Recorded | Issue |
 |---|---|---|---|---|
-| [0001](0001-gcp-architecture-and-service-selection.md) | GCP architecture and service selection | Proposed | 2026-10-14 | DE-03 [#124] |
+| [0001](0001-gcp-architecture-and-service-selection.md) | GCP architecture and service selection | Accepted | 2026-10-14 | DE-03 [#124] |
 
 ## Numbering and file names
 

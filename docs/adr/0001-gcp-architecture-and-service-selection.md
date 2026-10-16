@@ -9,7 +9,7 @@ description: "Decision record for issue 124 (DE-03): canonical storage layout, a
 
 ## Status
 
-- **Status:** Proposed.
+- **Status:** Accepted on 2026-10-16: the lead architect approved pull request [#162] for merge.
 - **Acceptance:** this ADR becomes **Accepted** when the lead architect approves and merges the pull request for [#124]. The last commit of that pull request sets the status line above and the [index](README.md#index) row to Accepted, with the date, and the lead architect approves that commit; the approval and the merge commit are the acceptance record, and no separate signature exists. Until then nothing here is binding.
 - **Authorization:** acceptance selects services and policies only. It authorizes no cloud resource, cloud write, deployment or billed job; each follow-on issue still needs its own `IMPLEMENT_ISSUE` approval, an approved environment and a recorded spend cap before any cloud action.
 - **Recorded:** 2026-10-14. **Base commit:** `a234dc0` (`main`). **Supersedes:** none. **Superseded by:** none.
@@ -590,3 +590,4 @@ No like-for-like candidate comparison has been run for any criterion. Only for o
 [#157]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/157
 [#160]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/160
 [#161]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/161
+[#162]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/162
