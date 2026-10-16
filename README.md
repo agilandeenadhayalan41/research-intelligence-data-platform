@@ -434,6 +434,7 @@ tracked YAML or logs.
 | [Data quality](docs/architecture/data-quality.md) | Step 17 HARD_GATE/metric registry, publication blocking, SEMANTIC_ONLY limits |
 | [Orchestration](docs/architecture/orchestration.md) | Step 20 thin DAG, TaskMessage/XCom, retries, publication scope, Airflow mapping (no deploy) |
 | [Environment readiness](docs/architecture/environment-readiness.md) | Step 21 Sandbox→DEV→QA→PROD readiness matrix, promotion gates, cloud gaps |
+| [Enterprise environment inventory](docs/operations/enterprise-environment-inventory.md) | DE-04 (#125) non-secret record of the approvals that enterprise-managed GCP_SANDBOX, DEV and QA need, by owner role; changes no readiness level |
 | [Public data sources](docs/architecture/public-data-sources.md) | Source priorities and source-specific normalization |
 | [OpenAlex contract](docs/architecture/openalex-manifest-contract.md) | Implemented metadata, parser, selector, connector, and public-access evidence |
 | [OpenAlex source profiling](docs/architecture/openalex-source-profiling.md) | Bounded profiler, evidence classes, verified representations, and format decision |

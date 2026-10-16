@@ -58,6 +58,7 @@ STATUS_DOCS = (
     "docs/architecture/roadmap.md",
     "docs/overview/status.md",
     READINESS_DOC,
+    "docs/operations/enterprise-environment-inventory.md",
 )
 PLACEHOLDER_CONFIGS = {
     EnvironmentName.DEV: "config/dev.yaml",

@@ -107,6 +107,19 @@ on synthetic data only; it does not make its environment ready.
 
 ---
 
+## Enterprise environments (DE-04)
+
+No enterprise-managed GCP_SANDBOX, DEV or QA project exists, and the DE-04 inventory records this as a documented blocker.
+The [enterprise environment inventory](../operations/enterprise-environment-inventory.md)
+(DE-04, #125) records, without identifiers, every fact owed for an enterprise-managed
+GCP_SANDBOX, DEV and QA, the owner role that owes it, and where its approval is recorded.
+Its validator, `research_platform.readiness.enterprise_inventory`, returns `READY_TO_VALIDATE` only when every fact is recorded as approved for an enterprise-managed GCP_SANDBOX, DEV and QA and every role holder is assigned.
+The inventory verdict (`READY_TO_VALIDATE` or `BLOCKED`) changes no readiness level and no `can_promote` decision.
+Operator-owned and personal projects never count as these environments, and their evidence keeps its labels
+([ADR 0001 D3](../adr/0001-gcp-architecture-and-service-selection.md#d3-data-location-and-environment-isolation), status in the [ADR index](../adr/README.md)).
+
+---
+
 ## IAM / workload identity / secrets
 
 Documented capabilities (least privilege, not Owner/Editor):
@@ -313,13 +326,15 @@ No cloud calls. Results derive from the static readiness registry.
 ## Known gaps (blocking cloud readiness today)
 
 1. GCS beyond the operator-controlled projects (#91 and #108 verified GCP_SANDBOX
-   and the personal DEV/QA projects): enterprise-managed project (DE-04, #125),
+   and the personal DEV/QA projects): enterprise-managed project (DE-04, #125; see the
+   [enterprise environment inventory](../operations/enterprise-environment-inventory.md)),
    separate deploy/runtime identities (DE-23, #144), retries, concurrent
    writers, large/resumable uploads, CMEK, retention, access logging  
 2. BigQuery beyond the operator-controlled projects (#92 adapter; #103 and #108
    models on synthetic data, at most synthetic-100100-works): representative-scale
    MEASURE, cost and clustering (DE-18, #139), enterprise-managed project
-   (DE-04, #125), separate deploy/runtime identities (DE-23, #144), cancellation
+   (DE-04, #125; see the [inventory](../operations/enterprise-environment-inventory.md)),
+   separate deploy/runtime identities (DE-23, #144), cancellation
    under load (DE-22, #143)  
 3. No repository-provisioned IAM / WIF / secrets; the #108 service accounts were
    set up by an operator-run procedure outside this repository (DE-23, #144)  
@@ -341,3 +356,4 @@ No cloud calls. Results derive from the static readiness registry.
 | End-to-end (local) | [end-to-end-pipeline.md](end-to-end-pipeline.md) |
 | BigQuery contracts | [bigquery-analytical-models.md](bigquery-analytical-models.md) |
 | Data Service | [data-service.md](data-service.md) |
+| Enterprise environments (DE-04) | [enterprise-environment-inventory.md](../operations/enterprise-environment-inventory.md) |
