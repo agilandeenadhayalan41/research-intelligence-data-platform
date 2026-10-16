@@ -1,0 +1,98 @@
+# Enterprise environment inventory for DE-04 (#125): a non-secret approval record.
+# For the enterprise-managed GCP_SANDBOX, DEV and QA environments it records which
+# facts are approved and where each approval is recorded (a comment on #125).
+# It is not environment configuration and not readiness evidence: nothing deploys
+# from it, and the readiness registry does not read it.
+# Never add project IDs or numbers, organization, folder or billing-account IDs,
+# bucket names, identity or group names, emails, network names, IP ranges, run IDs,
+# amounts or prices. Real identifiers live in the DE-13 (#134) environment
+# configuration and in Secret Manager (DE-23, #144), never in this repository.
+# Comments are allowed only in this header. The item catalog, owner roles and
+# allowed answers are defined in src/research_platform/readiness/enterprise_inventory.py.
+# Rendered page: docs/operations/enterprise-environment-inventory.md
+schema_version: enterprise-environment-inventory-v1
+as_of: 2026-10-16
+role_holders:
+  - {role: LEAD_ARCHITECT, holder: NOT_ASSIGNED}
+  - {role: CLOUD_PLATFORM_OWNER, holder: NOT_ASSIGNED}
+  - {role: SECURITY_GOVERNANCE_OWNER, holder: NOT_ASSIGNED}
+  - {role: DATA_ENGINEERING_OWNER, holder: NOT_ASSIGNED}
+  - {role: API_PRODUCT_OWNER, holder: NOT_ASSIGNED}
+program_facts:
+  - {item: separate-non-prod-projects, state: NOT_REQUESTED}
+  - {item: us-compute-region, state: NOT_REQUESTED}
+  - {item: residency-requirement, state: NOT_REQUESTED}
+  - {item: in-organization-deploys, state: NOT_REQUESTED}
+  - {item: perimeter-and-cmek, state: NOT_REQUESTED}
+  - {item: two-buckets-per-environment, state: NOT_REQUESTED}
+  - {item: dev-qa-control-instance, state: NOT_REQUESTED}
+  - {item: shared-composer-environment, state: NOT_REQUESTED}
+  - {item: gke-mandate, state: NOT_REQUESTED}
+  - {item: sql-transformation-mandate, state: NOT_REQUESTED}
+  - {item: egress-to-public-source, state: NOT_REQUESTED}
+  - {item: source-access, state: NOT_REQUESTED}
+  - {item: managed-catalog, state: NOT_REQUESTED}
+environments:
+  - environment: GCP_SANDBOX
+    ownership: NOT_PROVISIONED
+    facts:
+      - {item: enterprise-billing, state: NOT_REQUESTED}
+      - {item: program-access, state: NOT_REQUESTED}
+      - {item: core-apis, state: NOT_REQUESTED}
+      - {item: resource-location-policy, state: NOT_REQUESTED}
+      - {item: key-creation-disabled, state: NOT_REQUESTED}
+      - {item: workload-identity-federation, state: NOT_REQUESTED}
+      - {item: selected-services-allowed, state: NOT_REQUESTED}
+      - {item: separate-identities, state: NOT_REQUESTED}
+      - {item: human-access-role-groups, state: NOT_REQUESTED}
+      - {item: no-cross-environment-grants, state: NOT_REQUESTED}
+      - {item: bronze-bucket, state: NOT_REQUESTED}
+      - {item: silver-bucket, state: NOT_REQUESTED}
+      - {item: analytical-dataset, state: NOT_REQUESTED}
+      - {item: budget-and-alerts, state: NOT_REQUESTED}
+      - {item: spend-cap, state: NOT_REQUESTED}
+      - {item: query-quotas, state: NOT_REQUESTED}
+      - {item: standing-instances, state: NOT_REQUESTED}
+      - {item: network-model, state: NOT_REQUESTED}
+  - environment: DEV
+    ownership: NOT_PROVISIONED
+    facts:
+      - {item: enterprise-billing, state: NOT_REQUESTED}
+      - {item: program-access, state: NOT_REQUESTED}
+      - {item: core-apis, state: NOT_REQUESTED}
+      - {item: resource-location-policy, state: NOT_REQUESTED}
+      - {item: key-creation-disabled, state: NOT_REQUESTED}
+      - {item: workload-identity-federation, state: NOT_REQUESTED}
+      - {item: selected-services-allowed, state: NOT_REQUESTED}
+      - {item: separate-identities, state: NOT_REQUESTED}
+      - {item: human-access-role-groups, state: NOT_REQUESTED}
+      - {item: no-cross-environment-grants, state: NOT_REQUESTED}
+      - {item: bronze-bucket, state: NOT_REQUESTED}
+      - {item: silver-bucket, state: NOT_REQUESTED}
+      - {item: analytical-dataset, state: NOT_REQUESTED}
+      - {item: budget-and-alerts, state: NOT_REQUESTED}
+      - {item: spend-cap, state: NOT_REQUESTED}
+      - {item: query-quotas, state: NOT_REQUESTED}
+      - {item: standing-instances, state: NOT_REQUESTED}
+      - {item: network-model, state: NOT_REQUESTED}
+  - environment: QA
+    ownership: NOT_PROVISIONED
+    facts:
+      - {item: enterprise-billing, state: NOT_REQUESTED}
+      - {item: program-access, state: NOT_REQUESTED}
+      - {item: core-apis, state: NOT_REQUESTED}
+      - {item: resource-location-policy, state: NOT_REQUESTED}
+      - {item: key-creation-disabled, state: NOT_REQUESTED}
+      - {item: workload-identity-federation, state: NOT_REQUESTED}
+      - {item: selected-services-allowed, state: NOT_REQUESTED}
+      - {item: separate-identities, state: NOT_REQUESTED}
+      - {item: human-access-role-groups, state: NOT_REQUESTED}
+      - {item: no-cross-environment-grants, state: NOT_REQUESTED}
+      - {item: bronze-bucket, state: NOT_REQUESTED}
+      - {item: silver-bucket, state: NOT_REQUESTED}
+      - {item: analytical-dataset, state: NOT_REQUESTED}
+      - {item: budget-and-alerts, state: NOT_REQUESTED}
+      - {item: spend-cap, state: NOT_REQUESTED}
+      - {item: query-quotas, state: NOT_REQUESTED}
+      - {item: standing-instances, state: NOT_REQUESTED}
+      - {item: network-model, state: NOT_REQUESTED}

@@ -151,6 +151,11 @@ const sidebars: SidebarsConfig = {
           id: 'architecture/environment-readiness',
           label: 'Environment readiness',
         },
+        {
+          type: 'doc',
+          id: 'operations/enterprise-environment-inventory',
+          label: 'Enterprise environment inventory',
+        },
       ],
     },
     {
