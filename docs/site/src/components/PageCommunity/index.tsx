@@ -1,5 +1,12 @@
 // Likes and comments at the end of a doc or blog post.
 //
+// Guest first: the like button and the comment form work at once, without
+// an account (comments are signed "Guest"). A quiet line under the form
+// offers "Sign in with GitHub" (a plain link to /api/auth/login that comes
+// back to this page) for visitors who want their GitHub name on what they
+// post; signed in, comments carry the verified avatar and login. Nothing here
+// ever blocks reading or guest writes.
+//
 // Everything goes through the CommunityStore (useCommunityStore), which keeps
 // the data in this browser only (IndexedDB, else localStorage, else memory).
 // Other visitors do not see it, and the section says so.
@@ -9,7 +16,7 @@ import clsx from 'clsx';
 import Heading from '@theme/Heading';
 import useIsBrowser from '@docusaurus/useIsBrowser';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
-import {useGitHubUser} from '@site/src/lib/GitHubUserContext';
+import {useGitHubUser, useSignInClick, useSignInHref} from '@site/src/lib/GitHubUserContext';
 import {useCommunityBackend, useCommunityStore, type CommunityBackend} from '@site/src/lib/CommunityStoreContext';
 import {
   canDeleteComment,
@@ -115,7 +122,9 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
   const {i18n} = useDocusaurusContext();
   const store = useCommunityStore();
   const backend = useCommunityBackend();
-  const {user, userKey, status} = useGitHubUser();
+  const {user, userKey, status, verified, availability} = useGitHubUser();
+  const signInHref = useSignInHref();
+  const onSignInClick = useSignInClick();
 
   const [likes, setLikes] = useState<Likes | null>(null);
   const [comments, setComments] = useState<Comment[] | null>(null);
@@ -312,11 +321,25 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
         <div className={styles.formRow}>
           <p id={hintId} className={clsx('rid-muted-note', styles.hint)}>
             {user ? (
-              <>
-                Commenting as <strong>@{user.login}</strong>.
-              </>
+              verified ? (
+                <>
+                  Commenting as <strong>@{user.login}</strong>.
+                </>
+              ) : (
+                <>
+                  Commenting as <strong>@{user.login}</strong> (not verified on this deployment).
+                </>
+              )
+            ) : availability === 'not-configured' ? (
+              <>Commenting as a guest.</>
             ) : (
-              <>Commenting as a guest. Sign in from the navbar to use your GitHub name.</>
+              <>
+                Commenting as a guest ·{' '}
+                <a href={signInHref} onClick={onSignInClick}>
+                  Sign in with GitHub
+                </a>{' '}
+                to show your name.
+              </>
             )}{' '}
             <span className={tooLong ? styles.overLimit : undefined}>
               {NUMBER.format(count)} / {NUMBER.format(COMMENT_MAX_LENGTH)}

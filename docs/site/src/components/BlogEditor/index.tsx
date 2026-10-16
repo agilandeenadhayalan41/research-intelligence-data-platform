@@ -616,9 +616,9 @@ export default function BlogEditor(): ReactNode {
 
       {!hasToken && (
         <div className={clsx('alert alert--secondary', styles.tokenPrompt)} role="note">
-          <strong>Want to open a pull request from here?</strong> Add a GitHub token in the GitHub
-          menu at the right of the navigation bar (<em>Sign in</em>, or your username when signed
-          in). The token is kept on this device only and is sent only to api.github.com. Without a
+          <strong>Want to open a pull request from here?</strong> Add a GitHub token in the account
+          menu at the right of the navigation bar (the arrow next to <em>Sign in</em>, or your
+          avatar when signed in; <em>GitHub token</em> where sign-in is not available). The token is kept on this device only and is sent only to api.github.com. Without a
           token, use <strong>Download</strong> and add the file to <code>{BLOG_DIR}/</code> in a
           pull request yourself.
         </div>

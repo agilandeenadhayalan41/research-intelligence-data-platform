@@ -1,6 +1,6 @@
 import React, {useEffect, useId, useRef, useState, type FormEvent} from 'react';
 import clsx from 'clsx';
-import {useGitHubUser} from '@site/src/lib/GitHubUserContext';
+import {useGitHubUser, useSignInClick, useSignInHref, type Account} from '@site/src/lib/GitHubUserContext';
 import Avatar from './Avatar';
 import styles from './styles.module.css';
 
@@ -9,9 +9,18 @@ type Props = {
   autoFocus?: boolean;
 };
 
+function sameLogin(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
 /**
- * The content of the account menu: the username field (or the signed-in
- * profile and "Sign out"), and the optional GitHub token.
+ * The content of the account menu.
+ *
+ * Signed in: the profile (link to GitHub), "Switch account", "Sign out", the
+ * other accounts used in this browser, and the optional GitHub token.
+ * Signed out: "Continue with GitHub", the accounts used before, the
+ * unverified username fallback (only when the auth functions are not
+ * running here), and the token.
  */
 export default function AccountPanel({autoFocus = false}: Props): React.JSX.Element {
   const {user, status} = useGitHubUser();
@@ -32,27 +41,119 @@ export default function AccountPanel({autoFocus = false}: Props): React.JSX.Elem
       {user ? (
         <SignedIn autoFocus={focusSection} />
       ) : (
-        <SignInForm autoFocus={focusSection} busy={status === 'signing-in'} />
+        <SignedOut autoFocus={focusSection} busy={status === 'signing-in'} />
       )}
       <TokenSection />
     </div>
   );
 }
 
-function SignInForm({autoFocus, busy}: {autoFocus: boolean; busy: boolean}): React.JSX.Element {
-  const {signIn} = useGitHubUser();
+function SignedOut({autoFocus, busy}: {autoFocus: boolean; busy: boolean}): React.JSX.Element {
+  const {availability, accounts} = useGitHubUser();
+  const href = useSignInHref();
+  const onSignInClick = useSignInClick();
+  const first = useRef<HTMLAnchorElement>(null);
+  const heading = useRef<HTMLParagraphElement>(null);
+
+  useEffect(() => {
+    if (autoFocus) {
+      (first.current ?? heading.current)?.focus();
+    }
+  }, [autoFocus]);
+
+  if (availability === 'not-configured') {
+    return (
+      <div className={styles.section}>
+        <p ref={heading} className={styles.heading} tabIndex={-1}>
+          Sign-in is not available on this deployment
+        </p>
+        <p className="rid-muted-note">Reading, likes and comments work as a guest.</p>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className={styles.section}>
+        <p className={styles.heading}>Sign in with GitHub</p>
+        <p className="rid-muted-note">
+          Optional: reading, likes and comments work as a guest. Sign in to show your GitHub name on
+          them. GitHub checks who you are; this site keeps only your public profile (username, name
+          and avatar).
+        </p>
+        <div className={styles.actions}>
+          <a
+            ref={first}
+            href={href}
+            className="button button--primary button--sm"
+            onClick={onSignInClick}
+            aria-busy={busy || undefined}>
+            {busy ? 'Signing in…' : 'Continue with GitHub'}
+          </a>
+        </div>
+        {availability === 'unreachable' && (
+          <p className="rid-muted-note">
+            The sign-in service does not answer here (it runs only on the deployed site), so this link may
+            fail on a local preview.
+          </p>
+        )}
+      </div>
+      {accounts.length > 0 && (
+        <AccountList title="Accounts used in this browser" accounts={accounts} action="Sign in" />
+      )}
+      {availability === 'unreachable' && <UsernameFallback busy={busy} />}
+    </>
+  );
+}
+
+function AccountList({
+  title,
+  accounts,
+  action,
+}: {
+  title: string;
+  accounts: Account[];
+  action: string;
+}): React.JSX.Element {
+  const {switchAccount} = useGitHubUser();
+  const titleId = useId();
+  return (
+    <div className={styles.section}>
+      <p id={titleId} className={styles.subheading}>
+        {title}
+      </p>
+      <ul className={styles.accounts} aria-labelledby={titleId}>
+        {accounts.map((account) => (
+          <li key={account.login} className={styles.account}>
+            <Avatar src={account.avatarUrl} name={account.name} size="sm" />
+            <span className={styles.accountText}>
+              <span className={styles.accountName}>{account.name}</span>
+              {account.name !== account.login && <span className={styles.accountLogin}>@{account.login}</span>}
+            </span>
+            <button
+              type="button"
+              className="button button--secondary button--sm"
+              onClick={() => switchAccount(account.login)}
+              aria-label={`${action} as @${account.login}`}>
+              {action}
+            </button>
+          </li>
+        ))}
+      </ul>
+      <p className="rid-muted-note">GitHub confirms the account: you may be asked to sign in there.</p>
+    </div>
+  );
+}
+
+/** The old typed-username sign-in, kept only for when the auth functions are not running. */
+function UsernameFallback({busy}: {busy: boolean}): React.JSX.Element {
+  const {signInWithUsername} = useGitHubUser();
   const [login, setLogin] = useState('');
   const [error, setError] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const inputId = useId();
   const hintId = useId();
   const errorId = useId();
-
-  useEffect(() => {
-    if (autoFocus) {
-      input.current?.focus();
-    }
-  }, [autoFocus]);
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -62,7 +163,7 @@ function SignInForm({autoFocus, busy}: {autoFocus: boolean; busy: boolean}): Rea
       return;
     }
     setError(null);
-    const result = await signIn(login);
+    const result = await signInWithUsername(login);
     if (!result.ok && result.error !== 'superseded') {
       setError(result.message);
       input.current?.focus();
@@ -70,48 +171,53 @@ function SignInForm({autoFocus, busy}: {autoFocus: boolean; busy: boolean}): Rea
   };
 
   return (
-    <form className={styles.section} onSubmit={onSubmit} noValidate>
-      <p className={styles.heading}>Sign in with GitHub</p>
-      <label className={styles.label} htmlFor={inputId}>
-        GitHub username
-      </label>
-      <div className={styles.inputRow}>
-        <input
-          ref={input}
-          id={inputId}
-          className={styles.input}
-          type="text"
-          name="github-username"
-          value={login}
-          onChange={(event) => setLogin(event.target.value)}
-          placeholder="octocat"
-          autoComplete="username"
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-          maxLength={100}
-          aria-invalid={error ? true : undefined}
-          aria-describedby={clsx(hintId, error && errorId)}
-        />
-        <button type="submit" className="button button--primary button--sm" disabled={busy} aria-busy={busy || undefined}>
-          {busy ? 'Signing in…' : 'Sign in'}
-        </button>
-      </div>
-      {error && (
-        <p id={errorId} className={styles.error} role="alert">
-          {error}
+    <details className={clsx(styles.section, styles.fallback)}>
+      <summary className={styles.fallbackSummary}>
+        Use a GitHub username instead <span className={styles.unverifiedBadge}>not verified</span>
+      </summary>
+      <form className={styles.fallbackForm} onSubmit={onSubmit} noValidate>
+        <label className={styles.label} htmlFor={inputId}>
+          GitHub username
+        </label>
+        <div className={styles.inputRow}>
+          <input
+            ref={input}
+            id={inputId}
+            className={styles.input}
+            type="text"
+            name="github-username"
+            value={login}
+            onChange={(event) => setLogin(event.target.value)}
+            placeholder="octocat"
+            autoComplete="username"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            maxLength={100}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={clsx(hintId, error && errorId)}
+          />
+          <button type="submit" className="button button--secondary button--sm" disabled={busy} aria-busy={busy || undefined}>
+            {busy ? 'Looking up…' : 'Use'}
+          </button>
+        </div>
+        {error && (
+          <p id={errorId} className={styles.error} role="alert">
+            {error}
+          </p>
+        )}
+        <p id={hintId} className="rid-muted-note">
+          Not verified on this deployment: the site reads the public profile of the username you type and
+          keeps it in this browser. Nobody checks that it is yours; it only labels your likes and comments
+          here.
         </p>
-      )}
-      <p id={hintId} className="rid-muted-note">
-        No password: the site reads your public GitHub profile and keeps it in this browser. It is not a
-        verified sign-in; your username only labels your likes and comments here.
-      </p>
-    </form>
+      </form>
+    </details>
   );
 }
 
 function SignedIn({autoFocus}: {autoFocus: boolean}): React.JSX.Element | null {
-  const {user, signOut} = useGitHubUser();
+  const {user, verified, availability, accounts, signOut, switchAccount} = useGitHubUser();
   const button = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -123,24 +229,42 @@ function SignedIn({autoFocus}: {autoFocus: boolean}): React.JSX.Element | null {
   if (!user) {
     return null;
   }
+  const canSwitch = availability !== 'not-configured';
+  const others = canSwitch ? accounts.filter((account) => !sameLogin(account.login, user.login)) : [];
   return (
-    <div className={styles.section}>
-      <div className={styles.profile}>
-        <Avatar src={user.avatarUrl} name={user.name} size="lg" />
-        <div className={styles.profileText}>
-          <span className={styles.profileName}>{user.name}</span>
-          <a href={user.htmlUrl} target="_blank" rel="noopener noreferrer" className={styles.profileLogin}>
-            @{user.login}
-          </a>
+    <>
+      <div className={styles.section}>
+        <div className={styles.profile}>
+          <Avatar src={user.avatarUrl} name={user.name} size="lg" />
+          <div className={styles.profileText}>
+            <span className={styles.profileName}>{user.name}</span>
+            <a href={user.htmlUrl} target="_blank" rel="noopener noreferrer" className={styles.profileLogin}>
+              @{user.login}
+              <span className="rid-sr-only"> on GitHub (opens in a new tab)</span>
+            </a>
+          </div>
+        </div>
+        {verified ? (
+          <p className="rid-muted-note">Signed in with GitHub. Your likes and comments show this account.</p>
+        ) : (
+          <p className="rid-muted-note">
+            <span className={styles.unverifiedBadge}>not verified</span> Not verified on this deployment: this
+            profile is only remembered by this browser.
+          </p>
+        )}
+        <div className={styles.actions}>
+          {canSwitch && (
+            <button type="button" className="button button--secondary button--sm" onClick={() => switchAccount()}>
+              Switch account
+            </button>
+          )}
+          <button ref={button} type="button" className="button button--secondary button--sm" onClick={() => void signOut()}>
+            Sign out
+          </button>
         </div>
       </div>
-      <p className="rid-muted-note">
-        Your likes and comments in this browser carry this username.
-      </p>
-      <button ref={button} type="button" className="button button--secondary button--sm" onClick={signOut}>
-        Sign out
-      </button>
-    </div>
+      {others.length > 0 && <AccountList title="Other accounts used in this browser" accounts={others} action="Switch" />}
+    </>
   );
 }
 
@@ -195,7 +319,8 @@ function TokenSection(): React.JSX.Element {
       </summary>
       <p id={noteId} className="rid-muted-note">
         Used only for the blog editor&apos;s &ldquo;Open pull request&rdquo; and for higher GitHub API rate
-        limits. It is kept in this browser on this device only and is sent nowhere but api.github.com.
+        limits. It is kept in this browser on this device only and is sent nowhere but api.github.com. It is
+        separate from signing in.
       </p>
       {token ? (
         <div className={styles.inputRow}>
