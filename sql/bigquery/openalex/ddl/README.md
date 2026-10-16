@@ -13,9 +13,9 @@ BigQuery Standard SQL `CREATE TABLE` contracts for canonical analytical tables.
   no deployment pipeline applies them (tracked in #134)
 - The files are rendered by `render_create_table_ddl()` and a test compares
   them byte-for-byte, so change the renderer, not the files. Their rendered
-  header still reads "contract only; NOT DEPLOYED / NOT EXECUTED here": default
-  CI and the library code never deploy or execute them; only the manual
-  script above does
+  header says they were executed only by manual scripts on synthetic data
+  (GCP_SANDBOX, personal DEV/QA) and are not deployed: default CI and the
+  library code never deploy or execute them; only the manual script above does
 - Flattened lineage date column is `lineage_source_updated_date` (distinct from
   Work record `source_updated_date` on `works`)
 - `works` uses `PARTITION BY RANGE_BUCKET(publication_year, GENERATE_ARRAY(...))`

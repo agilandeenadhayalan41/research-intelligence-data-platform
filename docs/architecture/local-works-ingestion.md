@@ -19,7 +19,10 @@ canonical write implementation** behind the Step 10 write boundary.
   production serving architecture; BigQuery remains the first analytical
   implementation. `PostgresControlStore` and `PostgresCanonicalStore` are local
   durable adapters for the Step 12/13 pipelines, **not** the production control
-  plane, which is still undecided (tracked in #133), and **not** a serving store.
+  plane, which does not exist yet (tracked in #133;
+  [ADR 0001 D4](../adr/0001-gcp-architecture-and-service-selection.md#d4-durable-control-plane-cloud-sql-for-postgresql-control-state-only)
+  (status in the [ADR index](../adr/README.md)) selects Cloud SQL for PostgreSQL for control state only,
+  adopted only after the DE-12 gates pass), and **not** a serving store.
 
 ## Callable entry point
 

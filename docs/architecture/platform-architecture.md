@@ -63,12 +63,20 @@ consumer, and every environment is
   `Warehouse.query()`. Local durable adapters (`PostgresControlStore` /
   `PostgresCanonicalStore`) back the Step 12/13 pipelines when
   `--backend postgres` is selected; they are neither a production control plane
-  (still undecided, tracked in #133) nor the production serving architecture.
+  nor the production serving architecture. No production control plane exists
+  yet:
+  [ADR 0001 D4](../adr/0001-gcp-architecture-and-service-selection.md#d4-durable-control-plane-cloud-sql-for-postgresql-control-state-only)
+  selects Cloud SQL for PostgreSQL for control state only, adopted only after
+  the DE-12 (#133) gates pass.
 - **Canonical layer:** normalized, portable OpenAlex entities/relationships with
   PyArrow schemas and explicit ID rules
   (`research_platform.canonical.openalex`). Independent of PostgreSQL/BigQuery
   physical design. Keep relationships separate; do not flatten. Step 12 writes
-  these through the local ingestion transaction boundary.
+  these through the local ingestion transaction boundary. Object storage plus
+  Parquet is the canonical data layer (lead §3.1, §30);
+  [ADR 0001 D1](../adr/0001-gcp-architecture-and-service-selection.md#d1-canonical-gcs-layout-and-release-manifests)
+  selects immutable Parquet releases in Cloud Storage, to be built in DE-07
+  (#128). Today canonical Parquet is only a local export.
 - **Analytical layer:** BigQuery is the first GCP analytical implementation;
   DuckDB supports local analytical tests. `PostgreSQLWarehouse` is a synchronous
   read-query adapter for PostgreSQL ([details](postgres-warehouse.md)). It does
@@ -109,3 +117,12 @@ every atomic requirement of the lead's 30-section *OpenAlex Data Storage, Query,
 and Serving Architecture* to the issues, merged PRs, files and tests behind it,
 the evidence level reached, the remaining gap and the follow-on issue. Use it,
 not this page, to check whether a lead requirement is implemented.
+
+The GCP services and policies selected for these layers (storage layout,
+analytical engine, data location, control plane, runtime, orchestration, SQL
+workflow, serving, portability boundary, identity, data rights and cost
+guardrails), and the options not selected with their revisit triggers, are in
+[ADR 0001](../adr/0001-gcp-architecture-and-service-selection.md)
+(issue #124, DE-03). It is a decision record, not evidence: it changes no
+readiness level or register status. The [ADR index](../adr/README.md) lists
+every decision record and its status.

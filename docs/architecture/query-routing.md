@@ -2,8 +2,9 @@
 
 Choose serving paths from measured consumer requirements, not from a preferred
 database. Query-pattern discovery and benchmarks precede any PostgreSQL/AlloyDB
-decision. On GCP, BigQuery is the first analytical implementation; first test
-whether BigQuery with an API and cache meets operational lookup requirements.
+serving decision. On GCP, BigQuery is the first analytical implementation;
+first test whether BigQuery with an API and cache meets operational lookup
+requirements.
 
 ## Capability routing
 
@@ -65,6 +66,19 @@ MISSED the operator-stated 200 ms p95 with a cold cache and MET it prewarmed,
 and #23 closed not_planned after the operator chose the BigQuery + API/cache
 path. The local PostgreSQL Work lookup projection (#112) stays an unapproved,
 undeployed PROTOTYPE.
+
+[ADR 0001 D8](../adr/0001-gcp-architecture-and-service-selection.md#d8-serving-one-cloud-run-service-with-a-release-aware-in-process-cache)
+(issue #124; status in the [ADR index](../adr/README.md)) records the serving
+and routing decision: one Cloud Run service as a thin HTTP adapter over the
+existing Data Service contracts, with domain endpoints only (no `/sql`), static
+routing per capability placement, a release-aware in-process cache and no
+operational store. It keeps the #23 closing criteria as the
+revisit trigger for a Cloud SQL or AlloyDB projection, and lists the other
+options in its
+[Not selected](../adr/0001-gcp-architecture-and-service-selection.md#not-selected)
+table. None of it is deployed. It is *selected, not locked*: #118 timed
+only the works-table lookup SQL, so DE-30 (#151) re-measures the real miss
+path end to end before the cache decision is confirmed.
 
 ## Materialized aggregates
 
