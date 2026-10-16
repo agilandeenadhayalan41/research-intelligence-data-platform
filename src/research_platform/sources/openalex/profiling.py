@@ -14,6 +14,7 @@ which is deleted before returning.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import tempfile
@@ -70,6 +71,8 @@ class _CountingReader(io.RawIOBase):
         self._declared_bytes = declared_bytes
         self._budget = budget
         self._pending = b""
+        self._digest = hashlib.sha256()
+        self._verified = False
         self.bytes_read = 0
 
     def readable(self) -> bool:
@@ -102,7 +105,14 @@ class _CountingReader(io.RawIOBase):
             self._pending = b""
         if self._declared_bytes is not None and self.bytes_read != self._declared_bytes:
             raise OpenAlexSizeMismatchError("observed payload size differs from metadata")
+        self._verified = True
         return self.bytes_read
+
+    def sha256_hex(self) -> str:
+        """SHA-256 of every byte read; only after ``verify_complete`` succeeded."""
+        if not self._verified:
+            raise RuntimeError("sha256 is available only after the payload was fully verified")
+        return self._digest.hexdigest()
 
     def _read_raw(self, size: int) -> bytes:
         if self._budget is not None:
@@ -118,6 +128,7 @@ class _CountingReader(io.RawIOBase):
         if not chunk:
             return b""
         self.bytes_read += len(chunk)
+        self._digest.update(chunk)
         if self.bytes_read > self._max_bytes:
             raise OpenAlexProfileLimitError("payload exceeds the configured byte limit")
         if self._declared_bytes is not None and self.bytes_read > self._declared_bytes:
@@ -276,6 +287,7 @@ def _profile_jsonl(
     _check_signature(reader.signature(len(PARQUET_MAGIC)), "jsonl", compression)
     observed_size = None
     row_count = None
+    sha256 = None
     with io.BufferedReader(reader, buffer_size=_CHUNK_SIZE) as buffered:
         sample = sample_jsonl(
             buffered,
@@ -283,13 +295,20 @@ def _profile_jsonl(
             max_records=limits.max_profile_records,
             max_decoded_bytes=limits.max_decoded_sample_bytes,
             limits=limits,
+            drain_to_eof=limits.drain_jsonl_to_eof,
+            max_drain_decoded_bytes=limits.max_drain_decoded_bytes,
             _budget=budget,
         )
         if sample.reached_eof:
             while buffered.read(_CHUNK_SIZE):
                 pass
             observed_size = reader.verify_complete()
-            row_count = sample.sampled_record_count
+            sha256 = reader.sha256_hex()
+            row_count = (
+                sample.total_record_count
+                if sample.total_record_count is not None
+                else sample.sampled_record_count
+            )
             _check_record_count(asset, row_count)
     limitations = [
         "Profiles one bounded development file; facts do not describe the full snapshot.",
@@ -307,6 +326,19 @@ def _profile_jsonl(
         limitations.append(
             "The file was not read to EOF: row_count and observed_size_bytes are unknown, "
             "and corruption after the sampled prefix is not detected."
+        )
+    if sample.drained:
+        limitations.append(
+            "The file was drained to EOF after the sample: row_count counts newline-"
+            "terminated lines beyond the sample without parsing them, and gzip "
+            "CRC32/ISIZE were verified at the member end."
+        )
+    if sample.unterminated_final_line:
+        limitations.append("The final line has no newline terminator; it was counted as one record.")
+    if sample.duplicate_key_records:
+        limitations.append(
+            "Some sampled records repeat a word key inside abstract_inverted_index; "
+            "JSON decoding keeps the last value, so those word positions are not all observed."
         )
     fields = sample.fields
     return _build_profile(
@@ -326,6 +358,8 @@ def _profile_jsonl(
         statistics_available=None,
         created_by=None,
         sampled_record_count=sample.sampled_record_count,
+        sha256=sha256,
+        sampled_duplicate_key_records=sample.duplicate_key_records,
         limits=limits,
         limitations=limitations,
     )
@@ -346,6 +380,7 @@ def _profile_parquet(
             while chunk := reader.read(_CHUNK_SIZE):
                 handle.write(chunk)
         observed_size = reader.verify_complete()
+        sha256 = reader.sha256_hex()
         inspection = inspect_parquet(
             path, max_records=limits.max_profile_records, limits=limits, _budget=budget
         )
@@ -354,12 +389,24 @@ def _profile_parquet(
         "Profiles one bounded development file; facts do not describe the full snapshot.",
         "Schema, nullability, row and row-group counts, codecs, and statistics "
         "availability come from the exact Parquet footer.",
-        f"sampled_* counts cover only top-level columns in the first bounded batch of "
-        f"at most {limits.max_profile_records} rows.",
+        (
+            f"sampled_* counts cover only top-level columns in the first bounded batch of "
+            f"at most {limits.max_profile_records} rows."
+            if inspection.values_read
+            else "Parquet values were not read (footer_only); schema, nullability, "
+            "counts and codecs are exact footer facts."
+        ),
         "Types are PyArrow's interpretation of the Parquet schema.",
-        "Footer byte/Thrift, schema/work, conservative dictionary-expansion, and "
-        "batch-byte guards apply. Footer declarations are not a hard native-memory "
-        "sandbox, and cooperative deadlines cannot interrupt native Arrow calls.",
+        (
+            "Footer byte/Thrift, schema/work, conservative dictionary-expansion, and "
+            "batch-byte guards apply. Footer declarations are not a hard native-memory "
+            "sandbox, and cooperative deadlines cannot interrupt native Arrow calls."
+            if inspection.values_read
+            else "Footer byte/Thrift and schema/work guards apply; the dictionary-expansion "
+            "and batch-byte guards were not applied because no values were read "
+            "(footer_only). Footer declarations are not a hard native-memory sandbox, and "
+            "cooperative deadlines cannot interrupt native Arrow calls."
+        ),
         "Bytes were spooled to a temporary local file, deleted after profiling, "
         "because the Parquet footer is at the end of the file.",
     ]
@@ -382,6 +429,8 @@ def _profile_parquet(
         statistics_available=inspection.statistics_available,
         created_by=inspection.created_by,
         sampled_record_count=inspection.sampled_record_count,
+        sha256=sha256,
+        sampled_duplicate_key_records=None,
         limits=limits,
         limitations=limitations,
     )
@@ -412,6 +461,8 @@ def _build_profile(
     sampled_record_count: int,
     limits: ProfilingLimits,
     limitations: Sequence[str],
+    sha256: str | None = None,
+    sampled_duplicate_key_records: int | None = None,
 ) -> OpenAlexSourceProfile:
     exact = _E.EXACT_FILE_METADATA
     verified = _E.VERIFIED_METADATA
@@ -441,6 +492,10 @@ def _build_profile(
         "statistics_available": (statistics_available, exact),
         "parquet_created_by": (created_by, exact),
         "sampled_record_count": (sampled_record_count, _E.SAMPLED_OBSERVATION),
+        "sha256": (sha256, exact),
+        "sampled_duplicate_key_records": (
+            sampled_duplicate_key_records, _E.SAMPLED_OBSERVATION
+        ),
     }
     evidence = {
         name: _E.UNKNOWN if value is None else kind for name, (value, kind) in values.items()

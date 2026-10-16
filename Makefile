@@ -1,15 +1,20 @@
 PYTHON ?= python
 
-.PHONY: install test test-unit test-orchestration test-postgres-ingestion test-postgres-warehouse test-postgres-serving check build postgres-up postgres-down
+.PHONY: install test test-unit test-openalex-live test-orchestration test-postgres-ingestion test-postgres-warehouse test-postgres-serving check build postgres-up postgres-down
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"
 
 test:
-	$(PYTHON) -m pytest -m "not postgres"
+	$(PYTHON) -m pytest -m "not postgres and not openalex_live"
 
 test-unit:
-	$(PYTHON) -m pytest tests/unit -m "not postgres"
+	$(PYTHON) -m pytest tests/unit -m "not postgres and not openalex_live"
+
+test-openalex-live:
+	@test -n "$(OPENALEX_LIVE_SCRATCH)" -a -n "$(OPENALEX_LIVE_BUDGET_LEDGER)" || { echo "set OPENALEX_LIVE_SCRATCH and OPENALEX_LIVE_BUDGET_LEDGER (outside the repo)"; exit 2; }
+	mkdir -p $(OPENALEX_LIVE_SCRATCH)/tmp
+	OPENALEX_LIVE_TESTS=1 TMPDIR=$(OPENALEX_LIVE_SCRATCH)/tmp $(PYTHON) -m pytest tests/integration/test_real_source_profile_live.py -m openalex_live -p no:cacheprovider --basetemp=$(OPENALEX_LIVE_SCRATCH)/pytest
 
 test-orchestration:
 	$(PYTHON) -m pytest tests/unit/test_orchestration_contracts.py -m "not postgres"

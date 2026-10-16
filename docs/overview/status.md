@@ -58,7 +58,8 @@ description: What is complete, what has been validated and where, how ready each
 These are open. None of them should be assumed from the evidence further down
 this page.
 
-- **Real OpenAlex payloads.** No real payload has been profiled or ingested.
+- **Real OpenAlex payloads.** Profiled only in a LOCAL bounded inspection
+  ([#126][i126]); none ingested (the canonical mapper rejects real records).
   Every cloud run used synthetic data, apart from the #92 smoke query on a
   public sample table.
 - **Production scale.** Nothing has been measured at full OpenAlex scale, or
@@ -129,7 +130,7 @@ and **not** that GCP deployment is complete.
 | 05 | Bounded anonymous OpenAlex connector | Complete | [#13][i13] |
 | 06 | Works manifest parser | Complete | [#12][i12] |
 | 07 | Deterministic bounded sample selector | Complete | [#14][i14] |
-| 08 | Bounded source profiling | Implemented. **Real payload profile pending** public network access | [#16][i16] |
+| 08 | Bounded source profiling | Implemented; real payload profiled locally ([#126][i126]) | [#16][i16] |
 | 09 | Immutable local raw landing | Complete | [#17][i17] |
 | 10 | Pipeline control and provenance contracts | Complete | [#18][i18] |
 | 11 | Canonical OpenAlex model | Complete | [#15][i15] |
@@ -173,6 +174,7 @@ Identifiers are redacted in the linked evidence.
 | [#23][i23] | Lookup requirement recorded: interactive app/API consumer, ≤200 ms end-to-end p95, ≤5 rps peak, daily freshness | Configuration only ([`config/query-patterns/openalex.yaml`](../../config/query-patterns/openalex.yaml)) | Operator-stated. **Not** a measured or product-validated Wiley SLA | [#119][p119] |
 | [#118][i118] tooling | In-process TTL/LRU lookup cache, a manual BigQuery + cache measurement script, and `--prewarm` | Local (offline) | Tooling only | [#120][p120], [#121][p121] |
 | [#118][i118] runs 1–4 | BigQuery + in-process cache for the DOI and Work-ID lookups: Zipf(1.1) access over 1,000 ACTIVE Works, 500 warm-up and 2,000 measured requests per run, with a cold cache (runs 1 and 3) and with every key prewarmed (runs 2 and 4), 2026-10-12/13 | DEV: the personal project labelled DEV, on the #108 Stage 3 synthetic tables (about 10k Works), as the DEV least-privilege service account | Cold: **missed** the 200 ms p95 (DOI 2,426 ms, Work-ID 2,554 ms). Prewarmed: **met** it (0.006 ms and 0.010 ms). In-process cache only, not a production latency. Placement stays `BIGQUERY_PLUS_CACHE` / `ASSUMED`, and no readiness level changed | — (issue comments) |
+| [#126][i126] | Real OpenAlex snapshot: layout, manifests, one JSONL/Parquet pair, checksums, rights and cadence, 2026-10-16 | Local container, anonymous HTTPS to the public bucket | LOCAL bounded inspection. Not cloud or enterprise evidence | — |
 
 Notes on the table:
 
@@ -356,6 +358,7 @@ run" sections.
 [i108]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/108
 [i118]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/118
 [i122]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/122
+[i126]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/126
 [i149]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/149
 [i151]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/151
 [i156]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/156

@@ -1,0 +1,1880 @@
+{
+  "evidence": "LOCAL bounded inspection",
+  "records": [
+    {
+      "abstract_inverted_index": null,
+      "apc_list": null,
+      "apc_paid": null,
+      "authors_count": 1,
+      "authorships": [
+        {
+          "affiliations": [],
+          "author": {
+            "display_name": "Author 1",
+            "id": "https://openalex.org/A0000000001",
+            "observed_orcids": [],
+            "orcid": null
+          },
+          "author_position": "first",
+          "countries": [],
+          "institutions": [],
+          "is_corresponding": true,
+          "raw_affiliation_strings": [],
+          "raw_author_name": "Author 1",
+          "raw_orcid": null
+        }
+      ],
+      "awards": [],
+      "best_oa_location": {
+        "doi": null,
+        "id": "loc:1",
+        "is_accepted": false,
+        "is_oa": true,
+        "is_published": false,
+        "landing_page_url": "https://example.org/u1",
+        "license": "other-oa",
+        "license_id": "https://openalex.org/licenses/other-oa",
+        "pdf_url": null,
+        "provenance": "repo",
+        "raw_source_name": "Source 1",
+        "raw_type": null,
+        "source": {
+          "display_name": "DSpace (Open University in the Netherlands)",
+          "host_organization": "https://openalex.org/I7876267",
+          "host_organization_lineage": [
+            "https://openalex.org/I7876267"
+          ],
+          "host_organization_lineage_names": [],
+          "host_organization_name": "Open University of the Netherlands",
+          "id": "https://openalex.org/S4306401002",
+          "is_core": false,
+          "is_in_doaj": false,
+          "is_oa": false,
+          "issn": null,
+          "issn_l": null,
+          "listed_in": [],
+          "type": "repository"
+        },
+        "version": "submittedVersion"
+      },
+      "biblio": {
+        "first_page": null,
+        "issue": null,
+        "last_page": null,
+        "volume": null
+      },
+      "citation_normalized_percentile": null,
+      "cited_by_count": 0,
+      "cited_by_percentile_year": null,
+      "concepts": [
+        {
+          "display_name": "Computer science",
+          "id": "https://openalex.org/C41008148",
+          "level": 0,
+          "score": 0.30348662,
+          "wikidata": "https://www.wikidata.org/wiki/Q21198"
+        }
+      ],
+      "corresponding_author_ids": [
+        "https://openalex.org/A0000000001"
+      ],
+      "corresponding_institution_ids": [],
+      "countries_distinct_count": 0,
+      "counts_by_year": [],
+      "created_date": "2026-09-28T00:00:00.000Z",
+      "display_name": "Title 1",
+      "doi": null,
+      "funders": [],
+      "fwci": null,
+      "has_content": {
+        "grobid_xml": false,
+        "pdf": false
+      },
+      "has_fulltext": false,
+      "id": "https://openalex.org/W1600688523",
+      "ids": {
+        "mag": "1600688523",
+        "openalex": "https://openalex.org/W1600688523"
+      },
+      "indexed_in": [],
+      "institutions": [],
+      "institutions_distinct_count": 0,
+      "is_paratext": false,
+      "is_retracted": false,
+      "is_xpac": false,
+      "keywords": [],
+      "language": "en",
+      "locations": [
+        {
+          "doi": null,
+          "id": "loc:1",
+          "is_accepted": false,
+          "is_oa": true,
+          "is_published": false,
+          "landing_page_url": "https://example.org/u1",
+          "license": "other-oa",
+          "license_id": "https://openalex.org/licenses/other-oa",
+          "pdf_url": null,
+          "provenance": "repo",
+          "raw_source_name": "Source 1",
+          "raw_type": null,
+          "source": {
+            "display_name": "DSpace (Open University in the Netherlands)",
+            "host_organization": "https://openalex.org/I7876267",
+            "host_organization_lineage": [
+              "https://openalex.org/I7876267"
+            ],
+            "host_organization_lineage_names": [],
+            "host_organization_name": "Open University of the Netherlands",
+            "id": "https://openalex.org/S4306401002",
+            "is_core": false,
+            "is_in_doaj": false,
+            "is_oa": false,
+            "issn": null,
+            "issn_l": null,
+            "listed_in": [],
+            "type": "repository"
+          },
+          "version": "submittedVersion"
+        }
+      ],
+      "locations_count": 1,
+      "mesh": [],
+      "open_access": {
+        "any_repository_has_fulltext": true,
+        "is_oa": true,
+        "oa_status": "green",
+        "oa_url": "https://example.org/u1"
+      },
+      "primary_location": {
+        "doi": null,
+        "id": "loc:1",
+        "is_accepted": false,
+        "is_oa": true,
+        "is_published": false,
+        "landing_page_url": "https://example.org/u1",
+        "license": "other-oa",
+        "license_id": "https://openalex.org/licenses/other-oa",
+        "pdf_url": null,
+        "provenance": "repo",
+        "raw_source_name": "Source 1",
+        "raw_type": null,
+        "source": {
+          "display_name": "DSpace (Open University in the Netherlands)",
+          "host_organization": "https://openalex.org/I7876267",
+          "host_organization_lineage": [
+            "https://openalex.org/I7876267"
+          ],
+          "host_organization_lineage_names": [],
+          "host_organization_name": "Open University of the Netherlands",
+          "id": "https://openalex.org/S4306401002",
+          "is_core": false,
+          "is_in_doaj": false,
+          "is_oa": false,
+          "issn": null,
+          "issn_l": null,
+          "listed_in": [],
+          "type": "repository"
+        },
+        "version": "submittedVersion"
+      },
+      "primary_topic": null,
+      "publication_date": "2005-12-12",
+      "publication_year": 2005,
+      "referenced_works": [],
+      "referenced_works_count": 0,
+      "related_works": [],
+      "study_designs": [],
+      "sustainable_development_goals": [],
+      "title": "Title 1",
+      "topics": [],
+      "type": "article",
+      "updated_date": "2026-09-28T08:13:21.709Z",
+      "volume": null
+    },
+    {
+      "abstract_inverted_index": null,
+      "apc_list": null,
+      "apc_paid": null,
+      "authors_count": 5,
+      "authorships": [
+        {
+          "affiliations": [
+            {
+              "institution_ids": [
+                "https://openalex.org/I4210149340"
+              ],
+              "raw_affiliation_string": "Affiliation 1"
+            }
+          ],
+          "author": {
+            "display_name": "Author 2",
+            "id": "https://openalex.org/A0000000002",
+            "observed_orcids": [
+              "https://orcid.org/0000-0000-0000-001X"
+            ],
+            "orcid": "https://orcid.org/0000-0000-0000-001X"
+          },
+          "author_position": "first",
+          "countries": [
+            "CH"
+          ],
+          "institutions": [
+            {
+              "country_code": "CH",
+              "display_name": "Centre universitaire de médecine générale et santé publique, Lausanne",
+              "id": "https://openalex.org/I4210149340",
+              "lineage": [
+                "https://openalex.org/I4210149340"
+              ],
+              "ror": "https://ror.org/04mcdza51",
+              "type": "healthcare"
+            }
+          ],
+          "is_corresponding": false,
+          "raw_affiliation_strings": [
+            "Affiliation 1"
+          ],
+          "raw_author_name": "Author 2",
+          "raw_orcid": null
+        },
+        {
+          "affiliations": [
+            {
+              "institution_ids": [],
+              "raw_affiliation_string": "Affiliation 2"
+            }
+          ],
+          "author": {
+            "display_name": "Author 3",
+            "id": "https://openalex.org/A0000000003",
+            "observed_orcids": [],
+            "orcid": null
+          },
+          "author_position": "middle",
+          "countries": [],
+          "institutions": [],
+          "is_corresponding": false,
+          "raw_affiliation_strings": [
+            "Affiliation 2"
+          ],
+          "raw_author_name": "Author 3",
+          "raw_orcid": null
+        },
+        {
+          "affiliations": [
+            {
+              "institution_ids": [
+                "https://openalex.org/I4210116877"
+              ],
+              "raw_affiliation_string": "Affiliation 3"
+            }
+          ],
+          "author": {
+            "display_name": "Author 4",
+            "id": "https://openalex.org/A0000000004",
+            "observed_orcids": [],
+            "orcid": null
+          },
+          "author_position": "middle",
+          "countries": [
+            "CH"
+          ],
+          "institutions": [
+            {
+              "country_code": "CH",
+              "display_name": "Hôpital de Morges",
+              "id": "https://openalex.org/I4210116877",
+              "lineage": [
+                "https://openalex.org/I4210116877"
+              ],
+              "ror": "https://ror.org/026qe1m81",
+              "type": "healthcare"
+            }
+          ],
+          "is_corresponding": false,
+          "raw_affiliation_strings": [
+            "Affiliation 3"
+          ],
+          "raw_author_name": "Author 4",
+          "raw_orcid": null
+        },
+        {
+          "affiliations": [
+            {
+              "institution_ids": [
+                "https://openalex.org/I2802229882"
+              ],
+              "raw_affiliation_string": "Affiliation 4"
+            }
+          ],
+          "author": {
+            "display_name": "Author 5",
+            "id": "https://openalex.org/A0000000005",
+            "observed_orcids": [
+              "https://orcid.org/0000-0000-0000-0028"
+            ],
+            "orcid": "https://orcid.org/0000-0000-0000-0028"
+          },
+          "author_position": "middle",
+          "countries": [
+            "CH"
+          ],
+          "institutions": [
+            {
+              "country_code": "CH",
+              "display_name": "Centre Hospitalier Universitaire Vaudois",
+              "id": "https://openalex.org/I2802229882",
+              "lineage": [
+                "https://openalex.org/I2802229882"
+              ],
+              "ror": "https://ror.org/05a353079",
+              "type": "healthcare"
+            }
+          ],
+          "is_corresponding": false,
+          "raw_affiliation_strings": [
+            "Affiliation 4"
+          ],
+          "raw_author_name": "Author 5",
+          "raw_orcid": null
+        },
+        {
+          "affiliations": [
+            {
+              "institution_ids": [
+                "https://openalex.org/I4210149340"
+              ],
+              "raw_affiliation_string": "Affiliation 1"
+            }
+          ],
+          "author": {
+            "display_name": "Author 6",
+            "id": "https://openalex.org/A0000000006",
+            "observed_orcids": [
+              "https://orcid.org/0000-0000-0000-0036"
+            ],
+            "orcid": "https://orcid.org/0000-0000-0000-0036"
+          },
+          "author_position": "last",
+          "countries": [
+            "CH"
+          ],
+          "institutions": [
+            {
+              "country_code": "CH",
+              "display_name": "Centre universitaire de médecine générale et santé publique, Lausanne",
+              "id": "https://openalex.org/I4210149340",
+              "lineage": [
+                "https://openalex.org/I4210149340"
+              ],
+              "ror": "https://ror.org/04mcdza51",
+              "type": "healthcare"
+            }
+          ],
+          "is_corresponding": false,
+          "raw_affiliation_strings": [
+            "Affiliation 1"
+          ],
+          "raw_author_name": "Author 6",
+          "raw_orcid": null
+        }
+      ],
+      "awards": [],
+      "best_oa_location": {
+        "doi": null,
+        "id": null,
+        "is_accepted": null,
+        "is_oa": null,
+        "is_published": null,
+        "landing_page_url": null,
+        "license": null,
+        "license_id": null,
+        "pdf_url": null,
+        "provenance": null,
+        "raw_source_name": null,
+        "raw_type": null,
+        "source": null,
+        "version": null
+      },
+      "biblio": {
+        "first_page": "1717",
+        "issue": "753",
+        "last_page": "1717",
+        "volume": "17"
+      },
+      "citation_normalized_percentile": null,
+      "cited_by_count": 0,
+      "cited_by_percentile_year": null,
+      "concepts": [
+        {
+          "display_name": "Computer science",
+          "id": "https://openalex.org/C41008148",
+          "level": 0,
+          "score": 0.26509959,
+          "wikidata": "https://www.wikidata.org/wiki/Q21198"
+        }
+      ],
+      "corresponding_author_ids": [],
+      "corresponding_institution_ids": [],
+      "countries_distinct_count": 1,
+      "counts_by_year": [],
+      "created_date": "2026-09-28T00:00:00.000Z",
+      "display_name": "Title 2",
+      "doi": null,
+      "funders": [],
+      "fwci": null,
+      "has_content": {
+        "grobid_xml": false,
+        "pdf": false
+      },
+      "has_fulltext": false,
+      "id": "https://openalex.org/W4286909254",
+      "ids": {
+        "mag": "3202125526",
+        "openalex": "https://openalex.org/W4286909254",
+        "pmid": "https://pubmed.ncbi.nlm.nih.gov/34614314"
+      },
+      "indexed_in": [
+        "pubmed"
+      ],
+      "institutions": [],
+      "institutions_distinct_count": 3,
+      "is_paratext": false,
+      "is_retracted": false,
+      "is_xpac": false,
+      "keywords": [],
+      "language": "fr",
+      "locations": [
+        {
+          "doi": null,
+          "id": "loc:2",
+          "is_accepted": true,
+          "is_oa": false,
+          "is_published": true,
+          "landing_page_url": "https://example.org/u2",
+          "license": null,
+          "license_id": null,
+          "pdf_url": null,
+          "provenance": "pubmed",
+          "raw_source_name": "Source 2",
+          "raw_type": "Journal Article",
+          "source": {
+            "display_name": "PubMed",
+            "host_organization": "https://openalex.org/I1299303238",
+            "host_organization_lineage": [
+              "https://openalex.org/I1299303238"
+            ],
+            "host_organization_lineage_names": [],
+            "host_organization_name": "National Institutes of Health",
+            "id": "https://openalex.org/S4306525036",
+            "is_core": false,
+            "is_in_doaj": false,
+            "is_oa": false,
+            "issn": null,
+            "issn_l": null,
+            "listed_in": [],
+            "type": "repository"
+          },
+          "version": "publishedVersion"
+        },
+        {
+          "doi": null,
+          "id": "loc:3",
+          "is_accepted": false,
+          "is_oa": false,
+          "is_published": null,
+          "landing_page_url": "https://example.org/u3",
+          "license": null,
+          "license_id": null,
+          "pdf_url": null,
+          "provenance": "mag",
+          "raw_source_name": null,
+          "raw_type": null,
+          "source": null,
+          "version": null
+        }
+      ],
+      "locations_count": 2,
+      "mesh": [
+        {
+          "descriptor_name": "Diabetes Mellitus",
+          "descriptor_ui": "D003920",
+          "is_major_topic": true,
+          "qualifier_name": null,
+          "qualifier_ui": null
+        },
+        {
+          "descriptor_name": "Diabetes Mellitus",
+          "descriptor_ui": "D003920",
+          "is_major_topic": true,
+          "qualifier_name": null,
+          "qualifier_ui": null
+        },
+        {
+          "descriptor_name": "Diabetes Mellitus",
+          "descriptor_ui": "D003920",
+          "is_major_topic": true,
+          "qualifier_name": null,
+          "qualifier_ui": null
+        },
+        {
+          "descriptor_name": "Humans",
+          "descriptor_ui": "D006801",
+          "is_major_topic": false,
+          "qualifier_name": null,
+          "qualifier_ui": null
+        },
+        {
+          "descriptor_name": "Humans",
+          "descriptor_ui": "D006801",
+          "is_major_topic": false,
+          "qualifier_name": null,
+          "qualifier_ui": null
+        },
+        {
+          "descriptor_name": "Humans",
+          "descriptor_ui": "D006801",
+          "is_major_topic": false,
+          "qualifier_name": null,
+          "qualifier_ui": null
+        },
+        {
+          "descriptor_name": "Interdisciplinary Studies",
+          "descriptor_ui": "D058025",
+          "is_major_topic": false,
+          "qualifier_name": null,
+          "qualifier_ui": null
+        },
+        {
+          "descriptor_name": "Interdisciplinary Studies",
+          "descriptor_ui": "D058025",
+          "is_major_topic": false,
+          "qualifier_name": null,
+          "qualifier_ui": null
+        },
+        {
+          "descriptor_name": "Interdisciplinary Studies",
+          "descriptor_ui": "D058025",
+          "is_major_topic": false,
+          "qualifier_name": null,
+          "qualifier_ui": null
+        },
+        {
+          "descriptor_name": "Standard of Care",
+          "descriptor_ui": "D059039",
+          "is_major_topic": false,
+          "qualifier_name": null,
+          "qualifier_ui": null
+        },
+        {
+          "descriptor_name": "Standard of Care",
+          "descriptor_ui": "D059039",
+          "is_major_topic": false,
+          "qualifier_name": null,
+          "qualifier_ui": null
+        },
+        {
+          "descriptor_name": "Standard of Care",
+          "descriptor_ui": "D059039",
+          "is_major_topic": false,
+          "qualifier_name": null,
+          "qualifier_ui": null
+        }
+      ],
+      "open_access": {
+        "any_repository_has_fulltext": false,
+        "is_oa": false,
+        "oa_status": "closed",
+        "oa_url": null
+      },
+      "primary_location": {
+        "doi": null,
+        "id": "loc:2",
+        "is_accepted": true,
+        "is_oa": false,
+        "is_published": true,
+        "landing_page_url": "https://example.org/u2",
+        "license": null,
+        "license_id": null,
+        "pdf_url": null,
+        "provenance": "pubmed",
+        "raw_source_name": "Source 2",
+        "raw_type": "Journal Article",
+        "source": {
+          "display_name": "PubMed",
+          "host_organization": "https://openalex.org/I1299303238",
+          "host_organization_lineage": [
+            "https://openalex.org/I1299303238"
+          ],
+          "host_organization_lineage_names": [],
+          "host_organization_name": "National Institutes of Health",
+          "id": "https://openalex.org/S4306525036",
+          "is_core": false,
+          "is_in_doaj": false,
+          "is_oa": false,
+          "issn": null,
+          "issn_l": null,
+          "listed_in": [],
+          "type": "repository"
+        },
+        "version": "publishedVersion"
+      },
+      "primary_topic": null,
+      "publication_date": "2021-10-06",
+      "publication_year": 2021,
+      "referenced_works": [],
+      "referenced_works_count": 0,
+      "related_works": [
+        "https://openalex.org/W11016543",
+        "https://openalex.org/W2882144",
+        "https://openalex.org/W6008397",
+        "https://openalex.org/W972044",
+        "https://openalex.org/W1802230",
+        "https://openalex.org/W5574817",
+        "https://openalex.org/W12544054",
+        "https://openalex.org/W563404",
+        "https://openalex.org/W5281039",
+        "https://openalex.org/W5963666"
+      ],
+      "study_designs": [],
+      "sustainable_development_goals": [],
+      "title": "Title 2",
+      "topics": [],
+      "type": "article",
+      "updated_date": "2026-09-28T08:13:21.709Z",
+      "volume": null
+    },
+    {
+      "abstract_inverted_index": {
+        "w1": [
+          0
+        ],
+        "w10": [
+          10,
+          28
+        ],
+        "w11": [
+          11
+        ],
+        "w12": [
+          12
+        ],
+        "w13": [
+          13,
+          22
+        ],
+        "w14": [
+          14
+        ],
+        "w15": [
+          15,
+          25
+        ],
+        "w16": [
+          17
+        ],
+        "w17": [
+          18,
+          46
+        ],
+        "w18": [
+          19
+        ],
+        "w19": [
+          21
+        ],
+        "w2": [
+          1,
+          16,
+          30
+        ],
+        "w20": [
+          23
+        ],
+        "w21": [
+          24
+        ],
+        "w22": [
+          26
+        ],
+        "w23": [
+          27
+        ],
+        "w24": [
+          29
+        ],
+        "w25": [
+          31
+        ],
+        "w26": [
+          32
+        ],
+        "w27": [
+          33
+        ],
+        "w28": [
+          36
+        ],
+        "w29": [
+          37,
+          48
+        ],
+        "w3": [
+          2,
+          20,
+          34
+        ],
+        "w30": [
+          38
+        ],
+        "w31": [
+          39
+        ],
+        "w32": [
+          40
+        ],
+        "w33": [
+          41
+        ],
+        "w34": [
+          42
+        ],
+        "w35": [
+          43
+        ],
+        "w36": [
+          44
+        ],
+        "w37": [
+          45
+        ],
+        "w38": [
+          47
+        ],
+        "w39": [
+          49
+        ],
+        "w4": [
+          3,
+          7,
+          35
+        ],
+        "w40": [
+          50
+        ],
+        "w5": [
+          4
+        ],
+        "w6": [
+          5
+        ],
+        "w7": [
+          6
+        ],
+        "w8": [
+          8
+        ],
+        "w9": [
+          9
+        ]
+      },
+      "apc_list": null,
+      "apc_paid": null,
+      "authors_count": 5,
+      "authorships": [
+        {
+          "affiliations": [],
+          "author": {
+            "display_name": "Author 7",
+            "id": "https://openalex.org/A0000000007",
+            "observed_orcids": [
+              "https://orcid.org/0000-0000-0000-0044"
+            ],
+            "orcid": "https://orcid.org/0000-0000-0000-0044"
+          },
+          "author_position": "first",
+          "countries": [],
+          "institutions": [],
+          "is_corresponding": false,
+          "raw_affiliation_strings": [],
+          "raw_author_name": "Author 7",
+          "raw_orcid": null
+        },
+        {
+          "affiliations": [],
+          "author": {
+            "display_name": "Author 8",
+            "id": "https://openalex.org/A0000000008",
+            "observed_orcids": [],
+            "orcid": null
+          },
+          "author_position": "middle",
+          "countries": [],
+          "institutions": [],
+          "is_corresponding": false,
+          "raw_affiliation_strings": [],
+          "raw_author_name": "Author 8",
+          "raw_orcid": null
+        },
+        {
+          "affiliations": [],
+          "author": {
+            "display_name": "Author 9",
+            "id": "https://openalex.org/A0000000009",
+            "observed_orcids": [
+              "https://orcid.org/0000-0000-0000-0052"
+            ],
+            "orcid": "https://orcid.org/0000-0000-0000-0052"
+          },
+          "author_position": "middle",
+          "countries": [],
+          "institutions": [],
+          "is_corresponding": false,
+          "raw_affiliation_strings": [],
+          "raw_author_name": "Author 9",
+          "raw_orcid": null
+        },
+        {
+          "affiliations": [],
+          "author": {
+            "display_name": "Author 10",
+            "id": "https://openalex.org/A0000000010",
+            "observed_orcids": [
+              "https://orcid.org/0000-0000-0000-0060"
+            ],
+            "orcid": "https://orcid.org/0000-0000-0000-0060"
+          },
+          "author_position": "middle",
+          "countries": [],
+          "institutions": [],
+          "is_corresponding": false,
+          "raw_affiliation_strings": [],
+          "raw_author_name": "Author 10",
+          "raw_orcid": null
+        },
+        {
+          "affiliations": [],
+          "author": {
+            "display_name": "Author 11",
+            "id": "https://openalex.org/A0000000011",
+            "observed_orcids": [
+              "https://orcid.org/0000-0000-0000-0079"
+            ],
+            "orcid": "https://orcid.org/0000-0000-0000-0079"
+          },
+          "author_position": "last",
+          "countries": [],
+          "institutions": [],
+          "is_corresponding": false,
+          "raw_affiliation_strings": [],
+          "raw_author_name": "Author 11",
+          "raw_orcid": null
+        }
+      ],
+      "awards": [],
+      "best_oa_location": {
+        "doi": "https://doi.org/10.5517/ccdc.csd.cc2shwy4",
+        "id": "loc:4",
+        "is_accepted": false,
+        "is_oa": true,
+        "is_published": null,
+        "landing_page_url": "https://example.org/u4",
+        "license": null,
+        "license_id": null,
+        "pdf_url": null,
+        "provenance": "datacite",
+        "raw_source_name": null,
+        "raw_type": "Dataset",
+        "source": {
+          "display_name": "The Cambridge Structural Database",
+          "host_organization": "https://openalex.org/I4210098980",
+          "host_organization_lineage": [
+            "https://openalex.org/I4210098980"
+          ],
+          "host_organization_lineage_names": [],
+          "host_organization_name": "Cambridge Crystallographic Data Centre",
+          "id": "https://openalex.org/S4397694588",
+          "is_core": false,
+          "is_in_doaj": false,
+          "is_oa": false,
+          "issn": null,
+          "issn_l": null,
+          "listed_in": [],
+          "type": "repository"
+        },
+        "version": null
+      },
+      "biblio": {
+        "first_page": null,
+        "issue": null,
+        "last_page": null,
+        "volume": null
+      },
+      "citation_normalized_percentile": null,
+      "cited_by_count": 0,
+      "cited_by_percentile_year": null,
+      "concepts": [
+        {
+          "display_name": "Crystallography",
+          "id": "https://openalex.org/C8010536",
+          "level": 1,
+          "score": 0.6397,
+          "wikidata": "https://www.wikidata.org/wiki/Q160398"
+        },
+        {
+          "display_name": "Crystal structure",
+          "id": "https://openalex.org/C115624301",
+          "level": 2,
+          "score": 0.6363,
+          "wikidata": "https://www.wikidata.org/wiki/Q895901"
+        },
+        {
+          "display_name": "Materials science",
+          "id": "https://openalex.org/C192562407",
+          "level": 0,
+          "score": 0.5195,
+          "wikidata": "https://www.wikidata.org/wiki/Q228736"
+        },
+        {
+          "display_name": "Crystal (programming language)",
+          "id": "https://openalex.org/C2781285689",
+          "level": 2,
+          "score": 0.4436,
+          "wikidata": "https://www.wikidata.org/wiki/Q21921428"
+        },
+        {
+          "display_name": "Diffraction",
+          "id": "https://openalex.org/C207114421",
+          "level": 2,
+          "score": 0.4247,
+          "wikidata": "https://www.wikidata.org/wiki/Q133900"
+        },
+        {
+          "display_name": "X-ray crystallography",
+          "id": "https://openalex.org/C50515024",
+          "level": 3,
+          "score": 0.3737,
+          "wikidata": "https://www.wikidata.org/wiki/Q826582"
+        },
+        {
+          "display_name": "Molecule",
+          "id": "https://openalex.org/C32909587",
+          "level": 2,
+          "score": 0.337,
+          "wikidata": "https://www.wikidata.org/wiki/Q11369"
+        },
+        {
+          "display_name": "Space (punctuation)",
+          "id": "https://openalex.org/C2778572836",
+          "level": 2,
+          "score": 0.3027,
+          "wikidata": "https://www.wikidata.org/wiki/Q380933"
+        },
+        {
+          "display_name": "Single crystal",
+          "id": "https://openalex.org/C73922627",
+          "level": 2,
+          "score": 0.2614,
+          "wikidata": "https://www.wikidata.org/wiki/Q754943"
+        },
+        {
+          "display_name": "Chemistry",
+          "id": "https://openalex.org/C185592680",
+          "level": 0,
+          "score": 0.2489,
+          "wikidata": "https://www.wikidata.org/wiki/Q2329"
+        }
+      ],
+      "corresponding_author_ids": [],
+      "corresponding_institution_ids": [],
+      "countries_distinct_count": 0,
+      "counts_by_year": [],
+      "created_date": "2026-09-28T00:00:00.000Z",
+      "display_name": "Title 3",
+      "doi": "https://doi.org/10.5517/ccdc.csd.cc2shwy4",
+      "funders": [],
+      "fwci": null,
+      "has_content": {
+        "grobid_xml": false,
+        "pdf": false
+      },
+      "has_fulltext": false,
+      "id": "https://openalex.org/W7214517351",
+      "ids": {
+        "doi": "https://doi.org/10.5517/ccdc.csd.cc2shwy4",
+        "openalex": "https://openalex.org/W7214517351"
+      },
+      "indexed_in": [
+        "datacite"
+      ],
+      "institutions": [],
+      "institutions_distinct_count": 0,
+      "is_paratext": false,
+      "is_retracted": false,
+      "is_xpac": false,
+      "keywords": [],
+      "language": "en",
+      "locations": [
+        {
+          "doi": "https://doi.org/10.5517/ccdc.csd.cc2shwy4",
+          "id": "loc:4",
+          "is_accepted": false,
+          "is_oa": true,
+          "is_published": null,
+          "landing_page_url": "https://example.org/u4",
+          "license": null,
+          "license_id": null,
+          "pdf_url": null,
+          "provenance": "datacite",
+          "raw_source_name": null,
+          "raw_type": "Dataset",
+          "source": {
+            "display_name": "The Cambridge Structural Database",
+            "host_organization": "https://openalex.org/I4210098980",
+            "host_organization_lineage": [
+              "https://openalex.org/I4210098980"
+            ],
+            "host_organization_lineage_names": [],
+            "host_organization_name": "Cambridge Crystallographic Data Centre",
+            "id": "https://openalex.org/S4397694588",
+            "is_core": false,
+            "is_in_doaj": false,
+            "is_oa": false,
+            "issn": null,
+            "issn_l": null,
+            "listed_in": [],
+            "type": "repository"
+          },
+          "version": null
+        }
+      ],
+      "locations_count": 1,
+      "mesh": [],
+      "open_access": {
+        "any_repository_has_fulltext": true,
+        "is_oa": true,
+        "oa_status": "green",
+        "oa_url": "https://example.org/u4"
+      },
+      "primary_location": {
+        "doi": "https://doi.org/10.5517/ccdc.csd.cc2shwy4",
+        "id": "loc:4",
+        "is_accepted": false,
+        "is_oa": true,
+        "is_published": null,
+        "landing_page_url": "https://example.org/u4",
+        "license": null,
+        "license_id": null,
+        "pdf_url": null,
+        "provenance": "datacite",
+        "raw_source_name": null,
+        "raw_type": "Dataset",
+        "source": {
+          "display_name": "The Cambridge Structural Database",
+          "host_organization": "https://openalex.org/I4210098980",
+          "host_organization_lineage": [
+            "https://openalex.org/I4210098980"
+          ],
+          "host_organization_lineage_names": [],
+          "host_organization_name": "Cambridge Crystallographic Data Centre",
+          "id": "https://openalex.org/S4397694588",
+          "is_core": false,
+          "is_in_doaj": false,
+          "is_oa": false,
+          "issn": null,
+          "issn_l": null,
+          "listed_in": [],
+          "type": "repository"
+        },
+        "version": null
+      },
+      "primary_topic": {
+        "display_name": "Crystal structures of chemical compounds",
+        "domain": {
+          "display_name": "Physical Sciences",
+          "id": "https://openalex.org/domains/3"
+        },
+        "field": {
+          "display_name": "Chemistry",
+          "id": "https://openalex.org/fields/16"
+        },
+        "id": "https://openalex.org/T10464",
+        "score": 0.9995,
+        "subfield": {
+          "display_name": "Inorganic Chemistry",
+          "id": "https://openalex.org/subfields/1604"
+        }
+      },
+      "publication_date": "2026-09-27",
+      "publication_year": 2026,
+      "referenced_works": [],
+      "referenced_works_count": 0,
+      "related_works": [],
+      "study_designs": [],
+      "sustainable_development_goals": [],
+      "title": "Title 3",
+      "topics": [
+        {
+          "display_name": "Crystal structures of chemical compounds",
+          "domain": {
+            "display_name": "Physical Sciences",
+            "id": "https://openalex.org/domains/3"
+          },
+          "field": {
+            "display_name": "Chemistry",
+            "id": "https://openalex.org/fields/16"
+          },
+          "id": "https://openalex.org/T10464",
+          "score": 0.9995,
+          "subfield": {
+            "display_name": "Inorganic Chemistry",
+            "id": "https://openalex.org/subfields/1604"
+          }
+        },
+        {
+          "display_name": "Crystallography and molecular interactions",
+          "domain": {
+            "display_name": "Physical Sciences",
+            "id": "https://openalex.org/domains/3"
+          },
+          "field": {
+            "display_name": "Chemistry",
+            "id": "https://openalex.org/fields/16"
+          },
+          "id": "https://openalex.org/T10798",
+          "score": 0.0001,
+          "subfield": {
+            "display_name": "Physical and Theoretical Chemistry",
+            "id": "https://openalex.org/subfields/1606"
+          }
+        },
+        {
+          "display_name": "Crystal Structures and Properties",
+          "domain": {
+            "display_name": "Physical Sciences",
+            "id": "https://openalex.org/domains/3"
+          },
+          "field": {
+            "display_name": "Materials Science",
+            "id": "https://openalex.org/fields/25"
+          },
+          "id": "https://openalex.org/T10939",
+          "score": 0.0,
+          "subfield": {
+            "display_name": "Electronic, Optical and Magnetic Materials",
+            "id": "https://openalex.org/subfields/2504"
+          }
+        }
+      ],
+      "type": "dataset",
+      "updated_date": "2026-09-28T08:13:21.709Z",
+      "volume": null
+    },
+    {
+      "abstract_inverted_index": {
+        "w10": [
+          3
+        ],
+        "w29": [
+          14
+        ],
+        "w4": [
+          23
+        ],
+        "w41": [
+          0
+        ],
+        "w42": [
+          1
+        ],
+        "w43": [
+          2
+        ],
+        "w44": [
+          4
+        ],
+        "w45": [
+          5
+        ],
+        "w46": [
+          6
+        ],
+        "w47": [
+          7
+        ],
+        "w48": [
+          8
+        ],
+        "w49": [
+          9
+        ],
+        "w50": [
+          10
+        ],
+        "w51": [
+          11
+        ],
+        "w52": [
+          12
+        ],
+        "w53": [
+          13
+        ],
+        "w54": [
+          15
+        ],
+        "w55": [
+          16
+        ],
+        "w56": [
+          17
+        ],
+        "w57": [
+          18
+        ],
+        "w58": [
+          19
+        ],
+        "w59": [
+          20
+        ],
+        "w60": [
+          21
+        ],
+        "w61": [
+          22
+        ],
+        "w62": [
+          24
+        ],
+        "w63": [
+          25
+        ],
+        "w64": [
+          26
+        ],
+        "w65": [
+          27
+        ],
+        "w66": [
+          28
+        ]
+      },
+      "apc_list": null,
+      "apc_paid": null,
+      "authors_count": 1,
+      "authorships": [
+        {
+          "affiliations": [
+            {
+              "institution_ids": [
+                "https://openalex.org/I126193024"
+              ],
+              "raw_affiliation_string": "Affiliation 5"
+            }
+          ],
+          "author": {
+            "display_name": "Author 12",
+            "id": "https://openalex.org/A0000000012",
+            "observed_orcids": [],
+            "orcid": null
+          },
+          "author_position": "first",
+          "countries": [
+            "GB"
+          ],
+          "institutions": [
+            {
+              "country_code": "GB",
+              "display_name": "London Metropolitan University",
+              "id": "https://openalex.org/I126193024",
+              "lineage": [
+                "https://openalex.org/I126193024"
+              ],
+              "ror": "https://ror.org/00ae33288",
+              "type": "education"
+            }
+          ],
+          "is_corresponding": true,
+          "raw_affiliation_strings": [
+            "Affiliation 5"
+          ],
+          "raw_author_name": "Author 12",
+          "raw_orcid": null
+        }
+      ],
+      "awards": [],
+      "best_oa_location": {
+        "doi": "https://doi.org/10.1080/09584935.2026.2721221",
+        "id": "loc:5",
+        "is_accepted": true,
+        "is_oa": true,
+        "is_published": true,
+        "landing_page_url": "https://example.org/u5",
+        "license": null,
+        "license_id": null,
+        "pdf_url": "https://example.org/u6.pdf",
+        "provenance": "crossref",
+        "raw_source_name": "Source 3",
+        "raw_type": "journal-article",
+        "source": {
+          "display_name": "Contemporary South Asia",
+          "host_organization": "https://openalex.org/P4310320547",
+          "host_organization_lineage": [
+            "https://openalex.org/P4310320547",
+            "https://openalex.org/P4310320449"
+          ],
+          "host_organization_lineage_names": [
+            "Taylor & Francis",
+            "Informa"
+          ],
+          "host_organization_name": "Taylor & Francis",
+          "id": "https://openalex.org/S139338994",
+          "is_core": true,
+          "is_in_doaj": false,
+          "is_oa": false,
+          "issn": [
+            "0958-4935",
+            "1469-364X"
+          ],
+          "issn_l": "0958-4935",
+          "listed_in": [
+            "anvur-class-a",
+            "anvur-scientific",
+            "cwts-core",
+            "jufo-2",
+            "norway-1",
+            "poland-40",
+            "russia-white-list-1",
+            "vabb-shw"
+          ],
+          "type": "journal"
+        },
+        "version": "publishedVersion"
+      },
+      "biblio": {
+        "first_page": "702",
+        "issue": "3",
+        "last_page": "702",
+        "volume": "34"
+      },
+      "citation_normalized_percentile": null,
+      "cited_by_count": 0,
+      "cited_by_percentile_year": null,
+      "concepts": [
+        {
+          "display_name": "Library science",
+          "id": "https://openalex.org/C161191863",
+          "level": 1,
+          "score": 0.4289,
+          "wikidata": "https://www.wikidata.org/wiki/Q199655"
+        },
+        {
+          "display_name": "Political science",
+          "id": "https://openalex.org/C17744445",
+          "level": 0,
+          "score": 0.3727,
+          "wikidata": "https://www.wikidata.org/wiki/Q36442"
+        },
+        {
+          "display_name": "Sociology",
+          "id": "https://openalex.org/C144024400",
+          "level": 0,
+          "score": 0.3363,
+          "wikidata": "https://www.wikidata.org/wiki/Q21201"
+        },
+        {
+          "display_name": "Engineering ethics",
+          "id": "https://openalex.org/C55587333",
+          "level": 1,
+          "score": 0.3182,
+          "wikidata": "https://www.wikidata.org/wiki/Q1133029"
+        },
+        {
+          "display_name": "History",
+          "id": "https://openalex.org/C95457728",
+          "level": 0,
+          "score": 0.305,
+          "wikidata": "https://www.wikidata.org/wiki/Q309"
+        },
+        {
+          "display_name": "Media studies",
+          "id": "https://openalex.org/C29595303",
+          "level": 1,
+          "score": 0.2782,
+          "wikidata": "https://www.wikidata.org/wiki/Q165650"
+        },
+        {
+          "display_name": "Medical education",
+          "id": "https://openalex.org/C509550671",
+          "level": 1,
+          "score": 0.2693,
+          "wikidata": "https://www.wikidata.org/wiki/Q126945"
+        },
+        {
+          "display_name": "Review article",
+          "id": "https://openalex.org/C140608501",
+          "level": 2,
+          "score": 0.2068,
+          "wikidata": "https://www.wikidata.org/wiki/Q7318358"
+        },
+        {
+          "display_name": "Public relations",
+          "id": "https://openalex.org/C39549134",
+          "level": 1,
+          "score": 0.2026,
+          "wikidata": "https://www.wikidata.org/wiki/Q133080"
+        },
+        {
+          "display_name": "Postgraduate research",
+          "id": "https://openalex.org/C3019054475",
+          "level": 2,
+          "score": 0.1947,
+          "wikidata": "https://www.wikidata.org/wiki/Q7234304"
+        }
+      ],
+      "corresponding_author_ids": [
+        "https://openalex.org/A0000000012"
+      ],
+      "corresponding_institution_ids": [
+        "https://openalex.org/I126193024"
+      ],
+      "countries_distinct_count": 1,
+      "counts_by_year": [],
+      "created_date": "2026-09-28T00:00:00.000Z",
+      "display_name": "Title 4",
+      "doi": "https://doi.org/10.1080/09584935.2026.2721221",
+      "funders": [],
+      "fwci": null,
+      "has_content": {
+        "grobid_xml": true,
+        "pdf": true
+      },
+      "has_fulltext": true,
+      "id": "https://openalex.org/W7214539554",
+      "ids": {
+        "doi": "https://doi.org/10.1080/09584935.2026.2721221",
+        "openalex": "https://openalex.org/W7214539554"
+      },
+      "indexed_in": [
+        "crossref"
+      ],
+      "institutions": [],
+      "institutions_distinct_count": 1,
+      "is_paratext": false,
+      "is_retracted": false,
+      "is_xpac": false,
+      "keywords": [],
+      "language": "en",
+      "locations": [
+        {
+          "doi": "https://doi.org/10.1080/09584935.2026.2721221",
+          "id": "loc:5",
+          "is_accepted": true,
+          "is_oa": true,
+          "is_published": true,
+          "landing_page_url": "https://example.org/u5",
+          "license": null,
+          "license_id": null,
+          "pdf_url": "https://example.org/u6.pdf",
+          "provenance": "crossref",
+          "raw_source_name": "Source 3",
+          "raw_type": "journal-article",
+          "source": {
+            "display_name": "Contemporary South Asia",
+            "host_organization": "https://openalex.org/P4310320547",
+            "host_organization_lineage": [
+              "https://openalex.org/P4310320547",
+              "https://openalex.org/P4310320449"
+            ],
+            "host_organization_lineage_names": [
+              "Taylor & Francis",
+              "Informa"
+            ],
+            "host_organization_name": "Taylor & Francis",
+            "id": "https://openalex.org/S139338994",
+            "is_core": true,
+            "is_in_doaj": false,
+            "is_oa": false,
+            "issn": [
+              "0958-4935",
+              "1469-364X"
+            ],
+            "issn_l": "0958-4935",
+            "listed_in": [
+              "anvur-class-a",
+              "anvur-scientific",
+              "cwts-core",
+              "jufo-2",
+              "norway-1",
+              "poland-40",
+              "russia-white-list-1",
+              "vabb-shw"
+            ],
+            "type": "journal"
+          },
+          "version": "publishedVersion"
+        }
+      ],
+      "locations_count": 1,
+      "mesh": [],
+      "open_access": {
+        "any_repository_has_fulltext": false,
+        "is_oa": true,
+        "oa_status": "bronze",
+        "oa_url": "https://example.org/u6"
+      },
+      "primary_location": {
+        "doi": "https://doi.org/10.1080/09584935.2026.2721221",
+        "id": "loc:5",
+        "is_accepted": true,
+        "is_oa": true,
+        "is_published": true,
+        "landing_page_url": "https://example.org/u5",
+        "license": null,
+        "license_id": null,
+        "pdf_url": "https://example.org/u6.pdf",
+        "provenance": "crossref",
+        "raw_source_name": "Source 3",
+        "raw_type": "journal-article",
+        "source": {
+          "display_name": "Contemporary South Asia",
+          "host_organization": "https://openalex.org/P4310320547",
+          "host_organization_lineage": [
+            "https://openalex.org/P4310320547",
+            "https://openalex.org/P4310320449"
+          ],
+          "host_organization_lineage_names": [
+            "Taylor & Francis",
+            "Informa"
+          ],
+          "host_organization_name": "Taylor & Francis",
+          "id": "https://openalex.org/S139338994",
+          "is_core": true,
+          "is_in_doaj": false,
+          "is_oa": false,
+          "issn": [
+            "0958-4935",
+            "1469-364X"
+          ],
+          "issn_l": "0958-4935",
+          "listed_in": [
+            "anvur-class-a",
+            "anvur-scientific",
+            "cwts-core",
+            "jufo-2",
+            "norway-1",
+            "poland-40",
+            "russia-white-list-1",
+            "vabb-shw"
+          ],
+          "type": "journal"
+        },
+        "version": "publishedVersion"
+      },
+      "primary_topic": null,
+      "publication_date": "2026-07-03",
+      "publication_year": 2026,
+      "referenced_works": [],
+      "referenced_works_count": 0,
+      "related_works": [],
+      "study_designs": [],
+      "sustainable_development_goals": [],
+      "title": "Title 4",
+      "topics": [],
+      "type": "article",
+      "updated_date": "2026-09-28T08:13:21.709Z",
+      "volume": null
+    },
+    {
+      "abstract_inverted_index": null,
+      "apc_list": null,
+      "apc_paid": null,
+      "authors_count": 0,
+      "authorships": [],
+      "awards": [],
+      "best_oa_location": {
+        "doi": null,
+        "id": null,
+        "is_accepted": null,
+        "is_oa": null,
+        "is_published": null,
+        "landing_page_url": null,
+        "license": null,
+        "license_id": null,
+        "pdf_url": null,
+        "provenance": null,
+        "raw_source_name": null,
+        "raw_type": null,
+        "source": null,
+        "version": null
+      },
+      "biblio": {
+        "first_page": "1298",
+        "issue": "Issue 4",
+        "last_page": "1328",
+        "volume": "63"
+      },
+      "citation_normalized_percentile": {
+        "is_in_top_10_percent": false,
+        "is_in_top_1_percent": false,
+        "value": 0.7901359
+      },
+      "cited_by_count": 0,
+      "cited_by_percentile_year": null,
+      "concepts": [],
+      "corresponding_author_ids": [],
+      "corresponding_institution_ids": [],
+      "countries_distinct_count": 0,
+      "counts_by_year": [],
+      "created_date": "2026-09-28T00:00:00.000Z",
+      "display_name": "Title 5",
+      "doi": "https://doi.org/10.54648/cola2026063",
+      "funders": [],
+      "fwci": 0.0,
+      "has_content": {
+        "grobid_xml": false,
+        "pdf": false
+      },
+      "has_fulltext": false,
+      "id": "https://openalex.org/W7214541617",
+      "ids": {
+        "doi": "https://doi.org/10.54648/cola2026063",
+        "openalex": "https://openalex.org/W7214541617"
+      },
+      "indexed_in": [
+        "crossref"
+      ],
+      "institutions": [],
+      "institutions_distinct_count": 0,
+      "is_paratext": false,
+      "is_retracted": false,
+      "is_xpac": false,
+      "keywords": [],
+      "language": "en",
+      "locations": [
+        {
+          "doi": "https://doi.org/10.54648/cola2026063",
+          "id": "loc:6",
+          "is_accepted": true,
+          "is_oa": false,
+          "is_published": true,
+          "landing_page_url": "https://example.org/u7",
+          "license": null,
+          "license_id": null,
+          "pdf_url": null,
+          "provenance": "crossref",
+          "raw_source_name": "Source 4",
+          "raw_type": "journal-article",
+          "source": {
+            "display_name": "Common Market Law Review",
+            "host_organization": "https://openalex.org/P4310311835",
+            "host_organization_lineage": [
+              "https://openalex.org/P4310311835"
+            ],
+            "host_organization_lineage_names": [
+              "British Institute of International and Comparative Law"
+            ],
+            "host_organization_name": "British Institute of International and Comparative Law",
+            "id": "https://openalex.org/S127459061",
+            "is_core": false,
+            "is_in_doaj": false,
+            "is_oa": false,
+            "issn": [
+              "0165-0750",
+              "1875-8320"
+            ],
+            "issn_l": "0165-0750",
+            "listed_in": [
+              "abdc-b",
+              "anvur-class-a",
+              "anvur-scientific",
+              "erih-plus",
+              "jufo-3",
+              "norway-2",
+              "poland-140",
+              "russia-white-list-1",
+              "vabb-shw"
+            ],
+            "type": "journal"
+          },
+          "version": "publishedVersion"
+        }
+      ],
+      "locations_count": 1,
+      "mesh": [],
+      "open_access": {
+        "any_repository_has_fulltext": false,
+        "is_oa": false,
+        "oa_status": "closed",
+        "oa_url": null
+      },
+      "primary_location": {
+        "doi": "https://doi.org/10.54648/cola2026063",
+        "id": "loc:6",
+        "is_accepted": true,
+        "is_oa": false,
+        "is_published": true,
+        "landing_page_url": "https://example.org/u7",
+        "license": null,
+        "license_id": null,
+        "pdf_url": null,
+        "provenance": "crossref",
+        "raw_source_name": "Source 4",
+        "raw_type": "journal-article",
+        "source": {
+          "display_name": "Common Market Law Review",
+          "host_organization": "https://openalex.org/P4310311835",
+          "host_organization_lineage": [
+            "https://openalex.org/P4310311835"
+          ],
+          "host_organization_lineage_names": [
+            "British Institute of International and Comparative Law"
+          ],
+          "host_organization_name": "British Institute of International and Comparative Law",
+          "id": "https://openalex.org/S127459061",
+          "is_core": false,
+          "is_in_doaj": false,
+          "is_oa": false,
+          "issn": [
+            "0165-0750",
+            "1875-8320"
+          ],
+          "issn_l": "0165-0750",
+          "listed_in": [
+            "abdc-b",
+            "anvur-class-a",
+            "anvur-scientific",
+            "erih-plus",
+            "jufo-3",
+            "norway-2",
+            "poland-140",
+            "russia-white-list-1",
+            "vabb-shw"
+          ],
+          "type": "journal"
+        },
+        "version": "publishedVersion"
+      },
+      "primary_topic": {
+        "display_name": "European and International Law Studies",
+        "domain": {
+          "display_name": "Social Sciences",
+          "id": "https://openalex.org/domains/2"
+        },
+        "field": {
+          "display_name": "Social Sciences",
+          "id": "https://openalex.org/fields/33"
+        },
+        "id": "https://openalex.org/T13710",
+        "score": 0.7671,
+        "subfield": {
+          "display_name": "Political Science and International Relations",
+          "id": "https://openalex.org/subfields/3320"
+        }
+      },
+      "publication_date": "2026-08-01",
+      "publication_year": 2026,
+      "referenced_works": [],
+      "referenced_works_count": 0,
+      "related_works": [],
+      "study_designs": [],
+      "sustainable_development_goals": [
+        {
+          "display_name": "Peace, justice, and strong institutions",
+          "id": "https://metadata.un.org/sdg/16",
+          "score": 0.47620001435279846
+        }
+      ],
+      "title": "Title 5",
+      "topics": [
+        {
+          "display_name": "European and International Law Studies",
+          "domain": {
+            "display_name": "Social Sciences",
+            "id": "https://openalex.org/domains/2"
+          },
+          "field": {
+            "display_name": "Social Sciences",
+            "id": "https://openalex.org/fields/33"
+          },
+          "id": "https://openalex.org/T13710",
+          "score": 0.7671,
+          "subfield": {
+            "display_name": "Political Science and International Relations",
+            "id": "https://openalex.org/subfields/3320"
+          }
+        },
+        {
+          "display_name": "Legal Cases and Commentary",
+          "domain": {
+            "display_name": "Health Sciences",
+            "id": "https://openalex.org/domains/4"
+          },
+          "field": {
+            "display_name": "Medicine",
+            "id": "https://openalex.org/fields/27"
+          },
+          "id": "https://openalex.org/T11662",
+          "score": 0.0552,
+          "subfield": {
+            "display_name": "Reproductive Medicine",
+            "id": "https://openalex.org/subfields/2743"
+          }
+        },
+        {
+          "display_name": "EU Law and Policy Analysis",
+          "domain": {
+            "display_name": "Social Sciences",
+            "id": "https://openalex.org/domains/2"
+          },
+          "field": {
+            "display_name": "Social Sciences",
+            "id": "https://openalex.org/fields/33"
+          },
+          "id": "https://openalex.org/T14448",
+          "score": 0.0215,
+          "subfield": {
+            "display_name": "Law",
+            "id": "https://openalex.org/subfields/3308"
+          }
+        }
+      ],
+      "type": "article",
+      "updated_date": "2026-09-28T08:13:21.709Z",
+      "volume": null
+    }
+  ],
+  "redaction": {
+    "policy_counts": {
+      "keep": 114,
+      "mask_person": 9,
+      "mask_price": 2,
+      "replace_text": 18
+    },
+    "rules_version": 1
+  },
+  "schema_version": 1,
+  "selection": {
+    "count": 5,
+    "rule": "greedy new field-path coverage; ties by id; record JSON <= 20000 B; tokenized leak scan; no e-mail; no paratext",
+    "skipped": {
+      "email": 0,
+      "leak": 53,
+      "too_large": 139,
+      "type": 801,
+      "unknown_path": 0
+    }
+  },
+  "snapshot_date": "2026-10-14",
+  "source": {
+    "candidate_records": 2798,
+    "jsonl_sha256": "352337ab1e23145b65c2b492f417a1476c4131b6583c5734169908af26d12699",
+    "jsonl_uri": "s3://openalex/data/jsonl/works/updated_date=2026-09-28/part_0000.gz",
+    "jsonl_version_id": "wwGHhmHpVpzS6ulhe4irnKsftJ7N9Jdk",
+    "parquet_sha256": "9d64e379ebc0a39ef6aef55e0d2653c5c01ed7c4011b59e65586950679032501",
+    "parquet_uri": "s3://openalex/data/parquet/works/updated_date=2026-09-28/part_0000.parquet",
+    "parquet_version_id": "2vJPAFqn3BNtFqzA0mvFjULkkredy5.i"
+  }
+}

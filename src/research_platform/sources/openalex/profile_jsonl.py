@@ -25,15 +25,28 @@ from research_platform.sources.openalex.profile_models import (
 DYNAMIC_KEY_OBJECTS = frozenset({"abstract_inverted_index"})
 
 
+_DRAIN_CHUNK = 64 * 1024
+
+
 @dataclass(frozen=True)
 class JsonlSample:
-    """Sampled observations from at most ``max_records`` leading records."""
+    """Sampled observations from at most ``max_records`` leading records.
+
+    ``total_record_count`` and ``total_decoded_bytes`` are set only when EOF was
+    reached (by the sample itself or by the optional drain); drained lines are
+    counted by newline, not parsed.
+    """
 
     compression: Literal["gzip"] | None
     sampled_record_count: int
     reached_eof: bool
     decoded_bytes: int
     fields: tuple[FieldProfile, ...]
+    duplicate_key_records: int = 0
+    total_record_count: int | None = None
+    total_decoded_bytes: int | None = None
+    drained: bool = False
+    unterminated_final_line: bool = False
 
 
 def sample_jsonl(
@@ -43,22 +56,38 @@ def sample_jsonl(
     max_records: int,
     max_decoded_bytes: int,
     limits: ProfilingLimits = ProfilingLimits(),
+    drain_to_eof: bool | None = None,
+    max_drain_decoded_bytes: int | None = None,
     _budget: ProfileBudget | None = None,
 ) -> JsonlSample:
-    """Stream leading JSONL records without reading to EOF or materializing the payload.
+    """Stream leading JSONL records without materializing the payload.
 
     The caller owns ``stream``. Decompression wrappers created here are closed on
     success and failure. Decoded accounting includes the EOF probe; at most one
     additional byte is consumed to detect overflow. Structural preflight bounds
     record allocation before JSON decoding. Time checks are cooperative.
+
+    Without ``drain_to_eof`` the sampler stops after the record bound and does not
+    read to EOF. With it, the remainder is read in bounded chunks (at most
+    ``max_drain_decoded_bytes`` decoded bytes), newline-terminated lines are
+    counted (a blank line is rejected, as in the sample), and gzip's CRC32/ISIZE
+    trailer check runs at the member end. ``drain_to_eof`` and
+    ``max_drain_decoded_bytes`` default to ``limits`` and are validated by
+    ``ProfilingLimits`` like every other bound.
     """
     if compression not in {"gzip", None}:
         raise ValueError("JSONL compression must be gzip or None")
-    limits = ProfilingLimits.model_validate({
-        **limits.model_dump(),
+    overrides: dict[str, object] = {
         "max_profile_records": max_records,
         "max_decoded_sample_bytes": max_decoded_bytes,
-    })
+    }
+    if drain_to_eof is not None:
+        overrides["drain_jsonl_to_eof"] = drain_to_eof
+    if max_drain_decoded_bytes is not None:
+        overrides["max_drain_decoded_bytes"] = max_drain_decoded_bytes
+    limits = ProfilingLimits.model_validate({**limits.model_dump(), **overrides})
+    drain_to_eof = limits.drain_jsonl_to_eof
+    drain_limit = limits.max_drain_decoded_bytes
     budget = _budget if _budget is not None else ProfileBudget(limits)
 
     reader: BinaryIO = (
@@ -69,7 +98,12 @@ def sample_jsonl(
     observer = _Observer(budget)
     decoded = 0
     records = 0
+    duplicate_records = 0
     reached_eof = False
+    drained = False
+    total_records: int | None = None
+    total_decoded: int | None = None
+    unterminated = False
     try:
         while records < max_records:
             budget.check()
@@ -82,10 +116,12 @@ def sample_jsonl(
                 break
             decoded += len(line)
             _preflight_record(line, budget)
-            record = _decode_record(line)
+            record, had_duplicates = _decode_record(line)
+            duplicate_records += 1 if had_duplicates else 0
             budget.check()
             observer.observe_record(record)
             records += 1
+        probe = b""
         if not reached_eof:
             budget.check()
             probe = _read_line(reader, 1, probe=True)
@@ -94,6 +130,16 @@ def sample_jsonl(
             if decoded > max_decoded_bytes:
                 raise OpenAlexProfileLimitError("JSONL sample exceeds the decoded byte limit")
             reached_eof = not probe
+        if reached_eof:
+            total_records = records
+            total_decoded = decoded
+        elif drain_to_eof and records:
+            newlines, drained_bytes, last = _drain(reader, probe, drain_limit, budget)
+            unterminated = last not in (b"", b"\n")
+            total_records = records + newlines + (1 if unterminated else 0)
+            total_decoded = decoded - len(probe) + drained_bytes
+            reached_eof = True
+            drained = True
     finally:
         if reader is not stream:
             reader.close()
@@ -105,7 +151,45 @@ def sample_jsonl(
         reached_eof=reached_eof,
         decoded_bytes=decoded,
         fields=observer.fields(),
+        duplicate_key_records=duplicate_records,
+        total_record_count=total_records,
+        total_decoded_bytes=total_decoded,
+        drained=drained,
+        unterminated_final_line=unterminated,
     )
+
+
+def _drain(
+    reader: BinaryIO, probe: bytes, limit: int, budget: ProfileBudget
+) -> tuple[int, int, bytes]:
+    """Count newlines in the decoded remainder (which starts with ``probe``).
+
+    The last sampled line ended with a newline, so the carried tail starts as
+    ``b"\\n"``. An empty line (``\\n\\n`` or ``\\n\\r\\n``) anywhere in the remainder,
+    including across chunk boundaries, is rejected as the sample rejects it, so a
+    blank line is never counted as a record.
+    """
+    tail = b"\n"
+    newlines = 0
+    drained = 0
+    last = b""
+    pending = probe
+    while True:
+        if pending:
+            drained += len(pending)
+            if drained > limit:
+                raise OpenAlexProfileLimitError("JSONL drain exceeds its decoded byte limit")
+            window = tail + pending
+            if b"\n\n" in window or b"\n\r\n" in window:
+                raise OpenAlexMalformedJSONLError("JSONL contains a blank line")
+            tail = window[-2:]
+            newlines += pending.count(b"\n")
+            last = pending[-1:]
+        budget.check()
+        pending = _read_chunk(reader, min(_DRAIN_CHUNK, limit - drained + 1))
+        budget.check()
+        if not pending:
+            return newlines, drained, last
 
 
 def _preflight_record(line: bytes, budget: ProfileBudget) -> None:
@@ -146,6 +230,15 @@ def _preflight_record(line: bytes, budget: ProfileBudget) -> None:
     budget.check()
 
 
+def _read_chunk(reader: BinaryIO, size: int) -> bytes:
+    try:
+        return reader.read(size)
+    except EOFError:
+        raise OpenAlexDecompressionError("gzip stream is truncated") from None
+    except (gzip.BadGzipFile, zlib.error):
+        raise OpenAlexDecompressionError("gzip stream cannot be decompressed") from None
+
+
 def _read_line(reader: BinaryIO, remaining: int, *, probe: bool = False) -> bytes:
     try:
         line = reader.read(1) if probe else reader.readline(remaining + 1)
@@ -158,30 +251,45 @@ def _read_line(reader: BinaryIO, remaining: int, *, probe: bool = False) -> byte
     return line
 
 
-def _decode_record(line: bytes) -> dict[str, Any]:
+def _decode_record(line: bytes) -> tuple[dict[str, Any], bool]:
+    """Decode one strict JSON object line; report whether a dynamic-key map repeated a key.
+
+    Duplicate keys are tolerated only directly inside a top-level
+    ``DYNAMIC_KEY_OBJECTS`` member (real OpenAlex abstracts repeat a word key in
+    rare records; ``json`` keeps the last value). Anywhere else they are rejected.
+    """
     content = line.rstrip(b"\r\n")
     if not content.strip():
         raise OpenAlexMalformedJSONLError("JSONL contains a blank line")
+    with_duplicates: list[dict[str, Any]] = []
+
+    def collect(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        duplicated = False
+        for key, value in pairs:
+            if key in result:
+                duplicated = True
+            result[key] = value
+        if duplicated:
+            with_duplicates.append(result)
+        return result
+
     try:
-        record = json.loads(
-            content.decode("utf-8"),
-            object_pairs_hook=_reject_duplicate_keys,
-            parse_constant=_reject_constant,
-        )
-    except (UnicodeDecodeError, ValueError, RecursionError):
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise OpenAlexMalformedJSONLError("JSONL line is not valid UTF-8 JSON") from None
+    try:
+        record = json.loads(text, object_pairs_hook=collect, parse_constant=_reject_constant)
+    except (ValueError, RecursionError):
         raise OpenAlexMalformedJSONLError("JSONL line is not valid UTF-8 JSON") from None
     if not isinstance(record, dict):
         raise OpenAlexMalformedJSONLError("JSONL line is not a JSON object")
-    return record
-
-
-def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate JSON object key")
-        result[key] = value
-    return result
+    for container in with_duplicates:
+        if not any(record.get(name) is container for name in DYNAMIC_KEY_OBJECTS):
+            raise OpenAlexMalformedJSONLError(
+                "JSONL object has a duplicate key outside abstract_inverted_index"
+            )
+    return record, bool(with_duplicates)
 
 
 def _reject_constant(value: str) -> None:
