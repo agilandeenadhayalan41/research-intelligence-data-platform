@@ -1,0 +1,488 @@
+/*
+ * Image and diagram zoom: the in-page zoom box with its hover toolbar, and
+ * the full-screen lightbox. Colours come from the site tokens in
+ * src/css/custom.css, so light and dark mode follow them.
+ */
+
+/* ------------------------------------------------------------------ */
+/* In the page                                                         */
+/* ------------------------------------------------------------------ */
+
+.zoomable {
+  position: relative;
+  max-width: 100%;
+}
+
+/*
+ * An image: until the browser has loaded it, the wrappers take no part in the
+ * layout (the image renders exactly as without the zoom, also without JS).
+ * Then the wrapper becomes an inline box the size of the image: it stays on
+ * the line like the image did.
+ */
+.zoomableImage,
+.zoomableImage .imageViewport {
+  display: contents;
+}
+
+.zoomableImage.enhanced {
+  display: inline-block;
+  vertical-align: baseline;
+}
+
+.zoomableImage.enhanced .imageViewport {
+  display: block;
+  max-width: 100%;
+}
+
+.zoomableImage.enhanced .imageViewport > img {
+  display: block;
+}
+
+.zoomableImage.fill {
+  width: 100%;
+}
+
+.zoomableDiagram {
+  display: block;
+}
+
+/* The rendered diagram, without the inline baseline gap under the SVG. */
+.diagramViewport :global(.docusaurus-mermaid-container) > svg {
+  display: block;
+  margin-inline: auto;
+}
+
+/* Zoomed in place: the box keeps its size, the content moves inside it. */
+.zoomed .imageViewport,
+.zoomed .diagramViewport {
+  position: relative;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.zoomed .diagramViewport :global(.docusaurus-mermaid-container) {
+  overflow: visible;
+}
+
+.zoomed .diagramViewport :global(.docusaurus-mermaid-container) > svg {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+}
+
+/* A thin frame shows the box the zoomed content is cut to. */
+.zoomed .imageViewport,
+.zoomed .diagramViewport {
+  outline: 1px solid var(--rid-border-color);
+}
+
+/*
+ * The zoom affordance: a transparent button over the image or diagram, for
+ * the keyboard and screen readers (its focus ring frames the element). It
+ * lets the mouse and touch through, so the image keeps its own context menu
+ * ("Save image as…", long press); a click on the element itself opens the
+ * lightbox.
+ */
+.trigger {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--rid-radius-sm);
+  background: transparent;
+  pointer-events: none;
+}
+
+.zoomableImage.enhanced .imageViewport,
+.ready .diagramViewport {
+  cursor: zoom-in;
+}
+
+.zoomed .imageViewport,
+.zoomed .diagramViewport {
+  cursor: grab;
+}
+
+.zoomed .imageViewport:active,
+.zoomed .diagramViewport:active {
+  cursor: grabbing;
+}
+
+/*
+ * The in-page toolbar: shown on hover (devices with a mouse), on keyboard
+ * focus and while zoomed. Not on a tap: on a touch screen a tap opens the
+ * lightbox, and the toolbar must not appear under the finger and take the
+ * click. Its own background lets clicks through to the image.
+ */
+.toolbar {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  z-index: 2;
+  display: flex;
+  gap: 0.125rem;
+  padding: 0.2rem;
+  border: 1px solid var(--rid-border-color);
+  border-radius: var(--rid-radius-sm);
+  background: var(--rid-surface-raised);
+  box-shadow: var(--rid-shadow-md);
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+}
+
+.toolbar > * {
+  pointer-events: none;
+}
+
+@media (hover: hover) {
+  .zoomable:hover .toolbar {
+    opacity: 1;
+  }
+
+  .zoomable:hover .toolbar > * {
+    pointer-events: auto;
+  }
+}
+
+.trigger:focus-visible ~ .toolbar,
+.trigger:focus-visible ~ .toolbarDock .toolbar,
+.toolbar:focus-within,
+.zoomed .toolbar,
+.toolbar[data-open='true'] {
+  opacity: 1;
+}
+
+.trigger:focus-visible ~ .toolbar > *,
+.trigger:focus-visible ~ .toolbarDock .toolbar > *,
+.toolbar:focus-within > *,
+.zoomed .toolbar > *,
+.toolbar[data-open='true'] > * {
+  pointer-events: auto;
+}
+
+.toolButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-width: 2rem;
+  height: 2rem;
+  margin: 0;
+  padding: 0 0.4rem;
+  border: 0;
+  border-radius: calc(var(--rid-radius-sm) - 0.125rem);
+  background: transparent;
+  color: var(--ifm-font-color-base);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.toolButton:hover {
+  background: var(--rid-primary-soft);
+  color: var(--ifm-color-primary);
+  text-decoration: none;
+}
+
+.toolButton[aria-disabled='true'] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.toolButton[aria-disabled='true']:hover {
+  background: transparent;
+  color: inherit;
+}
+
+.toolButton svg {
+  flex: none;
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+/* A diagram's toolbar sits in a zero-height sticky dock at the top of the
+   box, so it stays in view below the navbar while a tall diagram scrolls. */
+.toolbarDock {
+  position: sticky;
+  top: calc(var(--ifm-navbar-height) + 0.25rem);
+  z-index: 2;
+  height: 0;
+}
+
+/* The in-page download choices of a diagram (SVG or PNG). */
+.downloadWrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.downloadMenu {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 12rem;
+  padding: 0.25rem;
+  border: 1px solid var(--rid-border-color);
+  border-radius: var(--rid-radius-sm);
+  background: var(--rid-surface-raised);
+  box-shadow: var(--rid-shadow-md);
+}
+
+.downloadMenu .toolButton {
+  justify-content: flex-start;
+  width: 100%;
+  height: auto;
+  padding: 0.5rem 0.6rem;
+  text-align: start;
+}
+
+.choiceHint {
+  margin-inline-start: auto;
+  padding-inline-start: 0.75rem;
+  color: var(--ifm-color-emphasis-600);
+  font-weight: 400;
+}
+
+/* A short note after a download that could not start (cross-origin image). */
+.note {
+  pointer-events: none;
+  position: absolute;
+  top: calc(0.4rem + 2.6rem);
+  right: 0.4rem;
+  z-index: 2;
+  max-width: 18rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--rid-border-color);
+  border-radius: var(--rid-radius-sm);
+  background: var(--rid-surface-raised);
+  box-shadow: var(--rid-shadow-md);
+  font-size: 0.8125rem;
+  line-height: 1.35;
+}
+
+.note:empty {
+  display: none;
+}
+
+/* Smooth zoom for the buttons and keys (not for drag, wheel or pinch). */
+.animating {
+  transition:
+    width 220ms ease,
+    height 220ms ease,
+    transform 220ms ease;
+}
+
+/* ------------------------------------------------------------------ */
+/* Lightbox                                                            */
+/* ------------------------------------------------------------------ */
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  color: #f2f5f9;
+  animation: fadeIn 160ms ease-out;
+}
+
+.lightbox:focus {
+  outline: none;
+}
+
+.backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 12, 18, 0.9);
+}
+
+.lightboxViewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grab;
+}
+
+.lightboxViewport:active {
+  cursor: grabbing;
+}
+
+.lightboxViewport:focus {
+  outline: none;
+}
+
+.lightboxViewport:focus-visible {
+  outline: 2px solid #8bb8ec;
+  outline-offset: -4px;
+}
+
+.lightboxContent {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  max-width: none;
+  border-radius: 2px;
+  background: #ffffff;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  -webkit-user-drag: none;
+}
+
+:global([data-theme='dark']) .lightboxContent {
+  background: var(--ifm-background-color);
+}
+
+.lightboxContent > svg {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+}
+
+.lightboxBar {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  left: 0.75rem;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  pointer-events: none;
+}
+
+.lightboxGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--rid-radius-md);
+  background: rgba(22, 29, 39, 0.92);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+}
+
+.lightboxGroup .toolButton {
+  min-width: 2.5rem;
+  height: 2.5rem;
+  color: #f2f5f9;
+}
+
+.lightboxGroup .toolButton:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.lightboxGroup .toolButton:focus-visible {
+  outline: 2px solid #8bb8ec;
+  outline-offset: 0;
+}
+
+.lightboxGroup .toolButton[aria-disabled='true']:hover {
+  background: transparent;
+  color: #f2f5f9;
+}
+
+.scaleLabel {
+  min-width: 3.5rem;
+  color: #c9d3df;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.caption {
+  position: absolute;
+  right: 1rem;
+  bottom: 0.75rem;
+  left: 1rem;
+  margin: 0 auto;
+  max-width: 48rem;
+  color: #dbe3ec;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  text-align: center;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+
+.status {
+  position: absolute;
+  bottom: 3rem;
+  left: 50%;
+  margin: 0;
+  padding: 0.5rem 0.85rem;
+  border-radius: var(--rid-radius-sm);
+  background: rgba(22, 29, 39, 0.95);
+  color: #f2f5f9;
+  font-size: 0.875rem;
+  transform: translateX(-50%);
+}
+
+.status:empty {
+  display: none;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 600px) {
+  .lightboxBar {
+    top: 0.5rem;
+    right: 0.5rem;
+    left: 0.5rem;
+    justify-content: center;
+  }
+
+  .lightboxGroup .toolButton {
+    min-width: 2.25rem;
+    height: 2.25rem;
+    padding: 0 0.3rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightbox {
+    animation: none;
+  }
+
+  .animating,
+  .toolbar {
+    transition: none;
+  }
+}

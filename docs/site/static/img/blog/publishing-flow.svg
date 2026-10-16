@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="220" viewBox="0 0 960 220" role="img" aria-labelledby="title desc">
+  <title id="title">How a blog post is published</title>
+  <desc id="desc">Five steps from left to right: write the post in the editor or as a file, open a pull request against main, the build checks every link, review and merge, published on the site.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 10 5 0 10z" fill="#1f5fa8"/>
+    </marker>
+  </defs>
+  <rect width="960" height="220" rx="14" fill="#ffffff"/>
+  <rect x="0.5" y="0.5" width="959" height="219" rx="14" fill="none" stroke="#e3e8ef"/>
+  <g font-family="system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" text-anchor="middle">
+    <text x="480" y="38" font-size="18" font-weight="700" fill="#1c1e21">How a blog post is published</text>
+    <rect x="16" y="64" width="160" height="120" rx="12" fill="#f5f8fc" stroke="#b9d0ec" stroke-width="1.5"/>
+    <circle cx="96" cy="94" r="14" fill="#ffffff" stroke="#1f5fa8" stroke-width="1.5"/>
+    <text x="96" y="99" font-size="14" font-weight="700" fill="#1f5fa8">1</text>
+    <text x="96" y="136" font-size="15" font-weight="600" fill="#1c1e21">Write the post</text>
+    <text x="96" y="158" font-size="13" fill="#4b5563">editor or a file</text>
+    <line x1="180" y1="124" x2="204" y2="124" stroke="#1f5fa8" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="208" y="64" width="160" height="120" rx="12" fill="#f5f8fc" stroke="#b9d0ec" stroke-width="1.5"/>
+    <circle cx="288" cy="94" r="14" fill="#ffffff" stroke="#1f5fa8" stroke-width="1.5"/>
+    <text x="288" y="99" font-size="14" font-weight="700" fill="#1f5fa8">2</text>
+    <text x="288" y="136" font-size="15" font-weight="600" fill="#1c1e21">Open a pull request</text>
+    <text x="288" y="158" font-size="13" fill="#4b5563">against main</text>
+    <line x1="372" y1="124" x2="396" y2="124" stroke="#1f5fa8" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="400" y="64" width="160" height="120" rx="12" fill="#f5f8fc" stroke="#b9d0ec" stroke-width="1.5"/>
+    <circle cx="480" cy="94" r="14" fill="#ffffff" stroke="#1f5fa8" stroke-width="1.5"/>
+    <text x="480" y="99" font-size="14" font-weight="700" fill="#1f5fa8">3</text>
+    <text x="480" y="136" font-size="15" font-weight="600" fill="#1c1e21">The build checks</text>
+    <text x="480" y="158" font-size="13" fill="#4b5563">every link</text>
+    <line x1="564" y1="124" x2="588" y2="124" stroke="#1f5fa8" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="592" y="64" width="160" height="120" rx="12" fill="#f5f8fc" stroke="#b9d0ec" stroke-width="1.5"/>
+    <circle cx="672" cy="94" r="14" fill="#ffffff" stroke="#1f5fa8" stroke-width="1.5"/>
+    <text x="672" y="99" font-size="14" font-weight="700" fill="#1f5fa8">4</text>
+    <text x="672" y="136" font-size="15" font-weight="600" fill="#1c1e21">Review and merge</text>
+    <text x="672" y="158" font-size="13" fill="#4b5563">like any change</text>
+    <line x1="756" y1="124" x2="780" y2="124" stroke="#1f5fa8" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="784" y="64" width="160" height="120" rx="12" fill="#1f5fa8" stroke="#174a85" stroke-width="1.5"/>
+    <circle cx="864" cy="94" r="14" fill="#174a85" stroke="#ffffff" stroke-width="1.5"/>
+    <text x="864" y="99" font-size="14" font-weight="700" fill="#ffffff">5</text>
+    <text x="864" y="136" font-size="15" font-weight="600" fill="#ffffff">Published</text>
+    <text x="864" y="158" font-size="13" fill="#e8f0fa">on the site</text>
+  </g>
+</svg>

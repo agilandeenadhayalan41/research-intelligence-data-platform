@@ -25,6 +25,8 @@ the same way as any other change to the docs: through a pull request that is
 reviewed and merged. The site's build checks every link first, so a post with
 a broken link is not published.
 
+![How a blog post is published: write it, open a pull request, the build checks every link, review and merge, published on the site](/img/blog/publishing-flow.svg)
+
 The repository and the site are public. Never put email addresses, cloud
 identifiers or other private details in a post.
 
