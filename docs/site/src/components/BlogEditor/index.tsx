@@ -10,12 +10,21 @@ import React, {
 } from 'react';
 import clsx from 'clsx';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
+import {useLocation} from '@docusaurus/router';
 import {usePluginData} from '@docusaurus/useGlobalData';
 import {newPostTemplate, postFileName} from '@site/src/lib/github.mjs';
+import {
+  NEW_DRAFT_PREFIX,
+  POST_DRAFT_PREFIX,
+  draftToResume,
+  parsePostQuery,
+  postQueryString,
+} from '@site/src/lib/blogPosts.mjs';
 import {readingTime} from '@site/src/lib/readingTime.mjs';
 import type {Draft} from '@site/src/lib/storage.mjs';
 import {useCommunityStore, useDraftsBackend} from '@site/src/lib/CommunityStoreContext';
 import {useGitHubUser} from '@site/src/lib/GitHubUserContext';
+import GitHubTokenPrompt, {usableToken} from '@site/src/components/GitHubTokenPrompt';
 
 import {convertTruncateMarker, splitFrontMatter} from './frontMatter';
 import Preview, {type CompileStatus, type PostFormat} from './Preview';
@@ -24,9 +33,6 @@ import styles from './styles.module.css';
 
 /** Folder of the blog posts in the repository. */
 const BLOG_DIR = 'docs/site/blog';
-/** Draft keys: 'blog:<repo path>' for a published post, 'blog-new:<id>' for a new one. */
-const POST_DRAFT_PREFIX = 'blog:';
-const NEW_DRAFT_PREFIX = 'blog-new:';
 const AUTOSAVE_MS = 800;
 const NEW_POST_TITLE = 'Untitled post';
 
@@ -69,9 +75,16 @@ const timeFormat = new Intl.DateTimeFormat('en', {dateStyle: 'medium', timeStyle
 /**
  * The blog editor: source on the left, live preview on the right (stacked on
  * narrow screens). Browser only: render it inside <BrowserOnly>.
+ *
+ * `/blog/editor?post=<repo path>` (the Edit button of a post) opens that
+ * published post, or the visitor's draft of it; the address then follows the
+ * open post.
  */
 export default function BlogEditor(): ReactNode {
   const id = useId();
+  const location = useLocation();
+  /** The post asked for in the address when the editor opened. */
+  const initialQuery = useRef(parsePostQuery(location.search));
   const store = useCommunityStore();
   const backend = useDraftsBackend();
   const {token} = useGitHubUser();
@@ -318,7 +331,9 @@ export default function BlogEditor(): ReactNode {
     );
   }
 
-  // First load: reopen the latest draft, or start a new post.
+  // First load: open the post the address names; otherwise reopen the latest
+  // unfinished new post, or start a new post (never a draft of a published
+  // post: "Write a post" must open a new one).
   const started = useRef(false);
   useEffect(() => {
     if (started.current) {
@@ -334,16 +349,58 @@ export default function BlogEditor(): ReactNode {
       }
       draftsRef.current = list;
       setDrafts(list);
-      const latest = list[0];
+
+      // The address names a post (the Edit button of a post): open it.
+      const query = initialQuery.current;
+      let problem: string | null = null;
+      if (query.kind === 'post') {
+        const source = sources.find((item) => item.repoPath === query.repoPath);
+        if (source) {
+          await openPublished(source);
+          return;
+        }
+        problem = `There is no published post ${query.repoPath} in this version of the site.`;
+      } else if (query.kind === 'invalid') {
+        problem = `The address asks for "${query.value}", which is not a blog post (a .md or .mdx file in ${BLOG_DIR}/).`;
+      }
+
+      const latest = draftToResume(list);
       if (latest) {
         await openDraft(latest, {
-          text: `Reopened your latest draft, saved ${formatTime(latest.updatedAt)}. Choose another post or draft above, or start a new post.`,
+          text: `${problem ? `${problem} ` : ''}Reopened your unfinished new post, saved ${formatTime(latest.updatedAt)}. Choose another post or draft above, or start a new post.`,
         });
       } else {
-        await startNewPost('md');
+        await startNewPost(
+          'md',
+          problem ? {text: `${problem} Started a new post; choose a published post above to edit it.`} : null,
+        );
       }
     })();
-  }, [openDraft, startNewPost, store]);
+  }, [openDraft, openPublished, sources, startNewPost, store]);
+
+  // Keep the address in step with the open document: '?post=<repo path>' for
+  // a published post, nothing for a new post. Replaced in place (no history
+  // entry), so a reload or a shared link opens the same post.
+  const openRepoPath = doc?.kind === 'existing' ? doc.repoPath : null;
+  const hasDoc = doc !== null;
+  useEffect(() => {
+    if (!hasDoc) {
+      return;
+    }
+    try {
+      const params = new URLSearchParams(window.location.search);
+      params.delete('post');
+      const rest = params.toString();
+      const postQuery = postQueryString(openRepoPath);
+      const search = postQuery ? `${postQuery}${rest ? `&${rest}` : ''}` : rest ? `?${rest}` : '';
+      if (search !== window.location.search) {
+        const url = `${window.location.pathname}${search}${window.location.hash}`;
+        window.history.replaceState(window.history.state, '', url);
+      }
+    } catch {
+      // The address is a convenience; the editor works without it.
+    }
+  }, [hasDoc, openRepoPath]);
 
   // ------------------------------------------------------------- actions
 
@@ -435,7 +492,7 @@ export default function BlogEditor(): ReactNode {
       ? sources.find((source) => stripExtension(source.repoPath) === stripExtension(repoPath))
       : undefined;
   const hasDraft = drafts.some((draft) => draft.key === doc.key);
-  const hasToken = typeof token === 'string' && token.trim() !== '';
+  const hasToken = usableToken(token) !== null;
 
   const blockers: string[] = [];
   if (split.problem) {
@@ -615,13 +672,10 @@ export default function BlogEditor(): ReactNode {
       )}
 
       {!hasToken && (
-        <div className={clsx('alert alert--secondary', styles.tokenPrompt)} role="note">
-          <strong>Want to open a pull request from here?</strong> Add a GitHub token in the GitHub
-          menu at the right of the navigation bar (<em>Sign in</em>, or your username when signed
-          in). The token is kept on this device only and is sent only to api.github.com. Without a
-          token, use <strong>Download</strong> and add the file to <code>{BLOG_DIR}/</code> in a
-          pull request yourself.
-        </div>
+        <GitHubTokenPrompt lead="Want to open a pull request from here?">
+          Without a token, use <strong>Download</strong> and add the file to{' '}
+          <code>{BLOG_DIR}/</code> in a pull request yourself.
+        </GitHubTokenPrompt>
       )}
 
       {prOpen && hasToken && repo && (

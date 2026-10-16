@@ -1,6 +1,7 @@
 // "Page history" at the end of a doc or blog post: the last change and the
 // people who changed the page (GitHub avatars and logins, linked to their
 // commits). Build-time git data first, GitHub's data once it loads.
+// Only people are shown: bots and AI tools are left out (see usePageHistory).
 
 import React from 'react';
 import clsx from 'clsx';
@@ -74,9 +75,15 @@ function SourceNote({history}: {history: History}): React.JSX.Element {
   } else {
     text = history.source === 'build' ? 'From the site build.' : '';
   }
+  // Only people are listed; say so when automation also changed the page.
+  const automationNote =
+    history.people.length > 0 && history.automationCommits > 0
+      ? ' Changes by bots and AI tools are not listed.'
+      : '';
   return (
     <span className={styles.source} aria-live="polite">
       {text}
+      {automationNote}
     </span>
   );
 }
@@ -85,7 +92,7 @@ function PageHistoryContent({repoPath, id = 'page-history'}: Props): React.JSX.E
   const {i18n} = useDocusaurusContext();
   const locale = i18n.currentLocale;
   const history = usePageHistory(repoPath);
-  const {last, people, historyUrl} = history;
+  const {last, people, historyUrl, automatedOnly} = history;
 
   if (!repoPath) {
     return null;
@@ -94,6 +101,7 @@ function PageHistoryContent({repoPath, id = 'page-history'}: Props): React.JSX.E
   const shown = people.slice(0, MAX_PEOPLE);
   const more = people.length - shown.length;
   const day = formatDay(last?.date, locale);
+  const automatedDay = formatDay(automatedOnly?.date, locale);
   const commitsText = history.commitsCapped
     ? `${history.commits}+ commits`
     : plural(history.commits, 'commit', 'commits');
@@ -126,6 +134,27 @@ function PageHistoryContent({repoPath, id = 'page-history'}: Props): React.JSX.E
             )}
           </span>
         </p>
+      ) : automatedOnly ? (
+        <>
+          <p className={styles.last}>
+            <span>
+              Last updated
+              {automatedDay && (
+                <>
+                  {' '}
+                  <time dateTime={automatedOnly.date ?? undefined}>{automatedDay}</time>
+                </>
+              )}
+              {automatedOnly.url && (
+                <>
+                  {' · '}
+                  <ExternalLink href={automatedOnly.url}>View the change</ExternalLink>
+                </>
+              )}
+            </span>
+          </p>
+          <p className={styles.summary}>Changes so far were made by automation.</p>
+        </>
       ) : (
         <p className={styles.last}>This page has no recorded changes yet.</p>
       )}

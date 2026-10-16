@@ -2,6 +2,13 @@ import React, {useEffect, useId, useRef, useState, type FormEvent, type ReactNod
 import clsx from 'clsx';
 import {GitHubError, openBlogPullRequest} from '@site/src/lib/github.mjs';
 
+import PullRequestSteps, {
+  advanceStep,
+  failLastStep,
+  finishSteps,
+  trackingFetch,
+  type Step,
+} from './PullRequestSteps';
 import styles from './styles.module.css';
 
 export interface RepoConfig {
@@ -23,18 +30,11 @@ interface PullRequestPanelProps {
   onClose: () => void;
 }
 
-interface Step {
-  label: string;
-  state: 'running' | 'done' | 'failed';
-}
-
 type Outcome =
   | {kind: 'idle'}
   | {kind: 'running'}
   | {kind: 'done'; url: string; number: number; branch: string; head: string; forked: boolean}
   | {kind: 'error'; message: string};
-
-type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
 const DEFAULT_BODY = 'Blog post submitted from the docs site blog editor.';
 
@@ -95,14 +95,15 @@ export default function PullRequestPanel({
     }
     setOutcome({kind: 'running'});
     setSteps([]);
-    const upstreamPath = `/repos/${repo.owner}/${repo.name}`;
-    const trackingFetch: FetchLike = (url, init) => {
-      const label = describeRequest(init?.method ?? 'GET', url, upstreamPath, repo.branch);
-      if (mounted.current) {
-        setSteps((previous) => advance(previous, label));
-      }
-      return globalThis.fetch(url, init);
-    };
+    const fetchImpl = trackingFetch(
+      (label) => {
+        if (mounted.current) {
+          setSteps((previous) => advanceStep(previous, label));
+        }
+      },
+      repo,
+      'save',
+    );
     try {
       const commitTitle = title.trim() || defaultTitle;
       const result = await openBlogPullRequest({
@@ -115,22 +116,18 @@ export default function PullRequestPanel({
         message: commitTitle,
         title: commitTitle,
         body: body.trim() ? `${body.trim()}\n\nFile: \`${path}\`` : `File: \`${path}\``,
-        fetchImpl: trackingFetch,
+        fetchImpl,
       });
       if (!mounted.current) {
         return;
       }
-      setSteps((previous) => previous.map((step) => ({...step, state: 'done'})));
+      setSteps(finishSteps);
       setOutcome({kind: 'done', ...result});
     } catch (error) {
       if (!mounted.current) {
         return;
       }
-      setSteps((previous) =>
-        previous.map((step, index) =>
-          index === previous.length - 1 ? {...step, state: 'failed'} : step,
-        ),
-      );
+      setSteps(failLastStep);
       setOutcome({
         kind: 'error',
         // GitHubError messages never contain the token (see github.mjs).
@@ -220,23 +217,7 @@ export default function PullRequestPanel({
         </div>
       </form>
 
-      {steps.length > 0 && (
-        <ol className={styles.prSteps} aria-label="Progress" aria-live="polite">
-          {steps.map((step, index) => (
-            <li key={`${index}-${step.label}`} className={styles[`step_${step.state}`]}>
-              <span className={styles.stepMarker} aria-hidden="true">
-                {step.state === 'done' ? '✓' : step.state === 'failed' ? '✕' : '…'}
-              </span>
-              <span>
-                {step.label}
-                <span className="rid-sr-only">
-                  {step.state === 'done' ? ' (done)' : step.state === 'failed' ? ' (failed)' : ' (in progress)'}
-                </span>
-              </span>
-            </li>
-          ))}
-        </ol>
-      )}
+      <PullRequestSteps steps={steps} />
 
       {outcome.kind === 'done' && (
         <div className={styles.prSuccess} role="status" tabIndex={-1} ref={resultRef}>
@@ -268,55 +249,4 @@ export default function PullRequestPanel({
       )}
     </section>
   );
-}
-
-/** Adds a step, or keeps the current one when a request repeats (fork polling). */
-function advance(steps: Step[], label: string): Step[] {
-  const last = steps[steps.length - 1];
-  if (last && last.label === label && last.state === 'running') {
-    return steps;
-  }
-  return [
-    ...steps.map((step): Step => (step.state === 'running' ? {...step, state: 'done'} : step)),
-    {label, state: 'running'},
-  ];
-}
-
-/** A readable label for a GitHub API request. Reads only the method and the URL. */
-function describeRequest(method: string, url: string, upstreamPath: string, base: string): string {
-  let pathname = url;
-  try {
-    pathname = decodeURIComponent(new URL(url).pathname);
-  } catch {
-    // Keep the raw URL.
-  }
-  const verb = method.toUpperCase();
-  if (pathname.endsWith('/forks')) {
-    return 'Forking the repository';
-  }
-  if (pathname.endsWith('/merge-upstream')) {
-    return `Syncing your fork with ${base}`;
-  }
-  if (pathname.includes('/git/ref/heads/')) {
-    // On the fork, openBlogPullRequest polls the branch until GitHub has
-    // copied the repository.
-    return pathname.toLowerCase().startsWith(`${upstreamPath.toLowerCase()}/`)
-      ? `Reading branch ${base}`
-      : 'Waiting for GitHub to create your fork';
-  }
-  if (pathname.endsWith('/git/refs')) {
-    return 'Creating the branch';
-  }
-  if (pathname.includes('/contents/')) {
-    return verb === 'PUT' ? 'Committing the post' : 'Checking for an existing file';
-  }
-  if (pathname.endsWith('/pulls')) {
-    return 'Opening the pull request';
-  }
-  if (/^\/repos\/[^/]+\/[^/]+$/.test(pathname)) {
-    return pathname.toLowerCase() === upstreamPath.toLowerCase()
-      ? 'Checking your access to the repository'
-      : 'Waiting for GitHub to create your fork';
-  }
-  return 'Talking to GitHub';
 }

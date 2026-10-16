@@ -2,7 +2,8 @@
 //   7 min read · Updated Oct 14, 2026 by <name> · 3 contributors
 // The reading time is build-time data; the update and the contributors start
 // from the build-time git history and switch to GitHub's data once it loads
-// (see usePageHistory).
+// (see usePageHistory). Only people are named and counted: a page changed
+// only by bots or AI tools shows "Updated <date>" without a name.
 
 import React from 'react';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
@@ -56,9 +57,11 @@ export default function PageMetaBar({repoPath, historyAnchor = 'page-history'}: 
   const minutes = history.meta?.readingMinutes ?? null;
   const last = history.last;
   const day = formatDay(last?.date, i18n.currentLocale);
+  const automatedOnly = last ? null : history.automatedOnly;
+  const automatedDay = formatDay(automatedOnly?.date, i18n.currentLocale);
   const contributors = history.people.length;
 
-  if (minutes === null && !last && contributors === 0) {
+  if (minutes === null && !last && !automatedDay && contributors === 0) {
     return null;
   }
 
@@ -89,6 +92,14 @@ export default function PageMetaBar({repoPath, historyAnchor = 'page-history'}: 
             ) : (
               <span className={styles.person}>{last.name}</span>
             )}
+          </span>
+        </li>
+      )}
+      {automatedOnly && automatedDay && (
+        <li className={styles.item} title="Changes so far were made by automation.">
+          <PencilIcon />
+          <span>
+            Updated <time dateTime={automatedOnly.date ?? undefined}>{automatedDay}</time>
           </span>
         </li>
       )}
