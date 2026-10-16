@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import {describe, test} from 'node:test';
 
 import {createCommunityHandler} from '../../../api/_lib/community.mjs';
+import {SESSION_COOKIE, getSessionUser, signSession} from '../../../api/_lib/session.mjs';
+import {GUEST_ID_STORAGE_KEY as AUTH_GUEST_ID_STORAGE_KEY, getGuestId} from '../src/lib/auth.mjs';
 import {
   CommunityApiError,
   GUEST_ID_STORAGE_KEY,
@@ -457,5 +459,157 @@ describe('the guest id', () => {
     };
     const quota = createGuestIdSource(() => full, make);
     assert.equal(quota(), quota());
+  });
+});
+
+describe('createSharedStore, signed in with GitHub (session cookie)', () => {
+  // Obviously fake test settings: the session code verifies the cookie with them.
+  const AUTH_ENV = Object.freeze({
+    COMMUNITY_GITHUB_TOKEN: SERVER_TOKEN,
+    GITHUB_OAUTH_CLIENT_ID: 'fake-client-id-for-tests',
+    GITHUB_OAUTH_CLIENT_SECRET: 'fake-client-secret-for-tests-not-real',
+    SESSION_SECRET: 'test-session-secret-0123456789abcdef-not-real',
+  });
+  const cookieFor = (login, id) =>
+    `${SESSION_COOKIE}=${signSession(
+      {login, id, name: `${login} Example`, avatarUrl: `https://avatars.example.test/u/${id}`, htmlUrl: null, iat: Math.floor(Date.now() / 1000)},
+      AUTH_ENV.SESSION_SECRET,
+    )}`;
+
+  /**
+   * The real handler wired as api/community.mjs wires it, and a "browser":
+   * `browser.cookie` goes with every same-origin request, as a browser sends
+   * the rid_session cookie; `browser.session` is who the site believes is
+   * signed in (what /api/auth/me said), read by the store at each call.
+   */
+  function signedInSite() {
+    const github = createFakeGitHub();
+    let ids = 0;
+    const handle = createCommunityHandler({
+      env: AUTH_ENV,
+      fetchImpl: github.fetch,
+      sleep: async () => {},
+      newId: () => `s${++ids}`,
+      log: () => {},
+      resolveSessionUser: (request) => getSessionUser(request, AUTH_ENV),
+    });
+    const browser = {cookie: /** @type {string | null} */ (null), session: /** @type {string | null} */ (null), token: /** @type {string | null} */ (null)};
+    const calls = [];
+    const fetchImpl = async (url, init = {}) => {
+      calls.push({url, init});
+      const parsed = new URL(url, 'https://docs.example.test');
+      const headers = Object.fromEntries(Object.entries(init.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
+      if (browser.cookie && init.credentials === 'same-origin') {
+        headers.cookie = browser.cookie;
+      }
+      const result = await handle({
+        method: init.method ?? 'GET',
+        query: Object.fromEntries(parsed.searchParams),
+        headers,
+        body: init.body,
+        ip: '203.0.113.7',
+      });
+      return new Response(JSON.stringify(result.json), {status: result.status, headers: result.headers});
+    };
+    const store = createSharedStore({
+      fetchImpl,
+      getSessionLogin: () => browser.session,
+      getToken: () => browser.token,
+      getGuestId: () => GUEST_A,
+      fallback: createMemoryStore(),
+    });
+    return {store, browser, calls, github};
+  }
+
+  test('writes go as the session user, with no token (even when one is saved)', async () => {
+    const {store, browser, calls, github} = signedInSite();
+    browser.cookie = cookieFor('carol', 3);
+    browser.session = 'carol';
+    browser.token = ALICE_TOKEN;
+    assert.deepEqual(await store.toggleLike(PAGE, 'carol'), {count: 1, likedBy: ['carol'], liked: true});
+    const comment = await store.addComment(PAGE, {author: {login: 'carol', name: 'carol Example', avatarUrl: null}, body: 'Hi'});
+    assert.deepEqual(comment.author, {login: 'carol', name: 'carol Example', avatarUrl: 'https://avatars.example.test/u/3'});
+    assert.equal(comment.canDelete, true);
+    const posts = calls.filter((call) => call.init.method === 'POST');
+    assert.equal(posts.length, 2);
+    for (const call of posts) {
+      assert.equal(call.init.headers.Authorization, undefined, 'the session needs no token');
+      assert.equal(call.init.headers['Content-Type'], 'application/json');
+      assert.equal(call.init.headers['X-Guest-Id'], GUEST_A);
+      assert.equal(call.init.credentials, 'same-origin');
+      assert.equal(JSON.parse(call.init.body).login, 'carol', 'so the API can refuse a different cookie');
+    }
+    assert.equal(github.requests.some((request) => request.path === '/user'), false, 'GitHub is never asked who it is');
+    assert.equal(await store.deleteComment(PAGE, comment.id, 'carol'), true);
+  });
+
+  test('the like state follows the identity: guest, signed in, signed out', async () => {
+    const {store, browser, calls} = signedInSite();
+    const reads = () => calls.filter((call) => call.url.includes('?page=')).length;
+
+    // A guest likes the page.
+    assert.deepEqual(await store.getLikes(PAGE), {count: 0, likedBy: [], liked: false});
+    assert.deepEqual(await store.toggleLike(PAGE, 'guest'), {count: 1, likedBy: [], liked: true});
+
+    // Signed in as carol: the guest's view is not reused; carol does not like it yet.
+    browser.cookie = cookieFor('carol', 3);
+    browser.session = 'carol';
+    const before = reads();
+    assert.deepEqual(await store.getLikes(PAGE), {count: 1, likedBy: [], liked: false});
+    assert.equal(reads(), before + 1, 'read again as carol');
+    assert.deepEqual(await store.toggleLike(PAGE, 'carol'), {count: 2, likedBy: ['carol'], liked: true});
+
+    // Signed out: the guest's own like again, and the next toggle removes it (not carol's).
+    browser.cookie = null;
+    browser.session = null;
+    assert.deepEqual(await store.getLikes(PAGE), {count: 2, likedBy: ['carol'], liked: true});
+    assert.deepEqual(await store.toggleLike(PAGE, 'guest'), {count: 1, likedBy: ['carol'], liked: false});
+
+    // Signed in again: carol's like is still hers.
+    browser.cookie = cookieFor('carol', 3);
+    browser.session = 'carol';
+    assert.deepEqual(await store.getLikes(PAGE), {count: 1, likedBy: ['carol'], liked: true});
+    // A toggle right after a guest-view write never reuses that view.
+    assert.deepEqual(await store.toggleLike(PAGE, 'carol'), {count: 0, likedBy: [], liked: false});
+  });
+
+  test('a cookie that now belongs to someone else: the API refuses the write', async () => {
+    const {store, browser} = signedInSite();
+    browser.cookie = cookieFor('dave', 4);
+    browser.session = 'carol';
+    await assert.rejects(store.toggleLike(PAGE, 'carol'), (error) => {
+      assert.ok(error instanceof CommunityApiError);
+      assert.equal(error.status, 403);
+      assert.equal(error.message, 'you are signed in as @dave');
+      return true;
+    });
+  });
+
+  test('without a session, a token is the alternative; the session wins when both are there', async () => {
+    const {store, browser, calls} = signedInSite();
+    browser.token = ALICE_TOKEN;
+    assert.deepEqual(await store.toggleLike(PAGE, 'alice'), {count: 1, likedBy: ['alice']});
+    let post = calls.at(-1);
+    assert.equal(post.init.headers.Authorization, `Bearer ${ALICE_TOKEN}`);
+    assert.equal(JSON.parse(post.init.body).login, 'alice');
+
+    browser.cookie = cookieFor('carol', 3);
+    browser.session = 'carol';
+    assert.deepEqual(await store.toggleLike(PAGE, 'carol'), {count: 2, likedBy: ['alice', 'carol'], liked: true});
+    post = calls.at(-1);
+    assert.equal(post.init.headers.Authorization, undefined);
+  });
+
+  test('the guest id has one implementation: auth.mjs uses the store\'s', () => {
+    assert.equal(AUTH_GUEST_ID_STORAGE_KEY, GUEST_ID_STORAGE_KEY);
+    assert.equal(GUEST_ID_STORAGE_KEY, 'rid-community:v1:guest-id');
+    const storage = new MapStorage();
+    const id = getGuestId(storage);
+    assert.ok(isGuestId(id));
+    assert.equal(createGuestIdSource(() => storage)({create: false}), id, 'the store reads the same id');
+    // A UUID that is not version 4 is not a guest id for the API: replaced.
+    storage.setItem(GUEST_ID_STORAGE_KEY, '0b7c1a3e-5d2f-1c8b-9a6e-1f2d3c4b5a69');
+    assert.notEqual(getGuestId(storage), '0b7c1a3e-5d2f-1c8b-9a6e-1f2d3c4b5a69');
+    assert.ok(isGuestId(storage.getItem(GUEST_ID_STORAGE_KEY)));
   });
 });

@@ -91,6 +91,7 @@ them from GitHub.
 | `/<folder>/<file>` | Every other doc, by its path under `docs/` (for example `/architecture/roadmap`); `docs/adr/README.md` is `/adr/` |
 | `/blog`, `/blog/YYYY/MM/DD/<slug>`, `/blog/tags/...` | The blog |
 | `/blog/editor` | The blog editor; `/blog/editor?post=docs/site/blog/<file>` opens that post |
+| `/api/community`, `/api/auth/login`, `/api/auth/callback`, `/api/auth/me` | Vercel functions in the repository-root `api/` folder, not part of the static build (so not served by `npm start` or `npm run serve`): shared likes and comments, and the optional GitHub sign-in |
 
 ## Home page
 
@@ -262,7 +263,10 @@ GitHub user" can sign in, with GitHub checking who they are.
   in.
 - **Sign out** in the account menu is the only way out. It clears the session
   cookie (`POST /api/auth/me?action=signout`, refused from other sites) and
-  the active profile, and keeps the account list.
+  then the active profile, and keeps the account list. The cookie goes first
+  so that the page's likes and comments, read again for the new identity, are
+  a guest's. If the site cannot be reached, the visitor stays signed in and
+  the menu says so.
 
 ### What is stored
 
@@ -298,8 +302,10 @@ headers (same origin only).
 
 When a variable is missing (or `SESSION_SECRET` is shorter than 32
 characters), `/api/auth/me` answers `{signedIn: false, configured: false}`,
-the site hides sign-in, `/api/auth/login` answers 503 "Sign-in is not
-configured on this deployment", and everything else keeps working as guest.
+the site hides sign-in (the account menu offers the typed-username fallback
+instead, see [Local development](#local-development)), `/api/auth/login`
+answers 503 "Sign-in is not configured on this deployment", and everything
+else keeps working as guest.
 
 **Preview deployments** have their own domains, and GitHub only sends people
 back to the callback URL registered in the OAuth App, so sign-in works only on
@@ -342,15 +348,18 @@ one for likes and comments. The token is used for:
   [Likes and comments](#likes-and-comments)). Without one you like and
   comment as a guest.
 
+Where it goes and how to choose one:
+
 - It is kept in `localStorage` **on this device only**. It is sent to
-  `https://api.github.com`, as the `Authorization` header, and, while you are
-  signed in, with each like, unlike, comment or deletion to this site's own
-  `/api/community`, **only to confirm your login**: the function calls
-  `GET https://api.github.com/user` with it and keeps nothing but the answer's
-  login, name and avatar (in memory, for 10 minutes, under the token's
-  SHA-256). It is never stored, logged or sent anywhere else, and error
-  messages never include it. Signed out, a saved token is not sent with likes
-  and comments.
+  `https://api.github.com`, as the `Authorization` header. Only in the last
+  case above (no GitHub sign-in on the deployment, a typed username and a
+  token) is it also sent with each like, unlike, comment or deletion to this
+  site's own `/api/community`, **only to confirm your login**: the function
+  calls `GET https://api.github.com/user` with it and keeps nothing but the
+  answer's login, name and avatar (in memory, for 10 minutes, under the
+  token's SHA-256). It is never stored, logged or sent anywhere else, and
+  error messages never include it. Signed in with GitHub, or as a guest, a
+  saved token is never sent with likes and comments.
 - **To show your name on likes and comments, any token works**, even a
   fine-grained token with only the default public, read-only access and no
   permissions: the site only needs to know whose it is.
@@ -371,7 +380,7 @@ one for likes and comments. The token is used for:
 GitHub allows **60 requests an hour per IP address without a token** and
 **5,000 an hour with a token** for the REST API. From the browser, the site
 makes at most one request per page and hour for the page history (the cache
-absorbs the rest), and one per username in the local typed-username fallback;
+absorbs the rest), and one per username in the typed-username fallback;
 GitHub sign-in makes none (the callback function reads the profile). When the
 limit is reached, pages fall back to the build-time history; adding a token
 raises the limit.
@@ -391,7 +400,10 @@ not shared: they stay in the visitor's browser.
 
 **Guests come first.** Anyone can read, like and comment right away, without
 signing in. Under the comment box the page says "Commenting as a guest ·
-Sign in with GitHub to show your name" (the link opens the account menu).
+Sign in with GitHub to show your name" (the link goes to GitHub's sign-in and
+back to the page; where sign-in is not available it just says "Commenting as a
+guest"). Who a like or comment is from follows who the visitor is at that
+moment:
 
 - **As a guest**, the browser makes a random id the first time it likes or
   comments (a UUID v4, kept in `localStorage` under
@@ -404,13 +416,22 @@ Sign in with GitHub to show your name" (the link opens the account menu).
   data, or uses another browser or a private window, is a new guest and can no
   longer delete their earlier comments (a maintainer can, see
   [Moderation](#moderation)).
-- **Signed in with a token** (navbar sign-in **and** a GitHub token in the
-  account menu), likes and comments carry the verified GitHub login, name and
-  avatar: the token is what proves who the visitor is (the typed username alone
-  proves nothing). The comment hint then says "Commenting as @login". Signed in
-  without a token is still a guest ("Add a GitHub token to comment as
-  @login"). The guest id is still sent, so comments written as a guest in this
-  browser stay deletable after signing in.
+- **Signed in with GitHub** (the navbar's **Sign in**, see
+  [GitHub sign-in](#github-sign-in-optional)), likes and comments carry the
+  verified GitHub login, name and avatar from the signed session cookie, which
+  the browser sends with every request to the site. **No token is needed.**
+  The comment hint says "Commenting as @login", the like button shows whether
+  this account likes the page, and **Delete** appears on this account's
+  comments. After **Sign out** (or signing in as someone else) the page reads
+  the likes and comments again for the new identity.
+- **With a token instead**, where GitHub sign-in is not available: a typed
+  username (labelled *not verified*) **and** a GitHub token in the account
+  menu. The token is what proves who the visitor is (the typed username alone
+  proves nothing); the hint says "Commenting as @login, confirmed with your
+  GitHub token". A typed username without a token is still a guest ("Add a
+  GitHub token to comment as @login").
+- The guest id is sent with every write, so comments written as a guest in
+  this browser stay deletable after signing in.
 - Names never come from the request: the function ignores any name, login or
   avatar in the body of a guest write, and refuses (403) a write whose `login`
   is not the verified user.
@@ -418,12 +439,13 @@ Sign in with GitHub to show your name" (the link opens the account menu).
 ### How shared storage works
 
 ```text
-browser ──GET  /api/community?page=/docs/x.md   X-Guest-Id: <uuid>───▶ api/community.mjs ──contents API──▶ community-data branch
+browser ──GET  /api/community?page=/docs/x.md   X-Guest-Id: <uuid>  [Cookie: rid_session]──▶ api/community.mjs ──contents API──▶ community-data branch
         ──POST /api/community  X-Guest-Id: <uuid>
-                               [Authorization: Bearer <visitor token>]   (signed in with a token only)
+                               [Cookie: rid_session]                     (signed in with GitHub)
+                               [Authorization: Bearer <visitor token>]   (typed username + token, no sign-in)
                                {action, page, body?, id?, login?}
-                                  │ who is it? 1. resolveSessionUser(request)  2. the Bearer token, checked with
-                                  │ GET https://api.github.com/user  3. otherwise a guest: sha256(guest id)
+                                  │ who is it? 1. the session cookie: getSessionUser(request)  2. the Bearer token,
+                                  │ checked with GET https://api.github.com/user  3. otherwise a guest: sha256(guest id)
                                   └ write with the server token (COMMUNITY_GITHUB_TOKEN): one commit
 ```
 
@@ -447,9 +469,14 @@ browser ──GET  /api/community?page=/docs/x.md   X-Guest-Id: <uuid>───�
 - **Writes.** `POST /api/community` with a JSON body
   `{action: 'like' | 'unlike' | 'comment' | 'delete', page, body?, id?, login?}`.
   The writer is, in this order:
-  1. the user from `resolveSessionUser(request)`, an optional hook of
-     `createCommunityHandler` (`{login, name, avatarUrl, htmlUrl} | null`; it
-     returns null until the sign-in code wires it to its session cookie);
+  1. the **signed-in user**: `api/community.mjs` passes
+     `resolveSessionUser: (req) => getSessionUser(req, process.env)` (from
+     `api/_lib/session.mjs`) to `createCommunityHandler`, so a valid
+     `rid_session` cookie names the writer, with the login, name and avatar
+     from the session. No token and no GitHub call are needed. Without the
+     sign-in settings (`SESSION_SECRET` and the OAuth variables) it is always
+     null, and a cookie that does not verify is ignored (the request is then a
+     guest's or a token's);
   2. otherwise, when there is an `Authorization` header, the owner of the
      Bearer token: the function calls `GET https://api.github.com/user` with it
      to learn the login (cached for 10 minutes under the token's SHA-256, never
@@ -645,20 +672,22 @@ history after a deletion. The guest id stays in the browser and goes only to
 this site's `/api/community`, which keeps only its hash and never returns it;
 the guest key is never shown on the site, but it is in the public branch, so
 someone reading the branch can tell which guest comments came from the same
-browser. The visitor's token is used only to ask GitHub who they are and is
-never stored. Drafts never leave the browser.
+browser. The session cookie only says who is signed in (it holds the public
+profile, signed). The visitor's token, when one is sent, is used only to ask
+GitHub who they are and is never stored. Drafts never leave the browser.
 
-### Contract for the sign-in merge
+### Sign-in and the community API
 
-The function is ready for a real sign-in (an OAuth session cookie):
+The sign-in and the shared likes and comments meet in `api/community.mjs`:
 `createCommunityHandler({resolveSessionUser})` takes
 `(request) => {login, name, avatarUrl, htmlUrl} | null` (sync or async; the
 request carries `method`, `query`, `headers`, `body` and `ip`) and tries it
-before the Bearer token, on reads too (for `liked` and `canDelete`). Wire it in
-`api/community.mjs` to the session code's `getSessionUser(request)`. What it
-returns is checked (a valid GitHub login, an https avatar, else ignored); the
-author of a write always comes from it or from GitHub, never from the request
-body. Guests keep working as they are: author
+before the Bearer token, on reads too (for `liked` and `canDelete`), and the
+function wires it to `getSessionUser(request, process.env)`, which verifies
+the `rid_session` cookie (with `SESSION_SECRET`, or `SESSION_SECRET_PREVIOUS`
+after a rotation). What it returns is checked (a valid GitHub login, an https
+avatar, else ignored); the author of a write always comes from it or from
+GitHub, never from the request body. Guests keep working as they are: author
 `{login: null, name: 'Guest'}`, likes keyed by `guest:<guestKey>` from
 `X-Guest-Id`, deletion only with the same guest id, and the rate limits apply
 to both. A resolver that throws fails a write with 500 (it is never turned
@@ -672,8 +701,13 @@ none), `Sec-Fetch-Site` must not be `cross-site`, and an `Origin` header, when
 sent, must be this host (`X-Forwarded-Host`, else `Host`). The site's own
 writes meet all three. Guest and token writes need `X-Guest-Id` or
 `Authorization`, custom headers that already force a preflight. Set the
-session cookie with `SameSite=Lax` (and `HttpOnly`, `Secure`, `Path=/`) as a
-second layer. See also [Privacy: what is stored where](#privacy-what-is-stored-where).
+session cookie is set with `SameSite=Lax` (and `HttpOnly`, `Secure`,
+`Path=/`) as a second layer. `test/communitySession.test.mjs` runs the real
+`api/community.mjs` and `api/auth/*` functions on a local HTTP server against
+a fake GitHub: a GitHub sign-in, then a like and a comment carried by the
+session cookie alone (the verified author), a guest write, and a cross-site
+cookie write refused. See also
+[Privacy: what is stored where](#privacy-what-is-stored-where).
 
 ### The storage adapter
 
@@ -697,15 +731,24 @@ All three kinds of data go through one interface, `CommunityStore`, in
 `createCommunityStore({kind})` picks the implementation; `kind` comes from
 `customFields.communityStore` in `docusaurus.config.ts`:
 
-- **`'shared'`** (the site's setting): `createSharedStore({baseUrl = '/api/community', getToken, getGuestId, fetchImpl, fallback})`.
+- **`'shared'`** (the site's setting): `createSharedStore({baseUrl = '/api/community', getToken, getSessionLogin, getGuestId, fetchImpl, fallback})`.
   Likes and comments go to the API; `toggleLike` sends `like` or `unlike`
-  from the last state it saw. Every write sends `X-Guest-Id`, and so do page
-  reads once the browser has one (`getGuestId({create})`;
-  `createCommunityStore` keeps it in `localStorage` through
-  `createGuestIdSource`, or in memory when storage is blocked; a read never
-  creates one). Without a token a write is a guest write and sends no name; with
-  the token from the account menu (read at each write, and only while signed
-  in) it also sends `Authorization: Bearer …` and `login`. Refusals reject
+  from the last state it saw **for the current identity**. Every write sends
+  `X-Guest-Id`, and so do page reads once the browser has one
+  (`getGuestId({create})`; `createCommunityStore` keeps it in `localStorage`
+  under `rid-community:v1:guest-id` through `createGuestIdSource`, the one
+  guest-id implementation, or in memory when storage is blocked; a read never
+  creates one). Requests are same-origin, so the browser adds the session
+  cookie by itself. Who is writing is read at each call:
+  `getSessionLogin()` is the login that `/api/auth/me` confirmed (signed in
+  with GitHub: no token is sent, and `login` is sent so the API refuses a
+  write if the cookie now belongs to someone else); otherwise `getToken()`
+  is the account menu's token, given only for a typed username where sign-in
+  is not available (then `Authorization: Bearer …` and `login` are sent);
+  otherwise the write is a guest write and sends no name. The store keeps the
+  last page state per identity (`guest`, `session:<login>` or `token`), so
+  after a sign-out or an account change it never reuses another identity's
+  `liked` flag. Refusals reject
   with `CommunityApiError` (with the HTTP `status`). Drafts always go to
   `fallback`, the browser store. When the API does not answer
   `configured: true`, everything goes to `fallback` (and no guest id is made).
@@ -720,27 +763,6 @@ All three kinds of data go through one interface, `CommunityStore`, in
 
 Any other kind throws `unknown community store: <kind>` (the site then logs it
 and uses a memory store).
-
-### Shared store contract: sign-in and guests
-
-The shared likes and comments API (`api/community.mjs`, built separately) and
-this sign-in meet here:
-
-- **Who is writing** comes from `getSessionUser(req)` in
-  `api/_lib/session.mjs`: the verified `rid_session` cookie, or `null` for a
-  guest (also `null` when sign-in is not configured). It is **never taken from
-  the request body**. A signed-in author is `{login, name, avatarUrl}` from the
-  session; a guest author is `{login: null, name: 'Guest', avatarUrl: null}`.
-- **Guests can like and comment.** Each browser has an anonymous id, a random
-  UUID kept in `localStorage` (`rid-community:v1:guest-id`, from `getGuestId()`
-  in `src/lib/auth.mjs`) and sent as the `X-Guest-Id` header. Guest likes are
-  keyed by it, so a guest can unlike their own like; a guest comment can be
-  deleted only with the same guest id. Signed-in likes and comments are keyed
-  by the login. The guest id proves only "the same browser": store a hash of
-  it and never show it to other visitors.
-- Rate limits apply to guests and signed-in visitors alike.
-- Same origin only: the session cookie is `SameSite=Lax`, and the API sends no
-  CORS headers.
 
 ## Blog
 

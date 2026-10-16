@@ -1,8 +1,9 @@
 // Browser side of the optional GitHub sign-in (the server side is
 // api/_lib/session.mjs at the repository root).
 //
-// Plain ESM with no imports and no browser globals at import time, so
-// `node --test` can load it and it is safe during server-side rendering.
+// Plain ESM (its only import is ./storage.mjs, also plain ESM) with no
+// browser globals at import time, so `node --test` can load it and it is safe
+// during server-side rendering.
 //
 // - The site asks /api/auth/me who is signed in (the session cookie is
 //   HttpOnly). Without the functions (`npm start`, `npm run serve`) that
@@ -12,6 +13,8 @@
 //   /api/auth/login?returnTo=<this page>, which redirects to GitHub.
 // - On the way back the URL ends with #signed-in or #signin-error=<code>.
 
+import {GUEST_ID_HEADER, GUEST_ID_STORAGE_KEY, createGuestIdSource} from './storage.mjs';
+
 export const LOGIN_PATH = '/api/auth/login';
 export const ME_PATH = '/api/auth/me';
 export const SIGNOUT_PATH = '/api/auth/me?action=signout';
@@ -20,17 +23,18 @@ export const SIGNOUT_PATH = '/api/auth/me?action=signout';
 export const USER_STORAGE_KEY = 'rid-github:v1:user';
 /** localStorage: accounts used before in this browser (the account switcher). */
 export const ACCOUNTS_STORAGE_KEY = 'rid-github:v1:accounts';
-/** localStorage: anonymous per-browser id for guest likes and comments. */
-export const GUEST_ID_STORAGE_KEY = 'rid-community:v1:guest-id';
-/** Header that carries the guest id to the community API. */
-export const GUEST_ID_HEADER = 'X-Guest-Id';
+/**
+ * localStorage: anonymous per-browser id for guest likes and comments
+ * ('rid-community:v1:guest-id'), and the header that carries it to the
+ * community API. Both come from src/lib/storage.mjs, which owns the guest id.
+ */
+export {GUEST_ID_HEADER, GUEST_ID_STORAGE_KEY};
 
 export const MAX_ACCOUNTS = 8;
 
 const LOGIN_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const NAME_MAX_LENGTH = 100;
 const RETURN_TO_MAX_LENGTH = 2000;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 /**
  * The messages for `#signin-error=<code>` (the codes are the closed list
@@ -414,29 +418,18 @@ export async function requestSignOut({fetchImpl} = {}) {
 // Guest id (for the shared community store)
 
 /**
- * The anonymous id of this browser, created on first use (a random UUID in
+ * The anonymous id of this browser, created on first use (a random UUID v4 in
  * localStorage). The shared community API keys guest likes by it (sent as
  * X-Guest-Id), so a guest can remove their own like and delete their own
- * comments. Returns a fresh id each time when storage is blocked.
+ * comments. A thin wrapper over createGuestIdSource in src/lib/storage.mjs,
+ * the one implementation the community store uses: the same key, the same
+ * rules (a saved value that is not a UUID v4 is replaced; blocked storage
+ * gives an id that is not kept).
  *
  * @param {{getItem: (key: string) => string | null, setItem: (key: string, value: string) => void} | null | undefined} storage
- * @param {() => string} [randomUUID]
+ * @param {() => string} [makeId] Defaults to a random UUID v4.
  * @returns {string}
  */
-export function getGuestId(storage, randomUUID = () => globalThis.crypto.randomUUID()) {
-  try {
-    const saved = storage?.getItem(GUEST_ID_STORAGE_KEY);
-    if (saved && UUID_PATTERN.test(saved)) {
-      return saved;
-    }
-  } catch {
-    // Blocked storage: fall through to a new id.
-  }
-  const id = randomUUID();
-  try {
-    storage?.setItem(GUEST_ID_STORAGE_KEY, id);
-  } catch {
-    // The id then lasts as long as the page.
-  }
-  return id;
+export function getGuestId(storage, makeId) {
+  return /** @type {string} */ (createGuestIdSource(() => storage, makeId)());
 }

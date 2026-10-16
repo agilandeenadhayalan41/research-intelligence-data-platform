@@ -5,7 +5,8 @@
 // /api/auth/login; nothing opens on its own), and next to it a small menu
 // button for the account switcher, the GitHub token and, without the auth
 // functions, the unverified username fallback. When the deployment has no
-// OAuth settings, sign-in is hidden and only the "GitHub token" menu stays.
+// OAuth settings, sign-in is hidden and only the "GitHub token" menu stays
+// (with the token and the username fallback).
 // Signed in: the avatar and username, which open the account menu (profile
 // link, "Switch account", "Sign out", other accounts, GitHub token).
 // Mobile sidebar (`mobile` prop): the same entries as menu links; the menu
@@ -60,7 +61,7 @@ function useMenuLabel(): string {
   if (user) {
     return verified ? `GitHub account ${user.login}` : `GitHub username ${user.login} (not verified on this deployment)`;
   }
-  return availability === 'not-configured' ? 'GitHub token' : 'Sign-in options and GitHub token';
+  return availability === 'not-configured' ? 'GitHub token and username' : 'Sign-in options and GitHub token';
 }
 
 /**

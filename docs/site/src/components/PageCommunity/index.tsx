@@ -4,11 +4,17 @@
 // shared store (backend 'shared') likes and comments are kept in the site's
 // GitHub repository and everyone sees them. Guests come first: anyone can
 // like and comment right away, as "Guest" (the store sends this browser's
-// random guest id, so a guest can unlike and delete their own). A visitor who
-// is signed in with a GitHub token is shown by their verified GitHub name (the
-// site's /api/community checks the token with GitHub). Otherwise they are
-// kept in this browser only (IndexedDB, else localStorage, else memory). The
-// section says which.
+// random guest id, so a guest can unlike and delete their own). A visitor
+// signed in with GitHub is shown by their verified GitHub name: the session
+// cookie tells the site's /api/community who they are, no token needed.
+// Where sign-in is not available, a typed username plus a GitHub token does
+// the same (the API checks the token with GitHub). Otherwise they are kept in
+// this browser only (IndexedDB, else localStorage, else memory). The section
+// says which.
+//
+// The like state and the Delete buttons follow the current identity
+// (useCommunityIdentity): when it changes (the profile loads, /api/auth/me
+// answers, Sign out) the page's likes and comments are read again.
 //
 // A quiet line under the form offers "Sign in with GitHub" (a plain link to
 // /api/auth/login that comes back to this page) for visitors who want their
@@ -21,7 +27,12 @@ import Heading from '@theme/Heading';
 import useIsBrowser from '@docusaurus/useIsBrowser';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import {useGitHubUser, useSignInClick, useSignInHref} from '@site/src/lib/GitHubUserContext';
-import {useCommunityBackend, useCommunityStore, type CommunityBackend} from '@site/src/lib/CommunityStoreContext';
+import {
+  useCommunityBackend,
+  useCommunityIdentity,
+  useCommunityStore,
+  type CommunityBackend,
+} from '@site/src/lib/CommunityStoreContext';
 import {
   canDeleteComment,
   COMMENT_LENGTH_ERROR,
@@ -169,14 +180,22 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
   const {i18n} = useDocusaurusContext();
   const store = useCommunityStore();
   const backend = useCommunityBackend();
-  const {user, userKey, status, token, verified, availability} = useGitHubUser();
+  const {user, userKey, status, verified, availability} = useGitHubUser();
+  const identity = useCommunityIdentity();
   const openAccountMenu = useOpenAccountMenu();
   const signInHref = useSignInHref();
   const onSignInClick = useSignInClick();
   const shared = backend === 'shared';
-  // Shared: signed in with a token, writes go as this verified login (the
-  // store sends the token); otherwise as a guest.
-  const verifiedLogin = shared && user && token ? user.login : null;
+  // Shared: who writes go as (the store does the same): the session's login
+  // (signed in with GitHub), the token's login (a typed username with a
+  // token), or a guest (null).
+  const writerLogin = shared ? identity.login : null;
+  const tokenLogin = shared && identity.kind === 'token' ? identity.login : null;
+  // GitHub sign-in can be offered (not on a deployment without it).
+  const canSignIn = availability === 'available' || availability === 'checking';
+  // Read once the saved profile is known, and again whenever the identity
+  // changes: it changes whose like and which comments are the visitor's.
+  const readAs = status === 'loading' ? null : identity.key;
 
   const [likes, setLikes] = useState<Likes | null>(null);
   const [comments, setComments] = useState<Comment[] | null>(null);
@@ -194,9 +213,10 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
   const hintId = useId();
   const errorId = useId();
 
-  // Read again when verifiedLogin changes: adding or removing the token
-  // changes whose like and which comments are the visitor's.
   useEffect(() => {
+    if (readAs === null) {
+      return undefined;
+    }
     let active = true;
     Promise.allSettled([store.getLikes(pageId), store.listComments(pageId)]).then(
       ([likesResult, commentsResult]) => {
@@ -209,7 +229,9 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
         if (commentsResult.status === 'fulfilled') {
           setComments(commentsResult.value);
         }
-        if (likesResult.status === 'rejected' || commentsResult.status === 'rejected') {
+        if (likesResult.status === 'fulfilled' && commentsResult.status === 'fulfilled') {
+          setLoadError(null);
+        } else {
           const failure =
             likesResult.status === 'rejected'
               ? likesResult.reason
@@ -227,20 +249,22 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
     return () => {
       active = false;
     };
-  }, [store, pageId, verifiedLogin]);
+  }, [store, pageId, readAs]);
 
-  // Whether the current identity likes the page: a verified login is in
-  // likedBy; a guest's like is not (guests are only counted), the API says.
+  // Whether the current identity likes the page. Shared: a token's login is in
+  // likedBy; for the session's user or a guest the API says (`liked`, worked
+  // out for whoever made the request; guests are only counted). Browser
+  // store: the userKey is in likedBy.
   const likesThisPage = (value: Likes): boolean =>
-    verifiedLogin
-      ? value.likedBy.includes(verifiedLogin)
-      : shared
-        ? value.liked === true
-        : value.likedBy.includes(userKey);
+    !shared
+      ? value.likedBy.includes(userKey)
+      : tokenLogin
+        ? value.likedBy.includes(tokenLogin)
+        : value.liked === true;
   const liked = likes ? likesThisPage(likes) : false;
   const mayDelete = (comment: Comment): boolean =>
     shared
-      ? comment.canDelete === true || (verifiedLogin !== null && comment.author.login === verifiedLogin)
+      ? comment.canDelete === true || (tokenLogin !== null && comment.author.login === tokenLogin)
       : canDeleteComment(comment, userKey);
   // Until the store knows whether it is shared, nothing can be written.
   const ready = isBrowser && status !== 'loading' && backend !== null;
@@ -425,9 +449,14 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
         <div className={styles.formRow}>
           <p id={hintId} className={clsx('rid-muted-note', styles.hint)}>
             {shared ? (
-              verifiedLogin ? (
+              identity.kind === 'session' ? (
                 <>
-                  Commenting as <strong>@{verifiedLogin}</strong>. Everyone can read your comment.
+                  Commenting as <strong>@{writerLogin}</strong>. Everyone can read your comment.
+                </>
+              ) : tokenLogin ? (
+                <>
+                  Commenting as <strong>@{tokenLogin}</strong>, confirmed with your GitHub token. Everyone can
+                  read your comment.
                 </>
               ) : user ? (
                 <>
@@ -437,8 +466,14 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
                   </button>{' '}
                   to comment as @{user.login}.
                 </>
-              ) : availability === 'not-configured' ? (
-                <>Commenting as a guest.</>
+              ) : !canSignIn ? (
+                <>
+                  Commenting as a guest ·{' '}
+                  <button type="button" className={styles.linkButton} onClick={openAccountMenu}>
+                    Show your GitHub name
+                  </button>{' '}
+                  with a username and a token.
+                </>
               ) : (
                 <>
                   Commenting as a guest ·{' '}

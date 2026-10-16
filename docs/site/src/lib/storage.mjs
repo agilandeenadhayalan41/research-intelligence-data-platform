@@ -11,9 +11,12 @@
 //   keeps them as JSON files in the GitHub repository, shared by every
 //   visitor. Guests come first: every request carries this browser's random
 //   guest id (X-Guest-Id, a UUID v4 kept in localStorage), so likes and
-//   comments work without signing in. A visitor signed in with a GitHub token
-//   writes under their verified GitHub name instead (the token goes to the
-//   function, which checks it with GitHub). Drafts stay in the browser store.
+//   comments work without signing in. A visitor signed in with GitHub writes
+//   under their verified GitHub name: the session cookie (same-origin
+//   requests carry it) tells the function who they are, no token needed.
+//   Where sign-in is not available, a typed username plus a GitHub token does
+//   the same (the token goes to the function, which checks it with GitHub).
+//   Drafts stay in the browser store.
 //   When the API is not there or not configured (`npm start`, a deployment
 //   without the server token), the shared store uses the browser store for
 //   everything.
@@ -52,7 +55,7 @@ const KEY_MAX_LENGTH = 1000;
  * @typedef {object} Likes
  * @property {number} count Number of distinct users (and, shared, guests) who like the page.
  * @property {string[]} likedBy userKeys (GitHub logins, or 'guest'). Shared: GitHub logins only, guests are only counted.
- * @property {boolean} [liked] Shared store, when writing as a guest: whether this visitor (this browser's guest id) likes the page, as the API computed it. Otherwise absent: look for the userKey in likedBy.
+ * @property {boolean} [liked] Shared store, as a guest or signed in with GitHub: whether this visitor (the session's user, else this browser's guest id) likes the page, as the API computed it. Otherwise (a token, or the browser store) absent: look for the userKey in likedBy.
  */
 
 /**
@@ -204,7 +207,8 @@ export function createIndexedDbStore(indexedDB, options = {}) {
  * @property {() => Date | number} [now]
  * @property {() => string} [newId]
  * @property {string} [baseUrl] 'shared' only: the API path (default '/api/community').
- * @property {() => string | null | undefined} [getToken] 'shared' only: the signed-in visitor's GitHub token, read at each write (none: a guest write).
+ * @property {() => string | null | undefined} [getToken] 'shared' only: the visitor's GitHub token, read at each write, for a visitor who is not signed in with GitHub (none: a guest write).
+ * @property {() => string | null | undefined} [getSessionLogin] 'shared' only: the login of the GitHub sign-in session (the rid_session cookie), as /api/auth/me confirmed it, read at each call; null for nobody.
  * @property {GuestIdSource} [getGuestId] 'shared' only: this browser's guest id. Defaults to one kept in env.localStorage (GUEST_ID_STORAGE_KEY).
  * @property {FetchLike} [fetchImpl] 'shared' only: defaults to env.fetch.
  */
@@ -235,6 +239,7 @@ export function createCommunityStore({
   newId,
   baseUrl,
   getToken,
+  getSessionLogin,
   getGuestId,
   fetchImpl,
 } = {}) {
@@ -261,6 +266,7 @@ export function createCommunityStore({
   return createSharedStore({
     baseUrl,
     getToken,
+    getSessionLogin,
     getGuestId: getGuestId ?? createGuestIdSource(() => readGlobal(env, 'localStorage')),
     fetchImpl: fetchImpl ?? fetchFrom(env),
     fallback: browser,
@@ -270,8 +276,14 @@ export function createCommunityStore({
 // ---------------------------------------------------------------------------
 // The guest id
 
-/** localStorage key of this browser's guest id. */
+// The one implementation of the guest id: the shared store uses it, and
+// src/lib/auth.mjs re-exports it for the sign-in code.
+
+/** localStorage key of this browser's guest id ('rid-community:v1:guest-id'). */
 export const GUEST_ID_STORAGE_KEY = `${LOCAL_STORAGE_PREFIX}guest-id`;
+
+/** Request header that carries the guest id to the community API. */
+export const GUEST_ID_HEADER = 'X-Guest-Id';
 
 /** A UUID version 4 (what the API accepts in X-Guest-Id). */
 export const GUEST_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -393,7 +405,8 @@ const RECENT_MS = 2000;
 /**
  * @typedef {object} SharedStoreOptions
  * @property {string} [baseUrl] A path on this site (default '/api/community'); never another origin, so the token and the guest id stay on this site.
- * @property {() => string | null | undefined} [getToken] The signed-in visitor's GitHub token, read at each write; sent only with writes. Without one, writes are guest writes.
+ * @property {() => string | null | undefined} [getToken] The visitor's GitHub token, read at each write; sent only with writes, and only when getSessionLogin has nobody. Without a session or a token, writes are guest writes.
+ * @property {() => string | null | undefined} [getSessionLogin] The login of the GitHub sign-in session, as /api/auth/me confirmed it (null: nobody), read at each call. The session cookie itself goes with every same-origin request; this says who the site believes it is, so cached page states are never shared between identities and writes send it as `login` (the API refuses a write when the cookie now belongs to someone else).
  * @property {GuestIdSource} [getGuestId] This browser's guest id (a UUID v4), sent as X-Guest-Id with every write, and with page reads once it exists (`{create: false}`). Defaults to a random id kept in memory.
  * @property {FetchLike} [fetchImpl] Defaults to the global fetch.
  * @property {CommunityStore} [fallback] The browser store: drafts always, everything when the API is not configured. Defaults to a memory store.
@@ -448,13 +461,19 @@ export function toApiPageId(pageId) {
  *   (made by its first write) they send it, so the API can say which like and
  *   comments are this browser's (`liked`, `canDelete`) without ever showing a
  *   guest's key. A visitor who only reads never gets an id.
- * - Writes always send `X-Guest-Id`. Without a token they are guest writes
- *   (shown as "Guest"; the guest can unlike and delete their own). With a
- *   token they also send `Authorization: Bearer <token>` and the signed-in
- *   username as `login`; the API checks the token with GitHub and answers 403
- *   when it belongs to someone else. toggleLike sends 'like' or 'unlike'
- *   depending on the last state it saw. Failed requests reject with
- *   CommunityApiError.
+ * - Who writes, read at each call: signed in with GitHub (getSessionLogin),
+ *   the session cookie that goes with the request says it, and the store
+ *   sends that login as `login`, no token; otherwise, with a token
+ *   (getToken), `Authorization: Bearer <token>` and the username as `login`
+ *   (the API checks the token with GitHub and answers 403 when it belongs to
+ *   someone else); otherwise a guest write (shown as "Guest"; the guest can
+ *   unlike and delete their own). Writes always send `X-Guest-Id`.
+ * - The page states the API returns say which like and comments are the
+ *   caller's (`liked`, `canDelete`), so the store keeps them per identity
+ *   ('guest', 'session:<login>' or 'token') and never answers one identity
+ *   with another's (after a sign-out, say). toggleLike sends 'like' or
+ *   'unlike' depending on the last state it saw for the current identity.
+ *   Failed requests reject with CommunityApiError.
  * - Drafts always use `fallback`.
  * - backend() asks GET <baseUrl> once: 'shared' when it answers
  *   `configured: true`; otherwise (no API, not configured, offline) every
@@ -466,6 +485,7 @@ export function toApiPageId(pageId) {
 export function createSharedStore({
   baseUrl = SHARED_API_PATH,
   getToken,
+  getSessionLogin,
   getGuestId,
   fetchImpl,
   fallback,
@@ -501,15 +521,39 @@ export function createSharedStore({
   /** @type {Promise<'shared' | 'local'> | null} */
   let mode = null;
   // A page state's `liked` and `canDelete` answer for whoever asked: a read
-  // (guest id, never the token) or a write (with the token they are the
-  // verified user's). `asToken` records which, so a guest never acts on a
-  // signed-in view.
+  // (the session, else the guest id; never the token) or a write (the
+  // session, the token's owner or the guest). `as` records which identity it
+  // was ('session:<login>', 'token' or 'guest'), so a state is only reused
+  // for the same identity: a guest never acts on a signed-in view, nor the
+  // other way round.
   /** In-flight or just-answered GETs, so getLikes + listComments make one request. */
-  /** @type {Map<string, {at: number, promise: Promise<SharedPage>, asToken: boolean}>} */
+  /** @type {Map<string, {at: number, promise: Promise<SharedPage>, as: string}>} */
   const recent = new Map();
   /** The last state seen for each page (toggleLike decides like/unlike from it). */
-  /** @type {Map<string, {page: SharedPage, asToken: boolean}>} */
+  /** @type {Map<string, {page: SharedPage, as: string}>} */
   const known = new Map();
+
+  /** The session login the site believes in, or null. */
+  const sessionLogin = () => readLogin(getSessionLogin);
+  /** Whose view a read gets: the session's (the cookie goes along), else the guest's. */
+  const readerId = () => {
+    const login = sessionLogin();
+    return login ? `session:${login.toLowerCase()}` : 'guest';
+  };
+  /**
+   * Who a write is made as, now. The session comes first, as on the server
+   * (which ignores the token when the cookie names someone).
+   *
+   * @returns {{as: string, token: string | null, login: string | null}}
+   */
+  const writer = () => {
+    const login = sessionLogin();
+    if (login) {
+      return {as: `session:${login.toLowerCase()}`, token: null, login};
+    }
+    const token = readToken(getToken);
+    return token ? {as: 'token', token, login: null} : {as: 'guest', token: null, login: null};
+  };
 
   const resolveMode = () => {
     mode ??= probe();
@@ -536,7 +580,7 @@ export function createSharedStore({
     /** @type {Record<string, string>} */
     const headers = {Accept: 'application/json'};
     if (guest) {
-      headers['X-Guest-Id'] = guest;
+      headers[GUEST_ID_HEADER] = guest;
     }
     /** @type {Parameters<FetchLike>[1] & {headers: Record<string, string>}} */
     const init = {method, headers, cache: 'no-store', credentials: 'same-origin'};
@@ -572,8 +616,9 @@ export function createSharedStore({
    * @returns {Promise<SharedPage>}
    */
   function fetchPage(apiPage) {
+    const as = readerId();
     const hit = recent.get(apiPage);
-    if (hit && !hit.asToken && clock() - hit.at < RECENT_MS) {
+    if (hit && hit.as === as && clock() - hit.at < RECENT_MS) {
       return hit.promise;
     }
     const promise = (async () => {
@@ -588,9 +633,9 @@ export function createSharedStore({
       }
       return readSharedPage(response.data);
     })();
-    recent.set(apiPage, {at: clock(), promise, asToken: false});
+    recent.set(apiPage, {at: clock(), promise, as});
     promise.then(
-      (page) => known.set(apiPage, {page, asToken: false}),
+      (page) => known.set(apiPage, {page, as}),
       () => {
         if (recent.get(apiPage)?.promise === promise) {
           recent.delete(apiPage);
@@ -604,13 +649,13 @@ export function createSharedStore({
    * @param {string} action
    * @param {string} apiPage
    * @param {Record<string, unknown>} fields
-   * @param {string | null} token null: a guest write.
+   * @param {{as: string, token: string | null}} who From writer().
    */
-  async function post(action, apiPage, fields, token) {
+  async function post(action, apiPage, fields, who) {
     let response;
     try {
       response = await call('POST', baseUrl, {
-        token,
+        token: who.token,
         guest: guestId(true) ?? undefined,
         body: {action, page: apiPage, ...fields},
       });
@@ -621,9 +666,8 @@ export function createSharedStore({
       throw apiError(response, 'could not save the change');
     }
     const page = readSharedPage(response.data);
-    const asToken = Boolean(token);
-    known.set(apiPage, {page, asToken});
-    recent.set(apiPage, {at: clock(), promise: Promise.resolve(page), asToken});
+    known.set(apiPage, {page, as: who.as});
+    recent.set(apiPage, {at: clock(), promise: Promise.resolve(page), as: who.as});
     return {page, data: response.data};
   }
 
@@ -640,7 +684,7 @@ export function createSharedStore({
       if (!(await isShared())) {
         return local.getLikes(pageId);
       }
-      return ownLikes((await fetchPage(toApiPageId(pageId))).likes, readToken(getToken));
+      return ownLikes((await fetchPage(toApiPageId(pageId))).likes, writer().token);
     },
 
     async toggleLike(pageId, userKey) {
@@ -649,16 +693,18 @@ export function createSharedStore({
       }
       const apiPage = toApiPageId(pageId);
       checkUserKey(userKey);
-      const token = readToken(getToken);
-      // Signed in with a token: the like is the login's (likedBy is the same
-      // in every view). A guest: the API said whether this browser's guest id
-      // likes the page (false before this browser has one), so only a view
-      // made without the token will do; a signed-in one is read again.
+      const who = writer();
+      // With a token the like is the login's (likedBy is the same in every
+      // view). Signed in with GitHub, or a guest, the API said whether the
+      // session's user (or this browser's guest id) likes the page, so only a
+      // view made as this same identity will do; any other is read again.
       const cached = known.get(apiPage);
-      const current = cached && (token || !cached.asToken) ? cached.page : await fetchPage(apiPage);
-      const likes = token ? current.likes.likedBy.includes(userKey) : current.likes.liked === true;
-      const {page} = await post(likes ? 'unlike' : 'like', apiPage, token ? {login: userKey} : {}, token);
-      return ownLikes(page.likes, token);
+      const current =
+        cached && (who.token ? true : cached.as === who.as) ? cached.page : await fetchPage(apiPage);
+      const likes = who.token ? current.likes.likedBy.includes(userKey) : current.likes.liked === true;
+      const login = who.token ? userKey : who.login;
+      const {page} = await post(likes ? 'unlike' : 'like', apiPage, login ? {login} : {}, who);
+      return ownLikes(page.likes, who.token);
     },
 
     async listComments(pageId) {
@@ -677,11 +723,15 @@ export function createSharedStore({
       }
       const apiPage = toApiPageId(pageId);
       const body = normalizeBody(input ? input.body : undefined);
-      const token = readToken(getToken);
-      // The author is the API's to decide: a guest sends no name at all.
-      const login =
-        token && input && input.author && isNonEmptyString(input.author.login) ? input.author.login : undefined;
-      const {data} = await post('comment', apiPage, login ? {body, login} : {body}, token);
+      const who = writer();
+      // The author is the API's to decide (the session, or the token's
+      // owner): `login` only lets it refuse a mismatch. A guest sends no name.
+      const login = who.token
+        ? input && input.author && isNonEmptyString(input.author.login)
+          ? input.author.login
+          : undefined
+        : (who.login ?? undefined);
+      const {data} = await post('comment', apiPage, login ? {body, login} : {body}, who);
       const comment = data && data.comment;
       if (!isComment(comment)) {
         throw new CommunityApiError('the site answered without the new comment', 502);
@@ -697,9 +747,10 @@ export function createSharedStore({
       if (!isNonEmptyString(id) || !isNonEmptyString(userKey)) {
         return false;
       }
-      const token = readToken(getToken);
+      const who = writer();
+      const login = who.token ? userKey : who.login;
       try {
-        await post('delete', apiPage, token ? {id, login: userKey} : {id}, token);
+        await post('delete', apiPage, login ? {id, login} : {id}, who);
         return true;
       } catch (error) {
         if (error instanceof CommunityApiError && (error.status === 403 || error.status === 404)) {
@@ -744,8 +795,9 @@ function readSharedPage(data) {
 
 /**
  * The likes to hand out: with a token the caller looks for their login in
- * likedBy (the API's `liked` was computed for the guest id of a read), as a
- * guest they get the API's `liked`.
+ * likedBy (the API's `liked` of a read was computed for the session or the
+ * guest id, not for the token); signed in with GitHub or as a guest they get
+ * the API's `liked`, computed for them.
  *
  * @param {Likes} likes
  * @param {string | null} token
@@ -767,6 +819,24 @@ function apiError(response, fallbackMessage) {
       : `${fallbackMessage} (HTTP ${response.status})`;
   return new CommunityApiError(message, response.status);
 }
+
+/**
+ * The session login from getSessionLogin, when it is a GitHub login.
+ *
+ * @param {(() => string | null | undefined) | undefined} getSessionLogin
+ * @returns {string | null}
+ */
+function readLogin(getSessionLogin) {
+  try {
+    const value = typeof getSessionLogin === 'function' ? getSessionLogin() : null;
+    return typeof value === 'string' && SESSION_LOGIN_PATTERN.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A GitHub login (what a session can name). */
+const SESSION_LOGIN_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 
 /** @param {(() => string | null | undefined) | undefined} getToken */
 function readToken(getToken) {

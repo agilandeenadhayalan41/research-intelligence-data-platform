@@ -14,8 +14,8 @@
 //   localStorage). Only its hash is kept ("guest:<16 hex of sha256>"), so a
 //   guest can unlike their own like and delete their own comments, and nobody
 //   else can. A visitor who wants to show who they are is a verified user:
-//   first `resolveSessionUser(request)` (a session cookie, wired by the
-//   sign-in code; null by default), else a GitHub token as
+//   first `resolveSessionUser(request)` (the sign-in's session cookie, which
+//   api/community.mjs wires in; null by default), else a GitHub token as
 //   `Authorization: Bearer <token>`, which is only used to call
 //   GET https://api.github.com/user to learn the login and is never stored,
 //   logged or sent anywhere else. Names never come from the request body. The

@@ -1,6 +1,8 @@
 // Wraps the theme's Markdown/MDX image (used for ![alt](src) in docs, blog
-// posts and pages, and for <img> tags in .md files) with the image zoom: a
-// lightbox and in-page zoom and pan (src/components/Zoom).
+// posts and pages, all parsed as MDX) with the image zoom: a lightbox and
+// in-page zoom and pan (src/components/Zoom). The theme's MDXComponents map
+// (`img`) points here, and src/theme/MDXComponents.tsx keeps that entry when
+// it adds the site's rich components.
 //
 // An image whose title or class is "no-zoom" is rendered as before, without
 // the zoom (the "no-zoom" title is not shown as a tooltip).

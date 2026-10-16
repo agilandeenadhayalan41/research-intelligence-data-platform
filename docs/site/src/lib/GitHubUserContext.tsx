@@ -19,9 +19,12 @@
 //
 // Without the server functions (`npm start`, `npm run serve`) /api/auth/me
 // cannot answer: the saved profile is then shown as "not verified on this
-// deployment", and the old typed-username form is offered as the only
-// fallback. When the deployment has no OAuth settings (me answers
-// configured: false), sign-in is hidden and everyone is a guest.
+// deployment", and the old typed-username form is offered as the fallback.
+// When the deployment has no OAuth settings (me answers configured: false),
+// sign-in is hidden: visitors are guests, and the same typed-username
+// fallback is offered (a typed profile is kept there). A typed username is
+// never verified; with the shared community store, a saved GitHub token is
+// what lets the site confirm it (see CommunityStoreContext).
 //
 // An optional GitHub token can be kept too (localStorage, this device only).
 // It is used for the blog editor's "Open pull request" and for higher GitHub
@@ -293,9 +296,13 @@ export function GitHubUserProvider({children}: {children: ReactNode}): React.JSX
       }
       if (result.kind === 'signed-out') {
         setAvailability(result.configured ? 'available' : 'not-configured');
-        // The server is the truth: no session here, so the visitor is a guest.
-        // A profile from a real sign-in stays in the account list.
-        if (!superseded) {
+        if (!superseded && !result.configured && stored?.source === 'typed') {
+          // No GitHub sign-in on this deployment: the typed username is the
+          // fallback, so it stays (not verified).
+          setVerified(false);
+        } else if (!superseded) {
+          // The server is the truth: no session here, so the visitor is a
+          // guest. A profile from a real sign-in stays in the account list.
           setUser(null);
           setVerified(false);
           writeItem(USER_STORAGE_KEY, null);
@@ -376,21 +383,30 @@ export function GitHubUserProvider({children}: {children: ReactNode}): React.JSX
   );
 
   const signOut = useCallback(async () => {
-    latestRequest.current += 1;
-    setUser(null);
-    setVerified(false);
-    writeItem(USER_STORAGE_KEY, null);
+    // Supersedes a pending /api/auth/me answer or typed sign-in.
+    const request = ++latestRequest.current;
     const mode = availabilityRef.current;
     if (mode === 'available' || mode === 'checking') {
+      // The server clears the session cookie first; only then does the
+      // visitor become a guest here. Likes and comments are read again as
+      // soon as the identity changes, and the shared API reads the cookie, so
+      // it must be gone by then (or the API would still answer, and write,
+      // for the signed-in user).
       // A late /api/auth/me answer could re-issue the cookie after the clear:
       // let it land first (fetchMe never rejects and gives up after 8 s).
       await mePromise.current?.catch(() => undefined);
       const ok = await requestSignOut();
       if (!ok && mode === 'available') {
-        show('error', 'Signed out in this tab, but the site could not be reached. Reload to check.');
+        show('error', 'Could not sign out: the site could not be reached. Try again.');
         return;
       }
     }
+    if (request !== latestRequest.current) {
+      return; // a newer sign-in or sign-out took over meanwhile
+    }
+    setUser(null);
+    setVerified(false);
+    writeItem(USER_STORAGE_KEY, null);
     show('info', 'Signed out. Your likes and comments stay.');
   }, [show]);
 

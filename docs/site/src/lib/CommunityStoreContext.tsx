@@ -5,11 +5,17 @@
 // - 'shared' (the site's setting): likes and comments are shared by every
 //   visitor through the site's /api/community function, which keeps them in
 //   the GitHub repository. Guests come first: without signing in, writes carry
-//   this browser's random guest id and show as "Guest". A visitor who is
-//   signed in AND has saved a GitHub token (useGitHubUser) writes under their
-//   verified GitHub name: the token goes with each write so the function can
-//   check who they are. Drafts stay in the browser. Where the API is missing
-//   or not configured (`npm start`), it behaves like 'browser'.
+//   this browser's random guest id and show as "Guest". Who writes follows
+//   useGitHubUser() at each call:
+//   - signed in with GitHub (`verified`: /api/auth/me confirmed the session):
+//     the session cookie goes with every request and the function reads the
+//     user from it. No token is sent, even when one is saved;
+//   - otherwise, a username in the menu (the typed fallback, where sign-in is
+//     not available) AND a saved GitHub token: the token goes with each write
+//     so the function can check who they are with GitHub;
+//   - otherwise a guest.
+//   Drafts stay in the browser. Where the API is missing or not configured
+//   (`npm start`), it behaves like 'browser'.
 // - 'browser': everything in this browser (IndexedDB, else localStorage, else
 //   memory).
 //
@@ -37,9 +43,13 @@ export type CommunityBackend = 'shared' | BrowserBackend;
 
 const CommunityStoreContext = createContext<CommunityStore | null>(null);
 
-function makeStore(kind: string, getToken: () => string | null): CommunityStore {
+function makeStore(
+  kind: string,
+  getToken: () => string | null,
+  getSessionLogin: () => string | null,
+): CommunityStore {
   try {
-    return createCommunityStore({kind, getToken});
+    return createCommunityStore({kind, getToken, getSessionLogin});
   } catch (error) {
     // An unknown kind is a configuration mistake; keep the site usable.
     console.error(
@@ -51,15 +61,24 @@ function makeStore(kind: string, getToken: () => string | null): CommunityStore 
 
 export function CommunityStoreProvider({children}: {children: ReactNode}): React.JSX.Element {
   const {siteConfig} = useDocusaurusContext();
-  const {user, token} = useGitHubUser();
-  // The store reads the token at each write, so it never has to be recreated.
-  // Signed out, a saved token is not used: the visitor is a guest.
+  const {user, verified, token} = useGitHubUser();
+  // The store reads both at each call, so it never has to be recreated.
+  // Signed in with GitHub: the session (no token). Otherwise a token counts
+  // only with a username in the menu; with neither the visitor is a guest.
+  const sessionLoginRef = useRef<string | null>(null);
   const tokenRef = useRef<string | null>(null);
-  tokenRef.current = user ? token : null;
+  sessionLoginRef.current = user && verified ? user.login : null;
+  tokenRef.current = user && !verified ? token : null;
   const configured = siteConfig.customFields?.communityStore;
   const kind = typeof configured === 'string' && configured ? configured : 'browser';
   // One store for the whole session (it is not recreated on navigation).
-  const [store] = useState(() => makeStore(kind, () => tokenRef.current));
+  const [store] = useState(() =>
+    makeStore(
+      kind,
+      () => tokenRef.current,
+      () => sessionLoginRef.current,
+    ),
+  );
   return <CommunityStoreContext.Provider value={store}>{children}</CommunityStoreContext.Provider>;
 }
 
@@ -116,4 +135,22 @@ export function useCommunityBackend(): CommunityBackend | null {
 /** Where editor drafts are kept (always this browser), once known. */
 export function useDraftsBackend(): BrowserBackend | null {
   return useResolved<BrowserBackend>((store) => store.draftsBackend(), 'memory');
+}
+
+/**
+ * Who likes and comments are made as on the shared store, from useGitHubUser():
+ * 'session' (signed in with GitHub), 'token' (a typed username with a saved
+ * token, where sign-in is not available) or 'guest', with the login. `key`
+ * changes whenever the identity does, so a component can read the page again.
+ * Matches what CommunityStoreProvider gives the store.
+ */
+export function useCommunityIdentity(): {kind: 'session' | 'token' | 'guest'; login: string | null; key: string} {
+  const {user, verified, token} = useGitHubUser();
+  if (user && verified) {
+    return {kind: 'session', login: user.login, key: `session:${user.login.toLowerCase()}`};
+  }
+  if (user && token) {
+    return {kind: 'token', login: user.login, key: `token:${user.login.toLowerCase()}`};
+  }
+  return {kind: 'guest', login: null, key: 'guest'};
 }

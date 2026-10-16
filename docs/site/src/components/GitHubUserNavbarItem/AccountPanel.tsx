@@ -22,8 +22,8 @@ function sameLogin(a: string, b: string): boolean {
  * Signed in: the profile (link to GitHub), "Switch account", "Sign out", the
  * other accounts used in this browser, and the optional GitHub token.
  * Signed out: "Continue with GitHub", the accounts used before, the
- * unverified username fallback (only when the auth functions are not
- * running here), and the token.
+ * unverified username fallback (only where GitHub sign-in is not available:
+ * no auth functions here, or no OAuth settings), and the token.
  */
 export default function AccountPanel({autoFocus = false, revealToken = false}: Props): React.JSX.Element {
   const {user, status, token} = useGitHubUser();
@@ -46,16 +46,24 @@ export default function AccountPanel({autoFocus = false, revealToken = false}: P
   return (
     <div className={styles.panel}>
       {user ? (
-        <SignedIn autoFocus={focusSection && !focusToken} />
+        <SignedIn autoFocus={focusSection && !focusToken} shared={shared} />
       ) : (
-        <SignedOut autoFocus={focusSection && !focusToken} busy={status === 'signing-in'} />
+        <SignedOut autoFocus={focusSection && !focusToken} busy={status === 'signing-in'} shared={shared} />
       )}
       <TokenSection defaultOpen={revealToken} autoFocus={focusToken} shared={shared} />
     </div>
   );
 }
 
-function SignedOut({autoFocus, busy}: {autoFocus: boolean; busy: boolean}): React.JSX.Element {
+function SignedOut({
+  autoFocus,
+  busy,
+  shared,
+}: {
+  autoFocus: boolean;
+  busy: boolean;
+  shared: boolean;
+}): React.JSX.Element {
   const {availability, accounts} = useGitHubUser();
   const href = useSignInHref();
   const onSignInClick = useSignInClick();
@@ -70,12 +78,15 @@ function SignedOut({autoFocus, busy}: {autoFocus: boolean; busy: boolean}): Reac
 
   if (availability === 'not-configured') {
     return (
-      <div className={styles.section}>
-        <p ref={heading} className={styles.heading} tabIndex={-1}>
-          Sign-in is not available on this deployment
-        </p>
-        <p className="rid-muted-note">Reading, likes and comments work as a guest.</p>
-      </div>
+      <>
+        <div className={styles.section}>
+          <p ref={heading} className={styles.heading} tabIndex={-1}>
+            Sign-in is not available on this deployment
+          </p>
+          <p className="rid-muted-note">Reading, likes and comments work as a guest.</p>
+        </div>
+        <UsernameFallback busy={busy} shared={shared} />
+      </>
     );
   }
 
@@ -108,7 +119,7 @@ function SignedOut({autoFocus, busy}: {autoFocus: boolean; busy: boolean}): Reac
       {accounts.length > 0 && (
         <AccountList title="Accounts used in this browser" accounts={accounts} action="Sign in" />
       )}
-      {availability === 'unreachable' && <UsernameFallback busy={busy} />}
+      {availability === 'unreachable' && <UsernameFallback busy={busy} shared={shared} />}
     </>
   );
 }
@@ -152,8 +163,8 @@ function AccountList({
   );
 }
 
-/** The old typed-username sign-in, kept only for when the auth functions are not running. */
-function UsernameFallback({busy}: {busy: boolean}): React.JSX.Element {
+/** The old typed-username sign-in, kept only for where GitHub sign-in is not available. */
+function UsernameFallback({busy, shared}: {busy: boolean; shared: boolean}): React.JSX.Element {
   const {signInWithUsername} = useGitHubUser();
   const [login, setLogin] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -214,18 +225,42 @@ function UsernameFallback({busy}: {busy: boolean}): React.JSX.Element {
           </p>
         )}
         <p id={hintId} className="rid-muted-note">
-          Not verified on this deployment: the site reads the public profile of the username you type and
-          keeps it in this browser. Nobody checks that it is yours; it only labels your likes and comments
-          here.
+          {shared ? (
+            <>
+              Not verified on this deployment: the site reads the public profile of the username you type and
+              keeps it in this browser. Nobody checks that it is yours, so likes and comments stay a
+              guest&apos;s unless you also add a GitHub token below: the site then checks it with GitHub and
+              shows your name.
+            </>
+          ) : (
+            <>
+              Not verified on this deployment: the site reads the public profile of the username you type and
+              keeps it in this browser. Nobody checks that it is yours; it only labels your likes and comments
+              here.
+            </>
+          )}
         </p>
       </form>
     </details>
   );
 }
 
-function SignedIn({autoFocus}: {autoFocus: boolean}): React.JSX.Element | null {
-  const {user, verified, availability, accounts, signOut, switchAccount} = useGitHubUser();
+function SignedIn({autoFocus, shared}: {autoFocus: boolean; shared: boolean}): React.JSX.Element | null {
+  const {user, verified, availability, accounts, signOut, switchAccount, token} = useGitHubUser();
   const button = useRef<HTMLButtonElement>(null);
+  // Signing out waits for the server to clear the session cookie.
+  const [signingOut, setSigningOut] = useState(false);
+  const onSignOut = async () => {
+    if (signingOut) {
+      return;
+    }
+    setSigningOut(true);
+    try {
+      await signOut();
+    } finally {
+      setSigningOut(false);
+    }
+  };
 
   useEffect(() => {
     if (autoFocus) {
@@ -257,6 +292,10 @@ function SignedIn({autoFocus}: {autoFocus: boolean}): React.JSX.Element | null {
           <p className="rid-muted-note">
             <span className={styles.unverifiedBadge}>not verified</span> Not verified on this deployment: this
             profile is only remembered by this browser.
+            {shared &&
+              (token
+                ? ' Your GitHub token confirms your likes and comments; they show the account it belongs to.'
+                : ' Without a token your likes and comments are posted as a guest. Add one below to show your name.')}
           </p>
         )}
         <div className={styles.actions}>
@@ -265,8 +304,13 @@ function SignedIn({autoFocus}: {autoFocus: boolean}): React.JSX.Element | null {
               Switch account
             </button>
           )}
-          <button ref={button} type="button" className="button button--secondary button--sm" onClick={() => void signOut()}>
-            Sign out
+          <button
+            ref={button}
+            type="button"
+            className="button button--secondary button--sm"
+            onClick={() => void onSignOut()}
+            aria-busy={signingOut || undefined}>
+            {signingOut ? 'Signing out…' : 'Sign out'}
           </button>
         </div>
       </div>
@@ -346,9 +390,10 @@ function TokenSection({
         {shared ? (
           <>
             Optional. Used for the blog editor&apos;s &ldquo;Open pull request&rdquo; and for higher GitHub API
-            rate limits. It is kept in this browser on this device only. It is used for api.github.com, and sent
-            to this site&apos;s /api/community only to confirm your login; it is never stored there. It is
-            separate from signing in.
+            rate limits. It is kept in this browser on this device only and sent to api.github.com. It is
+            separate from signing in: signed in with GitHub, likes and comments never need it. Only with a
+            typed username, where sign-in is not available, is it sent with your likes and comments to this
+            site&apos;s /api/community, to confirm your login; it is never stored there.
           </>
         ) : (
           <>
