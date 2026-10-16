@@ -9,10 +9,12 @@ or moved.
 On top of the docs the site has a home page, a blog with an in-browser editor,
 and a few community features on every page: reading time, who last changed the
 page, the people who changed it, likes and comments. The site is a **static
-build plus one small server function**, `api/community.mjs` at the repository
-root, which keeps the likes and comments that everyone shares as JSON files in
-this repository (see [Likes and comments](#likes-and-comments)). There is no
-database. Everything else a visitor adds stays in their own browser (see
+build plus a few small server functions** at the repository root, with no
+database: `api/community.mjs` keeps the likes and comments that everyone
+shares as JSON files in this repository (see
+[Likes and comments](#likes-and-comments)), and `api/auth/` runs the optional
+[GitHub sign-in](#github-sign-in-optional). Visitors are guests by default.
+Everything else a visitor adds stays in their own browser (see
 [Privacy](#privacy-what-is-stored-where)).
 
 | Path | Purpose |
@@ -26,8 +28,11 @@ database. Everything else a visitor adds stays in their own browser (see
 | `src/theme/BlogPostItems/`, `src/theme/BlogPostItem/Header/`, `src/components/BlogPostActions/` | The blog's **Write a post** toolbar above the post lists, and **Edit** and **Delete** next to each post's title |
 | `src/components/GitHubTokenPrompt/` | The "Add a GitHub token in the account menu" prompt shared by the editor and the Delete dialog |
 | `src/plugins/page-meta/index.js` | Build-time data for every doc and post: reading time, git history, and the raw source of blog posts for the editor |
-| `src/theme/Root.tsx` | Wraps the site in the GitHub-user and community-store providers |
-| `src/theme/NavbarItem/ComponentTypes.tsx`, `src/components/GitHubUserNavbarItem/` | The `custom-githubUser` navbar item: avatar and username, or "Sign in" |
+| `src/theme/Root.tsx` | Wraps the site in the GitHub-user and community-store providers, and renders the sign-in toast |
+| `src/theme/NavbarItem/ComponentTypes.tsx`, `src/components/GitHubUserNavbarItem/` | The `custom-githubUser` navbar item: "Sign in" and the account menu, or the avatar and username |
+| `src/components/AuthNotice/` | The toast after signing in or out ("Signed in as @login", or why a sign-in did not complete) |
+| `../../api/auth/login.mjs`, `callback.mjs`, `me.mjs` (repository root) | The sign-in functions on Vercel: start the GitHub OAuth flow, finish it, and say who is signed in |
+| `../../api/_lib/session.mjs` (repository root) | Their logic: the signed session cookie, the OAuth state, `getSessionUser(req)` for other functions, and `createAuthHandlers()` for tests |
 | `src/theme/DocItem/Content/`, `src/theme/DocItem/Footer/`, `src/theme/BlogPostItem/Footer/` | Wrappers around the theme components that add the page metadata, history and community blocks |
 | `src/components/PageMetaBar/`, `PageHistory/`, `PageCommunity/` | Reading time and last update; contributors; likes and comments |
 | `src/lib/storage.mjs` | The community store (likes, comments, editor drafts) behind one adapter interface: the shared store (the site's API) and the browser store |
@@ -35,8 +40,9 @@ database. Everything else a visitor adds stays in their own browser (see
 | `src/lib/github.mjs` | GitHub REST helpers: page commits (people only, `isAutomationAuthor`), public profiles, the blog pull-request flows (add or update a post, delete a post) |
 | `src/lib/blogPosts.mjs` | Links between the blog and the editor: `blogEditorUrl(repoPath)` and the editor's `?post=` parsing |
 | `src/lib/readingTime.mjs` | Word count and minutes to read for a Markdown source |
+| `src/lib/auth.mjs` | Browser side of the sign-in: the `/api/auth/login` URL, the `#signed-in` / `#signin-error` fragment, `/api/auth/me`, the saved profile and account list, the guest id |
 | `src/lib/GitHubUserContext.tsx`, `src/lib/CommunityStoreContext.tsx` | React hooks `useGitHubUser()` and `useCommunityStore()` |
-| `test/` | Unit tests for `src/lib/*.mjs`, the `/api/community` function (with a fake GitHub API in `test/helpers/`), the remark plugins and the MDX checker, plus an MDX compile of every doc (`node:test`, no network) |
+| `test/` | Unit tests for `src/lib/*.mjs` and the functions in `../../api/` (`/api/community` with a fake GitHub API in `test/helpers/`, the sign-in functions, and both together over HTTP), the remark plugins and the MDX checker, plus an MDX compile of every doc (`node:test`, no network) |
 | `src/remark/repo-links.mjs` | Rewrites relative links that leave `docs/` (for example `../../sql/...`) to GitHub URLs |
 | `src/remark/jsx-links.mjs` | Resolves a component's link attribute (`<Card href="status.md">`) like a Markdown link |
 | `src/theme/MDXComponents.tsx`, `src/components/Rich/` | The components every doc can use without an import: `Cards`/`Card`, `Steps`/`Step`, `Callout`, `Badge`, `Tabs`/`TabItem`, `Details`, `FileTree`, `Kbd` (see [Components](#components)) |
@@ -204,29 +210,131 @@ is keyed by the list, so it is asked again.
 
 ## GitHub sign-in (optional)
 
-The navbar (right side) has a **Sign in** button. Signing in is deliberately
-simple: type a GitHub username, and the site fetches that account's **public**
-profile from `https://api.github.com/users/<login>` and keeps the login, name,
-avatar URL and profile URL in `localStorage`, so it survives a reload. Signed
-in, the navbar shows the avatar and username, and the menu has **Sign out**.
+Visitors are **guests by default**. Opening any link lands on that page (the
+home page for `/`): there is no login page, and nothing asks anyone to sign in
+on arrival. Reading, likes and comments all work as a guest; comments are then
+signed "Guest". A visitor who wants their likes and comments to show "I am this
+GitHub user" can sign in, with GitHub checking who they are.
 
-- There is no password and no OAuth. **The username alone is not
-  authentication**: the site cannot check that the person typing it owns that
-  account. That is why shared likes and comments show a name only when a
-  GitHub token is saved too (below), which the site's `/api/community` checks
-  with GitHub. Without one they are made as a guest.
-- Nothing needs signing in: reading, liking and commenting all work signed
-  out, as a guest (see [Likes and comments](#likes-and-comments)).
+### How it works
+
+1. **Sign in** (navbar, right; or **Sign in with GitHub** under the comment
+   form) is a plain link to `/api/auth/login?returnTo=<this page>`. The
+   function makes a random `state` (32 bytes), keeps it with the return path
+   in a signed, HttpOnly cookie (`rid_oauth_state`, 10 minutes, path
+   `/api/auth`) and redirects to **GitHub's own sign-in and authorize page**.
+   It asks for **no OAuth scope**: the app can read the public profile only.
+2. GitHub checks who the person is and sends the browser back to
+   `/api/auth/callback?code=…&state=…`. The function compares the state with
+   the cookie (in constant time), exchanges the code for a token
+   (`POST https://github.com/login/oauth/access_token`), reads the profile
+   (`GET https://api.github.com/user`: login, id, name, avatar, profile URL)
+   and **drops the token**. It is never stored, logged or sent to the browser.
+3. It sets the session cookie `rid_session` and redirects back to the page
+   with `#signed-in`. A failure comes back as `#signin-error=<code>`, with a
+   code from a fixed list (`access_denied`, `github_error`, `bad_state`,
+   `missing_code`, `exchange_failed`, `profile_failed`, `server_error`). The
+   site shows a short message and removes the fragment from the address bar.
+   No code, token or secret is ever put in a URL.
+4. On every page load the site asks `GET /api/auth/me` who is signed in (the
+   cookie is HttpOnly, so scripts cannot read it) and shows the avatar and
+   username in the navbar.
+
+### Staying signed in, switching, signing out
+
+- The session cookie lasts **400 days** (the longest a browser keeps a
+  cookie), and `/api/auth/me` re-issues it once it is older than 30 days, so a
+  visitor who comes back stays signed in. **Nothing signs anyone out
+  automatically**, and the last known profile is kept in `localStorage` so the
+  navbar shows it at once.
+- **Signing in as a different user replaces the active account.** Accounts
+  used before stay in the account menu (**Other accounts used in this
+  browser**, or **Accounts used in this browser** when signed out), and nothing
+  they posted is deleted. **Switch account** goes back to GitHub with its
+  account picker (`prompt=select_account`); picking an account from the list
+  suggests it to GitHub (`login=<name>`). GitHub decides which account signs
+  in.
+- **Sign out** in the account menu is the only way out. It clears the session
+  cookie (`POST /api/auth/me?action=signout`, refused from other sites) and
+  the active profile, and keeps the account list.
+
+### What is stored
+
+| Where | What |
+| --- | --- |
+| Cookie `rid_session` (HttpOnly, Secure, SameSite=Lax, path `/`, 400 days) | base64url JSON `{v: 1, login, id, name, avatarUrl, htmlUrl, iat}`, then `.` and an HMAC-SHA256 signature made with `SESSION_SECRET`. Public profile data only; signed, not encrypted. |
+| Cookie `rid_oauth_state` (HttpOnly, Secure, path `/api/auth`, 10 minutes) | The random state and the return path, signed. The callback clears it. |
+| `localStorage` `rid-github:v1:user` | The active profile (login, name, avatar URL, profile URL), so the navbar shows it at once. |
+| `localStorage` `rid-github:v1:accounts` | The account switcher: login, name and avatar URL of up to 8 accounts used in this browser. |
+| The server | Nothing. There is no user database, and the GitHub token is dropped in the callback. |
+
+The functions never log codes, tokens, cookies or secrets, and send no CORS
+headers (same origin only).
+
+### Setting it up (Vercel)
+
+1. On GitHub, open **Settings > Developer settings > OAuth Apps > New OAuth
+   App** (for the account or organization that should own it). Homepage URL:
+   `https://<production domain>`. **Authorization callback URL:
+   `https://<production domain>/api/auth/callback`**. Then generate a client
+   secret.
+2. In the Vercel project, **Settings > Environment Variables**, add for the
+   **Production** environment:
+   - `GITHUB_OAUTH_CLIENT_ID`: the OAuth App's client ID;
+   - `GITHUB_OAUTH_CLIENT_SECRET`: its client secret;
+   - `SESSION_SECRET`: at least 32 random characters (for example the output
+     of `openssl rand -base64 48`). Changing it signs everyone out, unless the
+     old value stays in `SESSION_SECRET_PREVIOUS` for a while: it is still
+     accepted, and sessions are re-signed with the new secret on the next
+     visit.
+3. Redeploy. Vercel deploys the repository-root `api/` folder as functions
+   with the site; they have no dependencies (`api/_lib/` is not a route).
+
+When a variable is missing (or `SESSION_SECRET` is shorter than 32
+characters), `/api/auth/me` answers `{signedIn: false, configured: false}`,
+the site hides sign-in, `/api/auth/login` answers 503 "Sign-in is not
+configured on this deployment", and everything else keeps working as guest.
+
+**Preview deployments** have their own domains, and GitHub only sends people
+back to the callback URL registered in the OAuth App, so sign-in works only on
+the domain registered there. Keep the variables scoped to Production: previews
+then show sign-in as unavailable. To try sign-in on previews, register a
+second OAuth App for the preview domain and set its variables for the Preview
+environment only.
+
+### Local development
+
+`npm start` and `npm run serve` serve the static site only. The functions do
+not run there, so `/api/auth/me` does not answer and the **Sign in** link ends
+on a 404. The site then shows any saved profile as **not verified on this
+deployment**, and the account menu offers the old typed-username form as the
+fallback (**Use a GitHub username instead**, labelled *not verified*). The
+same form is offered on a deployment where sign-in is not configured. It reads
+the public profile of the username typed and only labels likes and comments
+kept in this browser; nobody checks that the account is yours. On shared
+likes and comments it shows your name only together with a GitHub token,
+which the site checks. To run the real sign-in locally, use `vercel dev` with
+a separate OAuth App whose callback is
+`http://localhost:3000/api/auth/callback`.
 
 ### The optional GitHub token
 
-The sign-in menu (the account menu) also has an optional **GitHub token**
-field. The token is used for: showing your verified GitHub name on your likes
-and comments (signed in with a token; without one you like and comment as a
-guest), the blog editor's **Open pull request**, the blog's **Delete** (which
-opens a pull request too), and higher GitHub API rate limits for the page
-history. Without a token, both pull request buttons show the same prompt:
-"Add a GitHub token in the account menu".
+The account menu (the arrow next to **Sign in**, or the avatar when signed in;
+**GitHub token** where sign-in is not available) also has an optional
+**GitHub token** field. It is separate from signing in: the sign-in session
+never gives the site a token, and a visitor signed in with GitHub never needs
+one for likes and comments. The token is used for:
+
+- the blog editor's **Open pull request** and the blog's **Delete** (which
+  opens a pull request too); without a token both show the same prompt, "Add
+  a GitHub token in the account menu";
+- higher GitHub API rate limits for the page history;
+- where GitHub sign-in is not available (a deployment without the OAuth
+  settings, or no sign-in functions), showing your name on shared likes and
+  comments: with the typed username **and** a token, the site's
+  `/api/community` checks the token with GitHub (see
+  [Likes and comments](#likes-and-comments)). Without one you like and
+  comment as a guest.
 
 - It is kept in `localStorage` **on this device only**. It is sent to
   `https://api.github.com`, as the `Authorization` header, and, while you are
@@ -255,17 +363,19 @@ history. Without a token, both pull request buttons show the same prompt:
 ### GitHub API rate limits
 
 GitHub allows **60 requests an hour per IP address without a token** and
-**5,000 an hour with a token** for the REST API. The site makes one request per
-sign-in and at most one per page and hour for the page history (the cache
-absorbs the rest). When the limit is reached, pages fall back to the
-build-time history and sign-in reports "rate limited"; adding a token raises
-the limit.
+**5,000 an hour with a token** for the REST API. From the browser, the site
+makes at most one request per page and hour for the page history (the cache
+absorbs the rest), and one per username in the local typed-username fallback;
+GitHub sign-in makes none (the callback function reads the profile). When the
+limit is reached, pages fall back to the build-time history; adding a token
+raises the limit.
 
 ## Likes and comments
 
 Each doc page and blog post has a like button with a count, and comments with
 the author's avatar, name and date. Authors can delete their own comments. A
-comment is 1 to 5,000 characters.
+comment is 1 to 5,000 characters. Nothing about signing in ever blocks reading
+or guest writes.
 
 Likes and comments are **shared with everyone and stored permanently**, as
 JSON files in this GitHub repository. Every like, unlike, comment and deleted
@@ -605,6 +715,27 @@ All three kinds of data go through one interface, `CommunityStore`, in
 Any other kind throws `unknown community store: <kind>` (the site then logs it
 and uses a memory store).
 
+### Shared store contract: sign-in and guests
+
+The shared likes and comments API (`api/community.mjs`, built separately) and
+this sign-in meet here:
+
+- **Who is writing** comes from `getSessionUser(req)` in
+  `api/_lib/session.mjs`: the verified `rid_session` cookie, or `null` for a
+  guest (also `null` when sign-in is not configured). It is **never taken from
+  the request body**. A signed-in author is `{login, name, avatarUrl}` from the
+  session; a guest author is `{login: null, name: 'Guest', avatarUrl: null}`.
+- **Guests can like and comment.** Each browser has an anonymous id, a random
+  UUID kept in `localStorage` (`rid-community:v1:guest-id`, from `getGuestId()`
+  in `src/lib/auth.mjs`) and sent as the `X-Guest-Id` header. Guest likes are
+  keyed by it, so a guest can unlike their own like; a guest comment can be
+  deleted only with the same guest id. Signed-in likes and comments are keyed
+  by the login. The guest id proves only "the same browser": store a hash of
+  it and never show it to other visitors.
+- Rate limits apply to guests and signed-in visitors alike.
+- Same origin only: the session cookie is `SameSite=Lax`, and the API sends no
+  CORS headers.
+
 ## Blog
 
 The **Blog** tab is the last item on the left of the navbar. Posts are files in
@@ -722,8 +853,11 @@ The editor writes a post in the browser, with a **live preview on the right**
 
 | Data | Stored | Sent to |
 | --- | --- | --- |
-| GitHub username, name, avatar URL, profile URL | `localStorage` | `api.github.com`: the username, to read the public profile |
-| GitHub token (optional) | `localStorage`, this device only | `api.github.com`, as the `Authorization` header; while signed in, this site's `/api/community` with each like or comment, only to confirm the login (never stored there) |
+| Signed-in GitHub profile (login, id, name, avatar URL, profile URL) | The signed `rid_session` cookie (HttpOnly, 400 days) and, without the id, `localStorage` | The site's own `/api/auth/*` functions and `/api/community`, with each request to them (the cookie) |
+| Accounts used in this browser (login, name, avatar URL) | `localStorage` | Nowhere |
+| GitHub OAuth token (from signing in) | Not stored: the callback function uses it once to read the profile, then drops it | `api.github.com`, from the server |
+| Typed username (only where sign-in is not available), name, avatar URL, profile URL | `localStorage` | `api.github.com`: the username, to read the public profile |
+| GitHub token (optional) | `localStorage`, this device only | `api.github.com`, as the `Authorization` header; where GitHub sign-in is not available and a typed username is set, this site's `/api/community` with each like or comment, only to confirm the login (never stored there) |
 | Guest id (random UUID) | `localStorage` (`rid-community:v1:guest-id`), this browser only | This site's `/api/community` as `X-Guest-Id`, which keeps only a 16-hex SHA-256 prefix of it (the guest key) |
 | Likes and comments (shared store) | The `community-data` branch of this public repository: login, name, avatar URL (or "Guest" and the guest key), comment text, dates | Everyone: they are public, and stay in the branch history even after a deletion |
 | Likes and comments (without the server token), editor drafts | IndexedDB (or `localStorage`, or memory) | Nowhere |
@@ -734,10 +868,12 @@ The editor writes a post in the browser, with a **live preview on the right**
 
 Requests to `api.github.com`, and the avatar images (served by GitHub), go
 from the visitor's browser to GitHub, which sees them like any other visit to
-GitHub. The site's only server code is `/api/community`: it receives the page
-id, the action, the comment text, the token or guest id of a write, and the
-client IP (kept in memory, with the guest key, for the rate limits). It logs only short status lines (a step
-and an HTTP status), never request bodies, headers or tokens.
+GitHub. Signing in happens on github.com itself, and the sign-in functions
+keep no records. The other server code is `/api/community`: it receives the
+page id, the action, the comment text, who is writing (the session cookie, a
+token, or a guest id) and the client IP (kept in memory, with the guest key,
+for the rate limits). The functions log only short status lines (a step and
+an HTTP status), never request bodies, headers, codes, cookies or tokens.
 
 ## Styling
 
@@ -1012,16 +1148,23 @@ default). After importing, check that it is on, or set `SITE_URL`; otherwise
 the sitemap and canonical links point at `localhost`. Set `SITE_URL` in the
 Vercel project's environment variables when a custom domain is added.
 
-Besides the static build, Vercel deploys `api/community.mjs` as a Node.js
-function at `/api/community`. Shared likes and comments need one secret,
-`COMMUNITY_GITHUB_TOKEN`, set in the project (see
-[Setup for maintainers](#setup-for-maintainers)); without it the function
-answers 503 and the site keeps likes and comments in each browser. Every other
-GitHub API call is made by each visitor's browser. The function's commits never
-start a build: the data branch carries its own root `vercel.json` (created with
-the branch) that sets `git.deploymentEnabled` to false, because Vercel reads
-that file from the pushed commit. The root `vercel.json` on `main` also lists
-`community-data` under `git.deploymentEnabled`.
+Besides the static build, Vercel deploys the repository-root `api/` folder as
+Node.js functions (no dependencies; `api/_lib/` is not a route):
+
+- `/api/community`, shared likes and comments. It needs one secret,
+  `COMMUNITY_GITHUB_TOKEN` (see [Setup for maintainers](#setup-for-maintainers));
+  without it the function answers 503 and the site keeps likes and comments in
+  each browser. Its commits never start a build: the data branch carries its
+  own root `vercel.json` (created with the branch) that sets
+  `git.deploymentEnabled` to false, because Vercel reads that file from the
+  pushed commit. The root `vercel.json` on `main` also lists `community-data`
+  under `git.deploymentEnabled`.
+- `/api/auth/login`, `/api/auth/callback` and `/api/auth/me`, the optional
+  GitHub sign-in. They need three variables (see
+  [Setting it up](#setting-it-up-vercel)); without them the site works the
+  same, with everyone as a guest.
+
+Every other GitHub API call is made by each visitor's browser.
 
 The site has no search box yet. Adding one needs a search plugin dependency
 (for example a local-search plugin at a pinned version), which is a separate

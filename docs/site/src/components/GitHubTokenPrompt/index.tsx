@@ -24,8 +24,9 @@ export default function GitHubTokenPrompt({lead, children, className}: Props): R
   return (
     <div className={clsx('alert alert--secondary', styles.prompt, className)} role="note">
       <strong>{lead}</strong> Add a GitHub token in the account menu at the right of the
-      navigation bar (<em>Sign in</em>, or your username when signed in). The token is kept on this
-      device only and is sent only to api.github.com.
+      navigation bar (the arrow next to <em>Sign in</em>, or your avatar when signed in;{' '}
+      <em>GitHub token</em> where sign-in is not available). The token is kept on this device only
+      and is sent only to api.github.com.
       {children ? <> {children}</> : null}
     </div>
   );
