@@ -2,6 +2,9 @@ name: Tests
 
 on:
   push:
+    # community-data holds only the docs site's likes and comments (JSON
+    # commits made by api/community.mjs); there is nothing to test there.
+    branches-ignore: [community-data]
   pull_request:
 
 permissions:

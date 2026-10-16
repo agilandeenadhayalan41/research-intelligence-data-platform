@@ -72,5 +72,7 @@ request against `main`.
 
 ## Likes and comments
 
-Each post has a like button and comments, like the doc pages. They are saved
-in your browser only: other visitors do not see them.
+Each post has a like button and comments, like the doc pages. They are shared
+with everyone and saved in this site's GitHub repository. Anyone can read
+them; to like or comment, sign in from the navbar and add a GitHub token in
+the account menu, so the site can check your GitHub account.

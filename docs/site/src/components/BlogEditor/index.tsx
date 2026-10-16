@@ -14,7 +14,7 @@ import {usePluginData} from '@docusaurus/useGlobalData';
 import {newPostTemplate, postFileName} from '@site/src/lib/github.mjs';
 import {readingTime} from '@site/src/lib/readingTime.mjs';
 import type {Draft} from '@site/src/lib/storage.mjs';
-import {useCommunityBackend, useCommunityStore} from '@site/src/lib/CommunityStoreContext';
+import {useCommunityStore, useDraftsBackend} from '@site/src/lib/CommunityStoreContext';
 import {useGitHubUser} from '@site/src/lib/GitHubUserContext';
 
 import {convertTruncateMarker, splitFrontMatter} from './frontMatter';
@@ -73,7 +73,7 @@ const timeFormat = new Intl.DateTimeFormat('en', {dateStyle: 'medium', timeStyle
 export default function BlogEditor(): ReactNode {
   const id = useId();
   const store = useCommunityStore();
-  const backend = useCommunityBackend();
+  const backend = useDraftsBackend();
   const {token} = useGitHubUser();
   const {siteConfig} = useDocusaurusContext();
   const repo = useMemo(() => readRepo(siteConfig.customFields?.repo), [siteConfig]);

@@ -1,14 +1,20 @@
-// Community data (likes, comments and blog-editor drafts) kept in the
-// visitor's own browser.
+// Community data: likes, comments and blog-editor drafts.
 //
-// The site is a static build with no server, so this data is saved where the
-// visitor is: IndexedDB when the browser offers it, else localStorage, else an
-// in-memory store that lasts until the tab is closed (private windows, blocked
-// storage, server-side rendering). Nothing is shared with other visitors.
+// Two kinds of store sit behind one CommunityStore interface:
 //
-// Components only see the CommunityStore interface below. A remote adapter
-// (an API in front of an external database) can be added later as another
-// `kind` in createCommunityStore without changing any component.
+// - 'browser': everything is kept in the visitor's own browser: IndexedDB when
+//   the browser offers it, else localStorage, else an in-memory store that
+//   lasts until the tab is closed (private windows, blocked storage,
+//   server-side rendering). Nothing is shared with other visitors.
+// - 'shared' (createSharedStore): likes and comments go to the site's own
+//   /api/community function (api/community.mjs at the repository root), which
+//   keeps them as JSON files in the GitHub repository, shared by every
+//   visitor. Writes carry the visitor's GitHub token so the function can check
+//   who they are with GitHub. Drafts stay in the browser store. When the API
+//   is not there or not configured (`npm start`, a deployment without the
+//   server token), the shared store uses the browser store for everything.
+//
+// Components only see the CommunityStore interface below.
 //
 // This module is plain ESM with no imports so `node --test` can load it, and it
 // touches no browser global at import time, so it is safe during SSR.
@@ -34,7 +40,8 @@ const NAME_MAX_LENGTH = 100;
 const KEY_MAX_LENGTH = 1000;
 
 /** @typedef {'likes' | 'comments' | 'drafts'} StoreName */
-/** @typedef {'indexedDB' | 'localStorage' | 'memory'} BackendKind */
+/** @typedef {'indexedDB' | 'localStorage' | 'memory'} BrowserBackendKind */
+/** @typedef {'shared' | BrowserBackendKind} BackendKind */
 /** @typedef {'md' | 'mdx'} DraftFormat */
 
 /**
@@ -84,7 +91,8 @@ const KEY_MAX_LENGTH = 1000;
  * called unbound (`const {getLikes} = store`).
  *
  * @typedef {object} CommunityStore
- * @property {() => Promise<BackendKind>} backend Where the data is kept (resolves the browser fallback chain).
+ * @property {() => Promise<BackendKind>} backend Where likes and comments are kept: 'shared' (the site's GitHub repository), or the browser storage in use.
+ * @property {() => Promise<BrowserBackendKind>} draftsBackend Where editor drafts are kept (always in this browser).
  * @property {(pageId: string) => Promise<Likes>} getLikes
  * @property {(pageId: string, userKey: string) => Promise<Likes>} toggleLike Adds or removes userKey's like.
  * @property {(pageId: string) => Promise<Comment[]>} listComments Oldest first.
@@ -128,7 +136,7 @@ const KEY_MAX_LENGTH = 1000;
  * synchronous step for the other backends).
  *
  * @typedef {object} Backend
- * @property {BackendKind} kind
+ * @property {BrowserBackendKind} kind
  * @property {(store: StoreName, key: string) => Promise<unknown>} get
  * @property {(store: StoreName) => Promise<unknown[]>} getAll
  * @property {<T>(store: StoreName, key: string, change: (current: unknown) => Change<T>) => Promise<T>} update
@@ -184,23 +192,30 @@ export function createIndexedDbStore(indexedDB, options = {}) {
 
 /**
  * @typedef {object} CommunityStoreConfig
- * @property {string} [kind] 'browser' (the only kind so far; see customFields.communityStore).
- * @property {any} [env] Where to look for window, indexedDB and localStorage (globalThis by default).
+ * @property {string} [kind] 'shared' or 'browser' (see customFields.communityStore).
+ * @property {any} [env] Where to look for window, indexedDB, localStorage and fetch (globalThis by default).
  * @property {number} [openTimeoutMs] Give up on IndexedDB if it has not opened by then (default 3000).
  * @property {() => Date | number} [now]
  * @property {() => string} [newId]
+ * @property {string} [baseUrl] 'shared' only: the API path (default '/api/community').
+ * @property {() => string | null | undefined} [getToken] 'shared' only: the visitor's GitHub token, read at each write.
+ * @property {FetchLike} [fetchImpl] 'shared' only: defaults to env.fetch.
  */
 
 /**
  * The store the site uses.
  *
  * 'browser': IndexedDB if it opens, else localStorage if it accepts writes,
- * else memory. Without a window (SSR, Node) it returns a memory store. It never
- * throws for 'browser' and touches no storage until the first call, so it is
- * safe to create during render.
+ * else memory.
  *
- * Any other kind throws `unknown community store: <kind>`; a future 'remote'
- * adapter plugs in here.
+ * 'shared': likes and comments through the site's /api/community (see
+ * createSharedStore), drafts in the 'browser' store; everything in the
+ * 'browser' store when the API does not answer `configured: true`.
+ *
+ * Without a window (SSR, Node) both return a memory store. Neither throws, and
+ * neither touches storage or the network until the first call, so they are
+ * safe to create during render. Any other kind throws
+ * `unknown community store: <kind>`.
  *
  * @param {CommunityStoreConfig} [config]
  * @returns {CommunityStore}
@@ -211,8 +226,11 @@ export function createCommunityStore({
   openTimeoutMs = 3000,
   now,
   newId,
+  baseUrl,
+  getToken,
+  fetchImpl,
 } = {}) {
-  if (kind !== 'browser') {
+  if (kind !== 'browser' && kind !== 'shared') {
     throw new Error(`unknown community store: ${kind}`);
   }
   const options = {now, newId};
@@ -228,7 +246,379 @@ export function createCommunityStore({
     }
     return chosen;
   };
-  return createStore(getBackend, options);
+  const browser = createStore(getBackend, options);
+  if (kind === 'browser') {
+    return browser;
+  }
+  return createSharedStore({
+    baseUrl,
+    getToken,
+    fetchImpl: fetchImpl ?? fetchFrom(env),
+    fallback: browser,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// The shared store (the site's /api/community)
+
+/** Path of the site's community API (api/community.mjs at the repository root). */
+export const SHARED_API_PATH = '/api/community';
+
+/** How long a GET answer is reused (getLikes and listComments of one render). */
+const RECENT_MS = 2000;
+
+/** What the API answers to a write without a valid token. */
+export const SIGN_IN_ERROR = 'sign in with a GitHub token to like or comment';
+
+/**
+ * @typedef {(url: string, init?: {method?: string, headers?: Record<string, string>, body?: string, cache?: string, credentials?: string, redirect?: string, signal?: AbortSignal}) => Promise<{status: number, ok: boolean, json: () => Promise<any>}>} FetchLike
+ */
+
+/**
+ * @typedef {object} SharedStoreOptions
+ * @property {string} [baseUrl] A path on this site (default '/api/community'); never another origin, so the token stays on this site.
+ * @property {() => string | null | undefined} [getToken] The visitor's GitHub token, read at each write. It is sent only with writes.
+ * @property {FetchLike} [fetchImpl] Defaults to the global fetch.
+ * @property {CommunityStore} [fallback] The browser store: drafts always, everything when the API is not configured. Defaults to a memory store.
+ * @property {() => Date | number} [now] Clock, for tests.
+ */
+
+/** A failed /api/community request. `message` is the API's (it never holds a token). */
+export class CommunityApiError extends Error {
+  /**
+   * @param {string} message
+   * @param {number} status HTTP status, or 0 when the site could not be reached.
+   */
+  constructor(message, status) {
+    super(message);
+    this.name = 'CommunityApiError';
+    /** @type {number} */
+    this.status = status;
+  }
+}
+
+/**
+ * The API's page id for a store pageId: a site path with a leading slash,
+ * characters outside [A-Za-z0-9/_.~-] percent-encoded. The site's page ids
+ * are repository paths, so 'docs/overview/introduction.md' becomes
+ * '/docs/overview/introduction.md'.
+ *
+ * @param {string} pageId
+ * @returns {string}
+ */
+export function toApiPageId(pageId) {
+  checkPageId(pageId);
+  const path = pageId.startsWith('/') ? pageId : `/${pageId}`;
+  try {
+    return path.replace(/[^A-Za-z0-9/_.~-]/gu, (char) =>
+      encodeURIComponent(char).replace(
+        /[!'()*]/g,
+        (rest) => `%${rest.charCodeAt(0).toString(16).toUpperCase()}`,
+      ),
+    );
+  } catch {
+    throw new Error('pageId must be a non-empty string');
+  }
+}
+
+/**
+ * Likes and comments shared by every visitor, through the site's
+ * /api/community (api/community.mjs), which keeps them in the GitHub
+ * repository.
+ *
+ * - Reads (getLikes, listComments) need no sign-in. getLikes and listComments
+ *   for the same page share one request.
+ * - Writes send the visitor's token as `Authorization: Bearer <token>`, and
+ *   the signed-in username as `login`; the API checks the token with GitHub
+ *   and answers 403 when it belongs to someone else. toggleLike sends 'like'
+ *   or 'unlike' depending on the last state it saw. Failed requests reject
+ *   with CommunityApiError (status 401 without a token, without a request).
+ * - Drafts always use `fallback`.
+ * - backend() asks GET <baseUrl> once: 'shared' when it answers
+ *   `configured: true`; otherwise (no API, not configured, offline) every
+ *   method uses `fallback` and backend() is the fallback's.
+ *
+ * @param {SharedStoreOptions} [options]
+ * @returns {CommunityStore}
+ */
+export function createSharedStore({
+  baseUrl = SHARED_API_PATH,
+  getToken,
+  fetchImpl,
+  fallback,
+  now,
+} = {}) {
+  if (typeof baseUrl !== 'string' || !baseUrl.startsWith('/') || baseUrl.startsWith('//')) {
+    throw new TypeError('baseUrl must be a path on this site, such as /api/community');
+  }
+  const local = fallback ?? createMemoryStore();
+  /** @type {FetchLike} */
+  const send = fetchImpl ?? ((url, init) => globalThis.fetch(url, /** @type {any} */ (init)));
+  const clock = () => toDate(now ? now() : new Date()).getTime();
+
+  /** @type {Promise<'shared' | 'local'> | null} */
+  let mode = null;
+  /** In-flight or just-answered GETs, so getLikes + listComments make one request. */
+  /** @type {Map<string, {at: number, promise: Promise<SharedPage>}>} */
+  const recent = new Map();
+  /** The last state seen for each page (toggleLike decides like/unlike from it). */
+  /** @type {Map<string, SharedPage>} */
+  const known = new Map();
+
+  const resolveMode = () => {
+    mode ??= probe();
+    return mode;
+  };
+  const isShared = async () => (await resolveMode()) === 'shared';
+
+  /** @returns {Promise<'shared' | 'local'>} */
+  async function probe() {
+    try {
+      const {data} = await call('GET', baseUrl);
+      return data && data.configured === true ? 'shared' : 'local';
+    } catch {
+      return 'local';
+    }
+  }
+
+  /**
+   * @param {'GET' | 'POST'} method
+   * @param {string} url
+   * @param {{token?: string, body?: Record<string, unknown>}} [options]
+   */
+  async function call(method, url, {token, body} = {}) {
+    /** @type {Record<string, string>} */
+    const headers = {Accept: 'application/json'};
+    /** @type {Parameters<FetchLike>[1] & {headers: Record<string, string>}} */
+    const init = {method, headers, cache: 'no-store', credentials: 'same-origin'};
+    if (body) {
+      headers['Content-Type'] = 'application/json';
+      init.body = JSON.stringify(body);
+    }
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+      init.redirect = 'error'; // never follow a redirect with the token
+    }
+    const signal = timeoutSignal(15000);
+    if (signal) {
+      init.signal = signal;
+    }
+    const response = await send(url, init);
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null; // not JSON (for example the dev server's HTML page)
+    }
+    return {status: response.status, ok: response.ok, data};
+  }
+
+  /** @param {string} apiPage */
+  const pageUrl = (apiPage) => `${baseUrl}?page=${encodeURIComponent(apiPage)}`;
+
+  /**
+   * @param {string} apiPage
+   * @returns {Promise<SharedPage>}
+   */
+  function fetchPage(apiPage) {
+    const hit = recent.get(apiPage);
+    if (hit && clock() - hit.at < RECENT_MS) {
+      return hit.promise;
+    }
+    const promise = (async () => {
+      let response;
+      try {
+        response = await call('GET', pageUrl(apiPage));
+      } catch {
+        throw new CommunityApiError('could not reach the site', 0);
+      }
+      if (!response.ok) {
+        throw apiError(response, 'could not load the likes and comments');
+      }
+      return readSharedPage(response.data);
+    })();
+    recent.set(apiPage, {at: clock(), promise});
+    promise.then(
+      (page) => known.set(apiPage, page),
+      () => {
+        if (recent.get(apiPage)?.promise === promise) {
+          recent.delete(apiPage);
+        }
+      },
+    );
+    return promise;
+  }
+
+  /**
+   * @param {string} action
+   * @param {string} apiPage
+   * @param {Record<string, unknown>} fields
+   */
+  async function post(action, apiPage, fields) {
+    const token = readToken(getToken);
+    if (!token) {
+      throw new CommunityApiError(SIGN_IN_ERROR, 401);
+    }
+    let response;
+    try {
+      response = await call('POST', baseUrl, {token, body: {action, page: apiPage, ...fields}});
+    } catch {
+      throw new CommunityApiError('could not reach the site', 0);
+    }
+    if (!response.ok) {
+      throw apiError(response, 'could not save the change');
+    }
+    const page = readSharedPage(response.data);
+    known.set(apiPage, page);
+    recent.set(apiPage, {at: clock(), promise: Promise.resolve(page)});
+    return {page, data: response.data};
+  }
+
+  return {
+    async backend() {
+      return (await isShared()) ? 'shared' : local.backend();
+    },
+
+    draftsBackend() {
+      return local.draftsBackend();
+    },
+
+    async getLikes(pageId) {
+      if (!(await isShared())) {
+        return local.getLikes(pageId);
+      }
+      return copyLikes((await fetchPage(toApiPageId(pageId))).likes);
+    },
+
+    async toggleLike(pageId, userKey) {
+      if (!(await isShared())) {
+        return local.toggleLike(pageId, userKey);
+      }
+      const apiPage = toApiPageId(pageId);
+      checkUserKey(userKey);
+      const current = known.get(apiPage) ?? (await fetchPage(apiPage));
+      const action = current.likes.likedBy.includes(userKey) ? 'unlike' : 'like';
+      const {page} = await post(action, apiPage, {login: userKey});
+      return copyLikes(page.likes);
+    },
+
+    async listComments(pageId) {
+      if (!(await isShared())) {
+        return local.listComments(pageId);
+      }
+      const {comments} = await fetchPage(toApiPageId(pageId));
+      return comments
+        .map((comment) => copyComment({...comment, pageId}))
+        .sort((a, b) => compareStrings(a.createdAt, b.createdAt));
+    },
+
+    async addComment(pageId, input) {
+      if (!(await isShared())) {
+        return local.addComment(pageId, input);
+      }
+      const apiPage = toApiPageId(pageId);
+      const body = normalizeBody(input ? input.body : undefined);
+      const login = input && input.author && isNonEmptyString(input.author.login) ? input.author.login : undefined;
+      const {data} = await post('comment', apiPage, login ? {body, login} : {body});
+      const comment = data && data.comment;
+      if (!isComment(comment)) {
+        throw new CommunityApiError('the site answered without the new comment', 502);
+      }
+      return copyComment({...comment, pageId});
+    },
+
+    async deleteComment(pageId, id, userKey) {
+      if (!(await isShared())) {
+        return local.deleteComment(pageId, id, userKey);
+      }
+      const apiPage = toApiPageId(pageId);
+      if (!isNonEmptyString(id) || !isNonEmptyString(userKey)) {
+        return false;
+      }
+      try {
+        await post('delete', apiPage, {id, login: userKey});
+        return true;
+      } catch (error) {
+        if (error instanceof CommunityApiError && (error.status === 403 || error.status === 404)) {
+          return false;
+        }
+        throw error;
+      }
+    },
+
+    getDraft: (key) => local.getDraft(key),
+    saveDraft: (key, input) => local.saveDraft(key, input),
+    listDrafts: () => local.listDrafts(),
+    deleteDraft: (key) => local.deleteDraft(key),
+  };
+}
+
+/**
+ * @typedef {object} SharedPage
+ * @property {Likes} likes
+ * @property {Comment[]} comments
+ */
+
+/**
+ * The page state in an API answer, checked (it is input from the network).
+ *
+ * @param {any} data
+ * @returns {SharedPage}
+ */
+function readSharedPage(data) {
+  const likedBy =
+    data && data.likes && Array.isArray(data.likes.likedBy)
+      ? [...new Set(data.likes.likedBy.filter(isNonEmptyString))]
+      : [];
+  const comments = data && Array.isArray(data.comments) ? data.comments.filter(isComment).map(copyComment) : [];
+  return {likes: likesFrom(likedBy), comments};
+}
+
+/**
+ * @param {{status: number, data: any}} response
+ * @param {string} fallbackMessage
+ */
+function apiError(response, fallbackMessage) {
+  const message =
+    response.data && typeof response.data.error === 'string' && response.data.error
+      ? response.data.error.slice(0, 300)
+      : `${fallbackMessage} (HTTP ${response.status})`;
+  return new CommunityApiError(message, response.status);
+}
+
+/** @param {(() => string | null | undefined) | undefined} getToken */
+function readToken(getToken) {
+  try {
+    const value = typeof getToken === 'function' ? getToken() : null;
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** @param {Likes} likes */
+function copyLikes(likes) {
+  return likesFrom(likes.likedBy);
+}
+
+/**
+ * @param {any} env
+ * @returns {FetchLike | undefined}
+ */
+function fetchFrom(env) {
+  const fetchFn = readGlobal(env, 'fetch');
+  return typeof fetchFn === 'function' ? (url, init) => fetchFn.call(env, url, init) : undefined;
+}
+
+/** @param {number} ms */
+function timeoutSignal(ms) {
+  try {
+    return typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.timeout(ms)
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -262,6 +652,10 @@ function createStore(getBackend, {now, newId} = {}) {
 
   return {
     async backend() {
+      return (await getBackend()).kind;
+    },
+
+    async draftsBackend() {
       return (await getBackend()).kind;
     },
 

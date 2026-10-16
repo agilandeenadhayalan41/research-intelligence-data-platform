@@ -220,3 +220,26 @@
 [data-theme='dark'] .error {
   color: var(--ifm-color-danger-light);
 }
+
+.likeError {
+  flex-basis: 100%;
+}
+
+/* Shared likes and comments without a token: what to do instead of the form */
+
+.gate {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem 0.875rem;
+  border: 1px dashed var(--ifm-color-emphasis-400);
+  border-radius: var(--rid-radius-md);
+  background: var(--rid-subtle-background);
+}
+
+.gateText {
+  flex: 1 1 16rem;
+  margin: 0;
+  font-size: 0.9375rem;
+}

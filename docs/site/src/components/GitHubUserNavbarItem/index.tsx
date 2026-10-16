@@ -5,9 +5,14 @@
 // in; it opens a small popover with the account panel.
 // Mobile sidebar (`mobile` prop): the same button as a menu entry; the panel
 // opens inline below it.
+//
+// Other components can open the menu with useOpenAccountMenu() (it opens with
+// the token field shown): the item that is on screen (the navbar one on a wide
+// screen, the sidebar one on a narrow one) reacts to the request.
 
 import React, {useCallback, useEffect, useId, useRef, useState, type KeyboardEvent} from 'react';
 import clsx from 'clsx';
+import {useNavbarMobileSidebar} from '@docusaurus/theme-common/internal';
 import {useGitHubUser} from '@site/src/lib/GitHubUserContext';
 import AccountPanel from './AccountPanel';
 import Avatar from './Avatar';
@@ -41,9 +46,39 @@ function useAccountLabel(): string {
   return user ? `GitHub account ${user.login}` : 'Sign in with GitHub';
 }
 
+/**
+ * Calls `onRequest` for each useOpenAccountMenu() call made while `active`
+ * (requests made before the item mounted are ignored).
+ */
+function useAccountMenuRequest(active: boolean, onRequest: () => void): void {
+  const {accountMenuRequest} = useGitHubUser();
+  const handled = useRef(accountMenuRequest);
+  const callback = useRef(onRequest);
+  callback.current = onRequest;
+  useEffect(() => {
+    if (accountMenuRequest === handled.current) {
+      return;
+    }
+    handled.current = accountMenuRequest;
+    if (active) {
+      callback.current();
+    }
+  }, [accountMenuRequest, active]);
+}
+
 function DesktopItem({className}: {className?: string}): React.JSX.Element {
   const {user, status} = useGitHubUser();
+  const mobileSidebar = useNavbarMobileSidebar();
   const [open, setOpen] = useState(false);
+  // Opened by useOpenAccountMenu(): show the token field. `requests` remounts
+  // the panel (and moves the focus into it) when it was already open.
+  const [revealToken, setRevealToken] = useState(false);
+  const [requests, setRequests] = useState(0);
+  useAccountMenuRequest(!mobileSidebar.shouldRender, () => {
+    setRevealToken(true);
+    setRequests((count) => count + 1);
+    setOpen(true);
+  });
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panelId = useId();
@@ -121,12 +156,15 @@ function DesktopItem({className}: {className?: string}): React.JSX.Element {
         aria-controls={open ? panelId : undefined}
         aria-haspopup="dialog"
         title={label}
-        onClick={() => setOpen((value) => !value)}>
+        onClick={() => {
+          setRevealToken(false);
+          setOpen((value) => !value);
+        }}>
         <TriggerContent />
       </button>
       {open && (
         <div id={panelId} className={styles.popover} role="dialog" aria-label={label} tabIndex={-1}>
-          <AccountPanel autoFocus />
+          <AccountPanel key={requests} autoFocus revealToken={revealToken} />
         </div>
       )}
     </div>
@@ -135,24 +173,62 @@ function DesktopItem({className}: {className?: string}): React.JSX.Element {
 
 function MobileItem({className}: {className?: string}): React.JSX.Element {
   const {user, status} = useGitHubUser();
+  const mobileSidebar = useNavbarMobileSidebar();
   const [open, setOpen] = useState(false);
+  const [revealToken, setRevealToken] = useState(false);
+  const [requests, setRequests] = useState(0);
+  const item = useRef<HTMLLIElement>(null);
   const panelId = useId();
   const label = useAccountLabel();
 
+  // The sidebar may still be sliding in (visibility: hidden at first), and
+  // focus() does nothing on a hidden element: focus the panel once it shows.
+  const [focusReady, setFocusReady] = useState(false);
+
+  useAccountMenuRequest(mobileSidebar.shouldRender, () => {
+    setRevealToken(true);
+    setFocusReady(false);
+    setRequests((count) => count + 1);
+    setOpen(true);
+  });
+  useEffect(() => {
+    if (requests === 0) {
+      return undefined;
+    }
+    let frame = 0;
+    let tries = 0;
+    const whenVisible = () => {
+      const element = item.current;
+      tries += 1;
+      if ((element && getComputedStyle(element).visibility === 'visible') || tries > 60) {
+        // The item is the last one of the sidebar menu: bring the panel into view.
+        element?.scrollIntoView?.({block: 'nearest'});
+        setFocusReady(true);
+        return;
+      }
+      frame = requestAnimationFrame(whenVisible);
+    };
+    frame = requestAnimationFrame(whenVisible);
+    return () => cancelAnimationFrame(frame);
+  }, [requests]);
+
   return (
-    <li className={clsx('menu__list-item', status === 'loading' && styles.loading, className)}>
+    <li ref={item} className={clsx('menu__list-item', status === 'loading' && styles.loading, className)}>
       <button
         type="button"
         className={clsx('menu__link', styles.mobileTrigger, open && styles.mobileTriggerOpen)}
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
         title={label}
-        onClick={() => setOpen((value) => !value)}>
+        onClick={() => {
+          setRevealToken(false);
+          setOpen((value) => !value);
+        }}>
         {user ? <TriggerContent /> : <span>Sign in with GitHub</span>}
       </button>
       {open && (
         <div id={panelId} className={styles.mobilePanel} role="group" aria-label={label}>
-          <AccountPanel />
+          <AccountPanel key={requests} autoFocus={revealToken && focusReady} revealToken={revealToken} />
         </div>
       )}
     </li>

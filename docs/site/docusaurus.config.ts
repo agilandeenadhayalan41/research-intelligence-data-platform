@@ -74,10 +74,13 @@ const config: Config = {
   // Read in the browser through useDocusaurusContext().siteConfig.customFields.
   customFields: {
     repo: REPO,
-    // Where likes, comments and editor drafts are kept: 'browser' stores them
-    // permanently in each visitor's own browser (IndexedDB). A remote adapter
-    // (an API plus a database) can be added later behind the same interface.
-    communityStore: 'browser',
+    // Where likes and comments are kept. 'shared': through the site's own
+    // /api/community function (api/community.mjs at the repository root), as
+    // JSON files on the repository's community-data branch, seen by every
+    // visitor; editor drafts stay in the visitor's browser. Without the
+    // function's server token (or with `npm start`) it keeps everything in
+    // the browser, like 'browser'. See README.md, "Likes and comments".
+    communityStore: 'shared',
   },
 
   i18n: {

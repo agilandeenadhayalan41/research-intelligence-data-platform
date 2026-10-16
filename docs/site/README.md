@@ -9,8 +9,11 @@ or moved.
 On top of the docs the site has a home page, a blog with an in-browser editor,
 and a few community features on every page: reading time, who last changed the
 page, the people who changed it, likes and comments. The site is a **static
-build with no server and no database**: everything a visitor adds stays in
-their own browser (see [Privacy](#privacy-what-stays-in-the-browser)).
+build plus one small server function**, `api/community.mjs` at the repository
+root, which keeps the likes and comments that everyone shares as JSON files in
+this repository (see [Likes and comments](#likes-and-comments)). There is no
+database. Everything else a visitor adds stays in their own browser (see
+[Privacy](#privacy-what-is-stored-where)).
 
 | Path | Purpose |
 | --- | --- |
@@ -25,11 +28,12 @@ their own browser (see [Privacy](#privacy-what-stays-in-the-browser)).
 | `src/theme/NavbarItem/ComponentTypes.tsx`, `src/components/GitHubUserNavbarItem/` | The `custom-githubUser` navbar item: avatar and username, or "Sign in" |
 | `src/theme/DocItem/Content/`, `src/theme/DocItem/Footer/`, `src/theme/BlogPostItem/Footer/` | Wrappers around the theme components that add the page metadata, history and community blocks |
 | `src/components/PageMetaBar/`, `PageHistory/`, `PageCommunity/` | Reading time and last update; contributors; likes and comments |
-| `src/lib/storage.mjs` | The community store (likes, comments, editor drafts) behind one adapter interface |
+| `src/lib/storage.mjs` | The community store (likes, comments, editor drafts) behind one adapter interface: the shared store (the site's API) and the browser store |
+| `../../api/community.mjs`, `../../api/_lib/community.mjs` | At the repository root: the Vercel function behind `/api/community` (shared likes and comments, stored on the `community-data` branch) and its logic |
 | `src/lib/github.mjs` | GitHub REST helpers: page commits, public profiles, the blog pull-request flow |
 | `src/lib/readingTime.mjs` | Word count and minutes to read for a Markdown source |
 | `src/lib/GitHubUserContext.tsx`, `src/lib/CommunityStoreContext.tsx` | React hooks `useGitHubUser()` and `useCommunityStore()` |
-| `test/` | Unit tests for `src/lib/*.mjs` (`node:test`, no network) |
+| `test/` | Unit tests for `src/lib/*.mjs` and the `/api/community` function, with a fake GitHub API in `test/helpers/` (`node:test`, no network) |
 | `src/remark/repo-links.mjs` | Rewrites relative links that leave `docs/` (for example `../../sql/...`) to GitHub URLs |
 | `src/css/custom.css` | Theme colours and design tokens, navbar, footer, table and diagram rules, avatar utility classes, focus rings, dark mode |
 | `static/img/logo.svg` | Navbar logo and favicon |
@@ -47,7 +51,7 @@ npm start         # dev server with live reload on http://localhost:3000
 npm run build     # production build into build/ (fails on any broken link)
 npm run serve     # serve the production build on http://localhost:3000
 npm run typecheck # type-check the TypeScript config files and components
-npm test          # unit tests for src/lib (node --test test/*.test.mjs)
+npm test          # unit tests for src/lib and api/ (node --test test/*.test.mjs)
 ```
 
 `npm run serve -- --port 3077` serves on another port.
@@ -144,20 +148,30 @@ profile from `https://api.github.com/users/<login>` and keeps the login, name,
 avatar URL and profile URL in `localStorage`, so it survives a reload. Signed
 in, the navbar shows the avatar and username, and the menu has **Sign out**.
 
-- There is no password, no OAuth and no backend. **It is not authentication**:
-  the site cannot check that the person typing a username owns that account.
-  The username only labels likes and comments in this browser.
-- Everything works signed out. Likes and comments are then made as `guest`.
+- There is no password and no OAuth. **The username alone is not
+  authentication**: the site cannot check that the person typing it owns that
+  account. That is why liking and commenting also need a GitHub token (below),
+  which the site's `/api/community` checks with GitHub.
+- Reading works signed out. Where likes and comments are kept in the browser
+  only (see [Without the server token](#without-the-server-token-and-with-npm-start)),
+  they can also be made signed out, as `guest`.
 
 ### The optional GitHub token
 
-The sign-in menu also has an optional **GitHub token** field. The token is used
-for two things only: the blog editor's **Open pull request**, and higher GitHub
-API rate limits for the page history.
+The sign-in menu also has a **GitHub token** field. The token is used for:
+liking and commenting (it is required for those), the blog editor's **Open
+pull request**, and higher GitHub API rate limits for the page history.
 
-- It is kept in `localStorage` **on this device only** and is sent nowhere but
-  `https://api.github.com`, as the `Authorization` header. Error messages never
-  include it.
+- It is kept in `localStorage` **on this device only**. It is sent to
+  `https://api.github.com`, as the `Authorization` header, and with each like,
+  unlike, comment or deletion to this site's own `/api/community`, **only to
+  confirm your login**: the function calls `GET https://api.github.com/user`
+  with it and keeps nothing but the answer's login, name and avatar (in memory,
+  for 10 minutes, under the token's SHA-256). It is never stored, logged or
+  sent anywhere else, and error messages never include it.
+- **To like and comment, any token works**, even a fine-grained token with
+  only the default public, read-only access and no permissions: the site only
+  needs to know whose it is.
 - Anything in `localStorage` can be read by scripts running on the site's
   origin, and stays until it is removed. Give the token an expiry date and the
   least access that works. With push access to this repository, a
@@ -181,70 +195,222 @@ the limit.
 ## Likes and comments
 
 Each doc page and blog post has a like button with a count, and comments with
-the author's avatar, name and date. Authors can delete their own comments (the
-same GitHub login, or `guest` for comments written signed out). A comment is
-1 to 5,000 characters.
+the author's avatar, name and date. Authors can delete their own comments. A
+comment is 1 to 5,000 characters.
 
-Likes, comments and editor drafts are **saved in this browser only**. Other
-visitors do not see them, and they are not shared between browsers or
-devices. The page says so next to the buttons ("Saved in this browser").
-Clearing the site's data in the browser deletes them.
+Likes and comments are **shared with everyone and stored permanently**, as
+JSON files in this GitHub repository. Every like, unlike, comment and deleted
+comment is a commit. The page says so next to the buttons ("Shared with
+everyone. Saved in this site's GitHub repository."). Blog editor drafts are
+not shared: they stay in the visitor's browser.
 
-## The storage adapter
+Anyone can read likes and comments without signing in. To like or comment, a
+visitor signs in (navbar, GitHub username) **and** adds a GitHub token in the
+account menu; without both, the page shows "Add a GitHub token in the account
+menu to like or comment" with a button that opens the menu. The token is what
+proves who they are (the username alone proves nothing), so likes and comments
+always carry the verified GitHub login and avatar.
+
+### How shared storage works
+
+```text
+browser ──GET  /api/community?page=/docs/x.md──────────────▶ api/community.mjs ──contents API──▶ community-data branch
+        ──POST /api/community  Authorization: Bearer <visitor token>
+                               {action, page, body?, id?, login?}
+                                  │ GET https://api.github.com/user with the visitor token: who is it?
+                                  └ write with the server token (COMMUNITY_GITHUB_TOKEN): one commit
+```
+
+- **The function.** `api/community.mjs` at the repository root is a Vercel
+  Node.js function (no dependencies). It is a thin wrapper around
+  `api/_lib/community.mjs` (the underscore keeps that file from becoming a
+  route), which holds all the logic and is unit-tested from `docs/site/test`.
+- **Reads.** `GET /api/community?page=<pageId>` answers
+  `{configured: true, pageId, likes: {count, likedBy}, comments: [...]}`
+  (comments oldest first, each `{id, pageId, author: {login, name, avatarUrl}, body, createdAt}`).
+  A page without a file is empty. Each function instance caches a page for
+  20 seconds; responses are `Cache-Control: no-store`. `GET /api/community`
+  without `page` is a status probe (`{configured: true}`, no GitHub call).
+- **Writes.** `POST /api/community` with a JSON body
+  `{action: 'like' | 'unlike' | 'comment' | 'delete', page, body?, id?, login?}`
+  and the visitor's token as `Authorization: Bearer …`. The function calls
+  `GET https://api.github.com/user` with that token to learn the login (cached
+  for 10 minutes under the token's SHA-256, never the token itself), then
+  writes with its **own** token. `like` and `unlike` are idempotent; a comment
+  is stored with the name and avatar from GitHub; `delete` works only on your
+  own comment (403 otherwise, 404 when it is gone). When the browser sends
+  `login` (the signed-in username), it must be the token's owner, otherwise
+  403 "this token belongs to @…" (signing in only types a username). The answer
+  is the page's new state.
+- **Errors.** 400 for a bad page id (`^/[A-Za-z0-9/_.~%-]{0,300}$`), an unknown
+  action or a comment that is not 1-5,000 characters after trimming; 401
+  without a valid token; 405 for methods other than GET and POST; 409 when a
+  page is full (1,000 comments, or a page file over 900,000 bytes); 413 for a
+  body over 16 KB; 429 when rate limited (with `Retry-After`); 502 when GitHub
+  cannot be reached; 503 `{configured: false}` without the server token, and
+  503 "busy, try again" after repeated write conflicts. No message ever
+  contains a token. The function sends no CORS headers: only the site itself
+  can call it from a browser.
+- **The page id.** The site's page id is the page's repository path
+  (`docs/overview/introduction.md`, `docs/site/blog/<file>.md`); the API uses
+  it with a leading slash (`/docs/overview/introduction.md`), other
+  characters percent-encoded (`toApiPageId` in `src/lib/storage.mjs`).
+
+### The data branch
+
+Commits go to a dedicated branch, **`community-data`**, never to `main`, so the
+history, CI and deployments of `main` stay clean. If the branch does not exist,
+the first write creates it as an **orphan branch** (no shared history with
+`main`) holding `community/README.md`, which explains the folder, and its own
+root `vercel.json` with `{"git": {"deploymentEnabled": false}}`. Vercel reads
+`vercel.json` from the pushed commit, not from `main`, so this copy is what
+keeps the branch's commits from starting deployments (any data branch the
+function creates gets it, including a separate Preview branch). The
+`community-data` entry under `git.deploymentEnabled` in `main`'s `vercel.json`
+stays as a second guard. The branch has no workflow files, so CI never runs on
+it (`.github/workflows/tests.yml` also lists it under `branches-ignore`).
+
+One file per page, `community/pages/<id>.json`, where `<id>` is the first 32
+hex characters of the SHA-256 of the API page id:
+
+```json
+{
+  "version": 1,
+  "pageId": "/docs/overview/introduction.md",
+  "likes": [{"login": "octocat", "at": "2026-10-16T12:00:00.000Z"}],
+  "comments": [
+    {
+      "id": "6f1c…",
+      "login": "octocat",
+      "name": "The Octocat",
+      "avatarUrl": "https://avatars.githubusercontent.com/u/583231?v=4",
+      "body": "Clear and useful, thanks.",
+      "createdAt": "2026-10-16T12:01:00.000Z"
+    }
+  ]
+}
+```
+
+Likes are unique by login; comments are oldest first. Every update goes
+through the contents API with the file's `sha` (compare and swap): when
+someone else changed the file first (409 or 422), the function reads it again
+and retries up to 4 times with a small random pause, then answers 503
+"busy, try again". The commit message is `community: <action> on <pageId>`,
+made as the owner of the server token. A page takes at most 1,000 comments,
+and a new comment is refused (409 "this page has reached its size limit") when
+it would grow the page file past 900,000 bytes, which keeps every answer far
+below Vercel's 4.5 MB response limit and the file under the contents API's
+1 MB inline limit. Likes, unlikes and deletes are never refused for size.
+
+To find the file of a page:
+
+```bash
+printf '%s' '/docs/overview/introduction.md' | sha256sum | cut -c1-32
+```
+
+### Setup for maintainers
+
+1. Create a **fine-grained personal access token** on GitHub (Settings,
+   Developer settings, Fine-grained tokens) with **Repository access: only
+   this repository** and **Repository permissions: Contents, read and write**
+   (Metadata read-only is added automatically). Nothing else. Give it an
+   expiry date.
+2. In the Vercel project, **Settings > Environment Variables**, add
+   `COMMUNITY_GITHUB_TOKEN` with that token for **Production** and
+   **Preview**. Optional: `COMMUNITY_REPO` (default
+   `agilandeenadhayalan41/research-intelligence-data-platform`),
+   `COMMUNITY_DATA_BRANCH` (default `community-data`; `main` and `master` are
+   refused) and `COMMUNITY_DATA_DIR` (default `community`).
+3. **Redeploy** (environment variables apply to new deployments only).
+4. **Never commit the token**, and never put it in `docusaurus.config.ts` or
+   any file the browser receives. If it is ever exposed, revoke it on GitHub
+   at once, create a new one and update the Vercel variable. Rotate it before
+   it expires.
+
+Preview deployments write to the same branch as production when they share
+the variables, so testing a pull request's preview adds real likes and
+comments; set `COMMUNITY_DATA_BRANCH` to another branch for Preview to keep
+them apart.
+
+### Without the server token (and with `npm start`)
+
+The browser asks `GET /api/community` once per visit. Unless it answers
+`configured: true`, the site keeps likes and comments **in this browser only**,
+as before (IndexedDB, else `localStorage`, else memory), and says so: "Saved in
+this browser only. Other visitors do not see your likes and comments." That is
+what happens with `npm start` and `npm run serve` (no function runs there), on
+a deployment without `COMMUNITY_GITHUB_TOKEN`, and when the API cannot be
+reached. Nothing is moved to the repository later.
+
+To try the function locally, run `vercel dev` from the repository root with the
+variables in a local `.env` file that is never committed, or read
+`docs/site/test/communityServer.test.mjs`, which runs it on a local HTTP server
+against a fake GitHub.
+
+### Rate limits
+
+Per client IP, in each function instance's memory (best effort): **20 writes
+per 10 minutes** and **120 reads per minute**; beyond that the function answers
+429 with `Retry-After`. Failed writes count too. GitHub's own limits apply to
+the server token (5,000 requests an hour, and fewer for content-creating
+requests); when GitHub rate limits the function it answers 503.
+
+### Moderation
+
+The data is plain JSON on the `community-data` branch. To remove a comment or a
+like, edit the page's file on that branch (on GitHub, or in a checkout of the
+branch) and commit; to clear a page, delete its file. Keep the JSON valid: a
+file that is not valid JSON reads as an empty page, and the function refuses to
+write to it (500) until it is fixed, so nothing is lost. The branch history
+keeps every change, including removed comments; rewriting that history is the
+only way to erase a comment completely.
+
+### Privacy
+
+Shared likes and comments are public: the login, display name and avatar URL
+from GitHub, the comment text and the dates are committed to a public
+repository and stay in its history after a deletion. The visitor's token is
+used only to ask GitHub who they are and is never stored. Drafts never leave
+the browser. See also [Privacy: what is stored where](#privacy-what-is-stored-where).
+
+### The storage adapter
 
 All three kinds of data go through one interface, `CommunityStore`, in
-`src/lib/storage.mjs`. Components never touch IndexedDB or `localStorage`
-directly; they call `useCommunityStore()` and the methods below (all async).
+`src/lib/storage.mjs`. Components never touch the API, IndexedDB or
+`localStorage` directly; they call `useCommunityStore()` and the methods below
+(all async).
 
 | Method | Returns |
 | --- | --- |
 | `getLikes(pageId)` | `{count, likedBy}` |
-| `toggleLike(pageId, userKey)` | `{count, likedBy}`; `userKey` is the GitHub login or `'guest'` |
+| `toggleLike(pageId, userKey)` | `{count, likedBy}`; `userKey` is the GitHub login (or `'guest'` in the browser store) |
 | `listComments(pageId)` | comments, oldest first: `{id, pageId, author: {login, name, avatarUrl}, body, createdAt}` |
 | `addComment(pageId, {author, body})` | the new comment; throws when the trimmed body is not 1-5000 characters |
 | `deleteComment(pageId, id, userKey)` | `true` when the comment was the user's and was deleted |
 | `getDraft(key)`, `saveDraft(key, {content, format})` | a draft `{key, content, format, updatedAt}` (or `null`) |
 | `listDrafts()`, `deleteDraft(key)` | drafts, newest first; `true` when deleted |
-| `backend()` | where the data is kept: `'indexedDB'`, `'localStorage'` or `'memory'` (used for the "Saved in this browser" note; a remote store returns its own value, e.g. `'remote'`) |
+| `backend()` | where likes and comments are kept: `'shared'`, or `'indexedDB'`, `'localStorage'` or `'memory'` (the note next to the like button) |
+| `draftsBackend()` | where drafts are kept: always the browser (`'indexedDB'`, `'localStorage'` or `'memory'`) |
 
-`createCommunityStore({kind})` picks the implementation. `kind` comes from
-`customFields.communityStore` in `docusaurus.config.ts`; today it is
-`'browser'`, which uses:
+`createCommunityStore({kind})` picks the implementation; `kind` comes from
+`customFields.communityStore` in `docusaurus.config.ts`:
 
-1. **IndexedDB**: database `rid-community`, version 1, object stores `likes`,
-   `comments` and `drafts`;
-2. otherwise **`localStorage`**, keys prefixed `rid-community:v1:`;
-3. otherwise an **in-memory** store (private windows that block storage, and
-   server-side rendering), which is lost on reload.
+- **`'shared'`** (the site's setting): `createSharedStore({baseUrl = '/api/community', getToken, fetchImpl, fallback})`.
+  Likes and comments go to the API; `toggleLike` sends `like` or `unlike`
+  from the last state it saw; writes send the token from the account menu
+  (read at each write) and reject with `CommunityApiError` (with the HTTP
+  `status`) when the API refuses. Drafts always go to `fallback`, the browser
+  store. When the API does not answer `configured: true`, everything goes to
+  `fallback`. `baseUrl` must be a path on this site, so the token is never sent
+  to another origin.
+- **`'browser'`**: everything in this browser: **IndexedDB** (database
+  `rid-community`, version 1, object stores `likes`, `comments` and `drafts`),
+  otherwise **`localStorage`** (keys prefixed `rid-community:v1:`), otherwise
+  an **in-memory** store (private windows that block storage, server-side
+  rendering), lost on reload.
 
-### Adding a remote store later
-
-Shared likes and comments need a service and a database outside this static
-site. They can be added without changing the components that call the store:
-
-1. Build an HTTP API (any host) with one endpoint per method above, and a
-   database behind it. Because the site is static, the API is a separate origin:
-   allow the site's origin with CORS.
-2. **Verify identity on the server.** The browser sign-in proves nothing, so
-   the API must authenticate users itself (for example GitHub OAuth, verified
-   server-side) before it records a like or a comment or deletes one. Add
-   moderation, spam protection and rate limits.
-3. In `src/lib/storage.mjs`, write `createRemoteStore({baseUrl, getToken})`
-   that implements the same methods with `fetch`, and return it from
-   `createCommunityStore` when `kind === 'remote'` (any other kind throws
-   `unknown community store: <kind>`, which is where it plugs in). Implement
-   `backend()` too: components call it. Keep drafts local if they should stay
-   private.
-4. Set `communityStore: 'remote'` (and the API URL, for example a new
-   `customFields` entry) in `docusaurus.config.ts`. Pass the API URL from
-   `customFields` to the store in `makeStore` in
-   `src/lib/CommunityStoreContext.tsx` (for example
-   `createCommunityStore({kind, baseUrl: siteConfig.customFields.communityApi})`,
-   forwarded to `createRemoteStore`), and add the new `backend()` value to
-   `CommunityBackend` there and to `storageNote()` in
-   `src/components/PageCommunity/index.tsx`, which holds the "Saved in this
-   browser" wording. Add tests next to `test/storage.test.mjs` with a mocked
-   `fetch`.
+Any other kind throws `unknown community store: <kind>` (the site then logs it
+and uses a memory store).
 
 ## Blog
 
@@ -303,20 +469,24 @@ The editor writes a post in the browser, with a **live preview on the right**
   convenience: only the build checks links, so read the pull request's Vercel
   preview before merging.
 
-## Privacy: what stays in the browser
+## Privacy: what is stored where
 
 | Data | Stored | Sent to |
 | --- | --- | --- |
 | GitHub username, name, avatar URL, profile URL | `localStorage` | `api.github.com`: the username, to read the public profile |
-| GitHub token (optional) | `localStorage`, this device only | `api.github.com` only, as the `Authorization` header |
-| Likes, comments, editor drafts | IndexedDB (or `localStorage`, or memory) | Nowhere (until a remote store is added) |
+| GitHub token | `localStorage`, this device only | `api.github.com`, as the `Authorization` header; this site's `/api/community` with each like or comment, only to confirm the login (never stored there) |
+| Likes and comments (shared store) | The `community-data` branch of this public repository: login, name, avatar URL, comment text, dates | Everyone: they are public, and stay in the branch history even after a deletion |
+| Likes and comments (without the server token), editor drafts | IndexedDB (or `localStorage`, or memory) | Nowhere |
 | Page history from GitHub | `localStorage`, one hour per page | `api.github.com`: the page's file path, to read its commits |
 | Blog post sent with **Open pull request** | Not stored by the site | `api.github.com`, as a commit and a pull request |
 | Colour mode and other Docusaurus settings | `localStorage` | Nowhere |
 
 Requests to `api.github.com`, and the avatar images (served by GitHub), go
 from the visitor's browser to GitHub, which sees them like any other visit to
-GitHub. The site itself has no server that receives anything.
+GitHub. The site's only server code is `/api/community`: it receives the page
+id, the action, the comment text and the token of a write, and the client IP
+(kept in memory for the rate limits). It logs only short status lines (a step
+and an HTTP status), never request bodies, headers or tokens.
 
 ## Styling
 
@@ -392,9 +562,16 @@ default). After importing, check that it is on, or set `SITE_URL`; otherwise
 the sitemap and canonical links point at `localhost`. Set `SITE_URL` in the
 Vercel project's environment variables when a custom domain is added.
 
-The community features need no environment variables, secrets or server
-functions: the static build is the whole site, and the GitHub API calls are
-made by each visitor's browser.
+Besides the static build, Vercel deploys `api/community.mjs` as a Node.js
+function at `/api/community`. Shared likes and comments need one secret,
+`COMMUNITY_GITHUB_TOKEN`, set in the project (see
+[Setup for maintainers](#setup-for-maintainers)); without it the function
+answers 503 and the site keeps likes and comments in each browser. Every other
+GitHub API call is made by each visitor's browser. The function's commits never
+start a build: the data branch carries its own root `vercel.json` (created with
+the branch) that sets `git.deploymentEnabled` to false, because Vercel reads
+that file from the pushed commit. The root `vercel.json` on `main` also lists
+`community-data` under `git.deploymentEnabled`.
 
 The site has no search box yet. Adding one needs a search plugin dependency
 (for example a local-search plugin at a pinned version), which is a separate

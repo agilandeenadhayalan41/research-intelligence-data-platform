@@ -1,20 +1,25 @@
 import React, {useEffect, useId, useRef, useState, type FormEvent} from 'react';
 import clsx from 'clsx';
 import {useGitHubUser} from '@site/src/lib/GitHubUserContext';
+import {useCommunityBackend} from '@site/src/lib/CommunityStoreContext';
 import Avatar from './Avatar';
 import styles from './styles.module.css';
 
 type Props = {
   /** Move the focus into the panel when it opens. */
   autoFocus?: boolean;
+  /** Open with the token field shown (the panel was opened to add a token). */
+  revealToken?: boolean;
 };
 
 /**
  * The content of the account menu: the username field (or the signed-in
  * profile and "Sign out"), and the optional GitHub token.
  */
-export default function AccountPanel({autoFocus = false}: Props): React.JSX.Element {
-  const {user, status} = useGitHubUser();
+export default function AccountPanel({autoFocus = false, revealToken = false}: Props): React.JSX.Element {
+  const {user, status, token} = useGitHubUser();
+  // With shared likes and comments the token is what proves who the visitor is.
+  const shared = useCommunityBackend() === 'shared';
   // Signing in or out replaces the section that had the focus. Once that has
   // happened, move the focus into the new section (the mobile panel opens
   // without autoFocus), so it does not drop to the page.
@@ -27,19 +32,29 @@ export default function AccountPanel({autoFocus = false}: Props): React.JSX.Elem
     }
   }, [signedIn]);
   const focusSection = autoFocus || switched;
+  // Opened to add a token by someone signed in: the token field gets the focus.
+  const focusToken = revealToken && signedIn && !token && (autoFocus || switched);
   return (
     <div className={styles.panel}>
       {user ? (
-        <SignedIn autoFocus={focusSection} />
+        <SignedIn autoFocus={focusSection && !focusToken} shared={shared} />
       ) : (
-        <SignInForm autoFocus={focusSection} busy={status === 'signing-in'} />
+        <SignInForm autoFocus={focusSection} busy={status === 'signing-in'} shared={shared} />
       )}
-      <TokenSection />
+      <TokenSection defaultOpen={revealToken} autoFocus={focusToken} shared={shared} />
     </div>
   );
 }
 
-function SignInForm({autoFocus, busy}: {autoFocus: boolean; busy: boolean}): React.JSX.Element {
+function SignInForm({
+  autoFocus,
+  busy,
+  shared,
+}: {
+  autoFocus: boolean;
+  busy: boolean;
+  shared: boolean;
+}): React.JSX.Element {
   const {signIn} = useGitHubUser();
   const [login, setLogin] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -103,14 +118,24 @@ function SignInForm({autoFocus, busy}: {autoFocus: boolean; busy: boolean}): Rea
         </p>
       )}
       <p id={hintId} className="rid-muted-note">
-        No password: the site reads your public GitHub profile and keeps it in this browser. It is not a
-        verified sign-in; your username only labels your likes and comments here.
+        {shared ? (
+          <>
+            No password: the site reads your public GitHub profile and keeps it in this browser. To like or
+            comment, also add a GitHub token below; the site checks it with GitHub, so your likes and comments
+            carry your real account.
+          </>
+        ) : (
+          <>
+            No password: the site reads your public GitHub profile and keeps it in this browser. It is not a
+            verified sign-in; your username only labels your likes and comments here.
+          </>
+        )}
       </p>
     </form>
   );
 }
 
-function SignedIn({autoFocus}: {autoFocus: boolean}): React.JSX.Element | null {
+function SignedIn({autoFocus, shared}: {autoFocus: boolean; shared: boolean}): React.JSX.Element | null {
   const {user, signOut} = useGitHubUser();
   const button = useRef<HTMLButtonElement>(null);
 
@@ -135,7 +160,9 @@ function SignedIn({autoFocus}: {autoFocus: boolean}): React.JSX.Element | null {
         </div>
       </div>
       <p className="rid-muted-note">
-        Your likes and comments in this browser carry this username.
+        {shared
+          ? 'Likes and comments are public: everyone sees them, under the GitHub account your token belongs to.'
+          : 'Your likes and comments in this browser carry this username.'}
       </p>
       <button ref={button} type="button" className="button button--secondary button--sm" onClick={signOut}>
         Sign out
@@ -144,8 +171,17 @@ function SignedIn({autoFocus}: {autoFocus: boolean}): React.JSX.Element | null {
   );
 }
 
-function TokenSection(): React.JSX.Element {
+function TokenSection({
+  defaultOpen,
+  autoFocus,
+  shared,
+}: {
+  defaultOpen: boolean;
+  autoFocus: boolean;
+  shared: boolean;
+}): React.JSX.Element {
   const {token, setToken} = useGitHubUser();
+  const [expanded, setExpanded] = useState(defaultOpen);
   const [value, setValue] = useState('');
   const [message, setMessage] = useState<{text: string; error: boolean} | null>(null);
   const inputId = useId();
@@ -166,6 +202,12 @@ function TokenSection(): React.JSX.Element {
       setFocusNext(null);
     }
   }, [token, focusNext]);
+  useEffect(() => {
+    if (autoFocus) {
+      setExpanded(true);
+      inputRef.current?.focus();
+    }
+  }, [autoFocus]);
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -189,13 +231,30 @@ function TokenSection(): React.JSX.Element {
   };
 
   return (
-    <details className={clsx(styles.section, styles.token)}>
+    <details
+      className={clsx(styles.section, styles.token)}
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}>
       <summary className={styles.tokenSummary}>
-        GitHub token <span className={styles.tokenState}>{token ? 'saved' : 'optional'}</span>
+        GitHub token{' '}
+        <span className={styles.tokenState}>
+          {token ? 'saved' : shared ? 'needed to like and comment' : 'optional'}
+        </span>
       </summary>
       <p id={noteId} className="rid-muted-note">
-        Used only for the blog editor&apos;s &ldquo;Open pull request&rdquo; and for higher GitHub API rate
-        limits. It is kept in this browser on this device only and is sent nowhere but api.github.com.
+        {shared ? (
+          <>
+            Needed to like and comment; also used for the blog editor&apos;s &ldquo;Open pull request&rdquo; and
+            for higher GitHub API rate limits. It is kept in this browser on this device only. It is used for
+            api.github.com, and sent to this site&apos;s /api/community only to confirm your login; it is never
+            stored there.
+          </>
+        ) : (
+          <>
+            Used only for the blog editor&apos;s &ldquo;Open pull request&rdquo; and for higher GitHub API rate
+            limits. It is kept in this browser on this device only and is sent nowhere but api.github.com.
+          </>
+        )}
       </p>
       {token ? (
         <div className={styles.inputRow}>
@@ -239,7 +298,9 @@ function TokenSection(): React.JSX.Element {
         <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer">
           Create a token on GitHub
         </a>
-        . Remove it here on a shared computer.
+        .{' '}
+        {shared && 'To like and comment, a fine-grained token with only public, read-only access is enough. '}
+        Remove it here on a shared computer.
       </p>
     </details>
   );

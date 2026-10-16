@@ -678,7 +678,7 @@ describe('createIndexedDbStore', () => {
 });
 
 describe('createCommunityStore', () => {
-  test('unknown kinds throw (where a remote adapter will plug in)', () => {
+  test("kinds other than 'browser' and 'shared' throw", () => {
     assert.throws(() => createCommunityStore({kind: 'remote'}), {message: 'unknown community store: remote'});
     assert.throws(() => createCommunityStore({kind: 'memory'}), {message: 'unknown community store: memory'});
   });

@@ -3,13 +3,15 @@
 // The visitor types a GitHub username; the site reads that account's PUBLIC
 // profile from https://api.github.com/users/<login> and keeps
 // {login, name, avatarUrl, htmlUrl} in localStorage, so it survives a reload.
-// There is no password, no OAuth and no backend: it is not authentication,
-// it only labels likes and comments in this browser.
+// There is no password and no OAuth: the username alone is not
+// authentication.
 //
 // An optional GitHub token can be kept too (localStorage, this device only).
-// It is used only for the blog editor's "Open pull request" and for higher
-// GitHub API rate limits, and src/lib/github.mjs sends it to api.github.com
-// only.
+// It is used for the blog editor's "Open pull request" and for higher GitHub
+// API rate limits (src/lib/github.mjs sends it to api.github.com), and, with
+// the shared community store, it is sent with each like or comment to this
+// site's own /api/community, which checks it with GitHub to learn the
+// visitor's login and never stores it. Nothing else receives it.
 //
 // SSR-safe: localStorage is read in an effect after mount, so the server and
 // the first client render both start signed out (status 'loading').
@@ -50,13 +52,17 @@ export type GitHubUserContextValue = {
   /** Reads the public profile of `login` and keeps it. Never rejects. */
   signIn: (login: string) => Promise<SignInResult>;
   signOut: () => void;
-  /** The optional GitHub token, or null. Only send it to api.github.com. */
+  /** The optional GitHub token, or null. Only send it to api.github.com and this site's /api/community. */
   token: string | null;
   /** Saves the token on this device (trimmed); null or '' removes it. Returns false for a malformed token. */
   setToken: (token: string | null) => boolean;
   status: GitHubUserStatus;
   /** Key for likes and comment ownership: the login, or 'guest' when signed out. */
   userKey: string;
+  /** Goes up by one each time requestAccountMenu() is called (the navbar item opens its menu). */
+  accountMenuRequest: number;
+  /** Asks the navbar account item to open its menu with the token field shown. */
+  requestAccountMenu: () => void;
 };
 
 /** Printable ASCII, no spaces: what a GitHub token looks like. */
@@ -76,6 +82,8 @@ const DEFAULT_VALUE: GitHubUserContextValue = {
   setToken: () => false,
   status: 'loading',
   userKey: GUEST,
+  accountMenuRequest: 0,
+  requestAccountMenu: () => {},
 };
 
 const GitHubUserContext = createContext<GitHubUserContextValue>(DEFAULT_VALUE);
@@ -159,6 +167,7 @@ export function GitHubUserProvider({children}: {children: ReactNode}): React.JSX
   const [token, setTokenState] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [pending, setPending] = useState(0);
+  const [accountMenuRequest, setAccountMenuRequest] = useState(0);
   // Only the latest signIn() call may change the user.
   const latestRequest = useRef(0);
 
@@ -227,6 +236,10 @@ export function GitHubUserProvider({children}: {children: ReactNode}): React.JSX
     return true;
   }, []);
 
+  const requestAccountMenu = useCallback(() => {
+    setAccountMenuRequest((count) => count + 1);
+  }, []);
+
   const status: GitHubUserStatus = !loaded
     ? 'loading'
     : pending > 0
@@ -244,8 +257,10 @@ export function GitHubUserProvider({children}: {children: ReactNode}): React.JSX
       setToken,
       status,
       userKey: user ? user.login : GUEST,
+      accountMenuRequest,
+      requestAccountMenu,
     }),
-    [user, signIn, signOut, token, setToken, status],
+    [user, signIn, signOut, token, setToken, status, accountMenuRequest, requestAccountMenu],
   );
 
   return <GitHubUserContext.Provider value={value}>{children}</GitHubUserContext.Provider>;
