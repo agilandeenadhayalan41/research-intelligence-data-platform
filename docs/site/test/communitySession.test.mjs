@@ -10,7 +10,8 @@
 // Covered: a GitHub sign-in that ends with the rid_session cookie, then a like
 // and a comment carried by that cookie alone (no token: the author is the
 // verified GitHub user), the browser-side shared store doing the same, a guest
-// write, cross-site cookie writes refused (and nothing written), and Sign out.
+// write, cross-site cookie writes and guest-only writes that still carry the
+// cookie refused (and nothing written), and Sign out.
 
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
@@ -35,7 +36,7 @@ const CLIENT_SECRET = 'fake-client-secret-for-tests-not-real';
 const OAUTH_CODE = 'fake-oauth-code-carol';
 // What GitHub's token endpoint hands the callback; the fake /user knows it.
 const OAUTH_TOKEN = 'fake-oauth-access-token-carol';
-const CAROL = Object.freeze({login: 'carol', name: 'Carol Example', avatar_url: 'https://avatars.example.test/u/3'});
+const CAROL = Object.freeze({login: 'carol', id: 3003, name: 'Carol Example', avatar_url: 'https://avatars.example.test/u/3'});
 
 const realFetch = globalThis.fetch;
 const github = createFakeGitHub({users: {...DEFAULT_USERS, [OAUTH_TOKEN]: CAROL}});
@@ -204,7 +205,8 @@ describe('GitHub sign-in and the shared likes and comments, over HTTP', () => {
     assert.ok(sessionCookie, 'signed in by the previous test');
     const before = github.requests.length;
 
-    const liked = await write({action: 'like', page: API_PAGE}, {cookie: sessionCookie, guestId: GUEST_A});
+    // The site names the session's user in every session write (login).
+    const liked = await write({action: 'like', page: API_PAGE, login: 'carol'}, {cookie: sessionCookie, guestId: GUEST_A});
     assert.equal(liked.status, 200, JSON.stringify(liked.json));
     assert.deepEqual(liked.json.likes, {count: 1, likedBy: ['carol'], liked: true});
 
@@ -229,10 +231,11 @@ describe('GitHub sign-in and the shared likes and comments, over HTTP', () => {
     // What was committed names carol (and keeps no guest key for her).
     const saved = github.readJson(BRANCH, FILE);
     assert.deepEqual(
-      saved.likes.map(({login, guestKey}) => ({login, guestKey})),
-      [{login: 'carol', guestKey: undefined}],
+      saved.likes.map(({login, userId, guestKey}) => ({login, userId, guestKey})),
+      [{login: 'carol', userId: 3003, guestKey: undefined}],
     );
     assert.equal(saved.comments[0].login, 'carol');
+    assert.equal(saved.comments[0].userId, 3003, "the GitHub id from the session, so a renamed login cannot take over carol's");
     assert.equal(saved.comments[0].name, 'Carol Example');
     assert.equal(saved.comments[0].guestKey, undefined);
 
@@ -253,6 +256,21 @@ describe('GitHub sign-in and the shared likes and comments, over HTTP', () => {
     );
     assert.equal(refused.status, 403);
     assert.equal(refused.json.error, 'you are signed in as @carol');
+  });
+
+  test('a guest write (no login) that still carries a live cookie is refused, not published as the GitHub user', async () => {
+    clientIp = '198.51.100.9';
+    const commits = github.history(BRANCH).length;
+    for (const body of [
+      {action: 'like', page: API_PAGE},
+      {action: 'comment', page: API_PAGE, body: 'Meant to be anonymous.'},
+    ]) {
+      const refused = await write(body, {cookie: sessionCookie, guestId: GUEST_B});
+      assert.equal(refused.status, 403, body.action);
+      assert.equal(refused.json.error, 'you are signed in as @carol');
+    }
+    assert.equal(github.history(BRANCH).length, commits, 'no commit');
+    assert.equal(github.readJson(BRANCH, FILE).comments.some((item) => item.body === 'Meant to be anonymous.'), false);
   });
 
   test("the site's shared store, signed in: likes and comments as the session's user", async () => {
@@ -295,8 +313,12 @@ describe('GitHub sign-in and the shared likes and comments, over HTTP', () => {
     assert.deepEqual(commented.json.comment.author, {login: null, name: 'Guest', avatarUrl: null});
     assert.equal(commented.json.comment.canDelete, true);
     // carol cannot delete the guest's comment; the guest can.
-    const notHers = await write({action: 'delete', page: API_PAGE, id: commented.json.comment.id}, {cookie: sessionCookie});
+    const notHers = await write(
+      {action: 'delete', page: API_PAGE, id: commented.json.comment.id, login: 'carol'},
+      {cookie: sessionCookie},
+    );
     assert.equal(notHers.status, 403);
+    assert.equal(notHers.json.error, 'you can only delete your own comments');
     const own = await write({action: 'delete', page: API_PAGE, id: commented.json.comment.id}, {guestId: GUEST_B});
     assert.equal(own.status, 200);
     assert.equal(own.json.comments.some((item) => item.id === commented.json.comment.id), false);

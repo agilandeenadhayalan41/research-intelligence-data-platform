@@ -19,10 +19,17 @@ export const SERVER_TOKEN = 'fake-server-token-for-tests';
 export const ALICE_TOKEN = 'fake-visitor-token-alice';
 export const BOB_TOKEN = 'fake-visitor-token-bob';
 
+// Each user has their own numeric id, as on GitHub (stable across renames).
+export const ALICE_ID = 1001;
+export const BOB_ID = 1002;
+
 export const DEFAULT_USERS = Object.freeze({
-  [ALICE_TOKEN]: {login: 'alice', name: 'Alice Example', avatar_url: 'https://avatars.example.test/u/1'},
-  [BOB_TOKEN]: {login: 'bob', name: '', avatar_url: 'http://insecure.example.test/bob.png'},
+  [ALICE_TOKEN]: {login: 'alice', id: ALICE_ID, name: 'Alice Example', avatar_url: 'https://avatars.example.test/u/1'},
+  [BOB_TOKEN]: {login: 'bob', id: BOB_ID, name: '', avatar_url: 'http://insecure.example.test/bob.png'},
 });
+
+/** A stable fake id for a user given without one. */
+const fakeIdOf = (login) => 2000 + Number.parseInt(createHash('sha256').update(login).digest('hex').slice(0, 6), 16);
 
 const gitSha = (kind, text) =>
   createHash('sha1').update(`${kind} ${Buffer.byteLength(text)}\0${text}`).digest('hex');
@@ -30,7 +37,7 @@ const gitSha = (kind, text) =>
 /**
  * @param {{
  *   owner?: string, repo?: string, serverToken?: string,
- *   users?: Record<string, {login: string, name?: string, avatar_url?: string}>,
+ *   users?: Record<string, {login: string, id?: number, name?: string, avatar_url?: string}>,
  *   largeFileBytes?: number,
  * }} [options]
  */
@@ -137,7 +144,12 @@ export function createFakeGitHub({
       }
       const token = /^Bearer (.+)$/.exec(init.headers.Authorization)[1];
       const user = users[token];
-      return respond(200, {login: user.login, id: 1, name: user.name ?? null, avatar_url: user.avatar_url});
+      return respond(200, {
+        login: user.login,
+        id: user.id ?? fakeIdOf(user.login),
+        name: user.name ?? null,
+        avatar_url: user.avatar_url,
+      });
     }
 
     const prefix = `/repos/${owner}/${repo}`;

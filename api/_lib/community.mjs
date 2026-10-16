@@ -18,8 +18,14 @@
 //   api/community.mjs wires in; null by default), else a GitHub token as
 //   `Authorization: Bearer <token>`, which is only used to call
 //   GET https://api.github.com/user to learn the login and is never stored,
-//   logged or sent anywhere else. Names never come from the request body. The
-//   write is made with the server's own token (COMMUNITY_GITHUB_TOKEN).
+//   logged or sent anywhere else. Names never come from the request body; a
+//   session write must name the session's login (`login`), so a write the
+//   page made as a guest is never published under a cookie's account. A
+//   user's likes and comments keep the GitHub numeric id too, which decides
+//   ownership when a login changes hands. The write is made with the
+//   server's own token (COMMUNITY_GITHUB_TOKEN).
+// - Reads that miss the cache are limited per instance (GITHUB_READ_LIMIT),
+//   so made-up page ids cannot spend the server token's GitHub quota.
 // - Storage: one file per page, community/pages/<32 hex of sha256(pageId)>.json,
 //   on the branch community-data (an orphan branch, created on the first
 //   write). Every write is a commit made through the contents API with the
@@ -61,6 +67,13 @@ export const WRITE_LIMIT = Object.freeze({max: 20, windowMs: 10 * 60 * 1000});
 /** Guest writes, per client IP and guest id (on top of WRITE_LIMIT). */
 export const GUEST_WRITE_LIMIT = Object.freeze({max: 10, windowMs: 10 * 60 * 1000});
 export const READ_LIMIT = Object.freeze({max: 120, windowMs: 60 * 1000});
+/**
+ * Page reads that miss the cache and go to GitHub, per function instance,
+ * whoever asks (one GitHub call each, on the server token's 5,000 an hour).
+ * Made-up page ids all miss the cache, so without this one client could spend
+ * the token's whole quota and stop the site for everyone.
+ */
+export const GITHUB_READ_LIMIT = Object.freeze({max: 30, windowMs: 60 * 1000});
 /** Retries after a write conflict (so at most MAX_RETRIES + 1 attempts). */
 export const MAX_RETRIES = 4;
 
@@ -75,6 +88,7 @@ export const GUEST_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-
 /** Display name of every guest. */
 export const GUEST_NAME = 'Guest';
 export const BUSY_ERROR = 'busy, try again';
+export const READ_BUSY_ERROR = 'too many pages are being read right now, try again shortly';
 export const NOT_CONFIGURED_ERROR = 'shared likes and comments are not configured on this deployment';
 
 /** Passed as `body` by createNodeHandler when the request body was over BODY_MAX_BYTES. */
@@ -148,10 +162,11 @@ export const BRANCH_VERCEL_JSON = `${JSON.stringify({git: {deploymentEnabled: fa
  */
 
 /**
- * A user's like is {login, at}; a guest's is {login: null, guestKey, at}.
+ * A user's like is {login, userId?, at}; a guest's is {login: null, guestKey, at}.
  *
  * @typedef {object} StoredLike
  * @property {string | null} login GitHub login, or null for a guest.
+ * @property {number} [userId] Users only: the GitHub numeric id (stable across renames), when known.
  * @property {string} [guestKey] Guests only: guestKeyOf(the guest id), never the id itself.
  * @property {string} at ISO 8601.
  */
@@ -162,6 +177,7 @@ export const BRANCH_VERCEL_JSON = `${JSON.stringify({git: {deploymentEnabled: fa
  * @typedef {object} StoredComment
  * @property {string} id
  * @property {string | null} login GitHub login, or null for a guest.
+ * @property {number} [userId] Users only: the GitHub numeric id, when known.
  * @property {string} name
  * @property {string} [guestKey] Guests only: guestKeyOf(the guest id).
  * @property {string | null} avatarUrl
@@ -175,7 +191,7 @@ export const BRANCH_VERCEL_JSON = `${JSON.stringify({git: {deploymentEnabled: fa
  * @typedef {object} PageFile
  * @property {1} version
  * @property {string} pageId
- * @property {StoredLike[]} likes Unique by login, oldest first.
+ * @property {StoredLike[]} likes Unique by user (id, else login) or guest key, oldest first.
  * @property {StoredComment[]} comments Oldest first.
  */
 
@@ -184,6 +200,7 @@ export const BRANCH_VERCEL_JSON = `${JSON.stringify({git: {deploymentEnabled: fa
  *
  * @typedef {object} Viewer
  * @property {string} login
+ * @property {number | null} id GitHub numeric id (stable across renames), when known.
  * @property {string} name
  * @property {string | null} avatarUrl
  */
@@ -193,6 +210,7 @@ export const BRANCH_VERCEL_JSON = `${JSON.stringify({git: {deploymentEnabled: fa
  *
  * @typedef {object} SessionUser
  * @property {string} login
+ * @property {number | null} [id] GitHub numeric id.
  * @property {string | null} [name]
  * @property {string | null} [avatarUrl]
  * @property {string | null} [htmlUrl]
@@ -309,11 +327,21 @@ export function normalizePageFile(raw, pageId) {
   const seen = new Set();
   for (const like of Array.isArray(value.likes) ? value.likes : []) {
     const owner = ownerOf(like);
-    const key = owner && (owner.login ?? `guest:${owner.guestKey}`);
+    const key =
+      owner &&
+      (owner.login
+        ? owner.userId !== null
+          ? `id:${owner.userId}`
+          : `login:${owner.login.toLowerCase()}`
+        : `guest:${owner.guestKey}`);
     if (owner && key && !seen.has(key)) {
       seen.add(key);
       const at = typeof like.at === 'string' ? like.at : '';
-      likes.push(owner.login ? {login: owner.login, at} : {login: null, guestKey: owner.guestKey, at});
+      likes.push(
+        owner.login
+          ? {login: owner.login, ...userIdField(owner.userId), at}
+          : {login: null, guestKey: /** @type {string} */ (owner.guestKey), at},
+      );
     }
   }
   /** @type {StoredComment[]} */
@@ -333,6 +361,7 @@ export function normalizePageFile(raw, pageId) {
           ? {
               id,
               login: owner.login,
+              ...userIdField(owner.userId),
               name: cleanName(comment.name) ?? owner.login,
               avatarUrl: httpsUrl(comment.avatarUrl),
               body: comment.body,
@@ -354,27 +383,68 @@ export function normalizePageFile(raw, pageId) {
 }
 
 /**
- * Whose a stored like or comment is: a valid login, or (login null) a valid
- * guest key. Anything else is dropped.
+ * Whose a stored like or comment is: a valid login (with the GitHub numeric
+ * id when the record has one), or (login null) a valid guest key. Anything
+ * else is dropped.
  *
  * @param {any} record
- * @returns {{login: string, guestKey: null} | {login: null, guestKey: string} | null}
+ * @returns {{login: string, userId: number | null, guestKey: null} | {login: null, userId: null, guestKey: string} | null}
  */
 function ownerOf(record) {
   if (!record || typeof record !== 'object') {
     return null;
   }
   if (typeof record.login === 'string' && LOGIN_PATTERN.test(record.login)) {
-    return {login: record.login, guestKey: null};
+    return {login: record.login, userId: userIdOf(record.userId), guestKey: null};
   }
   if (
     (record.login === null || record.login === undefined) &&
     typeof record.guestKey === 'string' &&
     GUEST_KEY_PATTERN.test(record.guestKey)
   ) {
-    return {login: null, guestKey: record.guestKey};
+    return {login: null, userId: null, guestKey: record.guestKey};
   }
   return null;
+}
+
+/**
+ * A GitHub numeric user id, or null.
+ *
+ * @param {unknown} value
+ * @returns {number | null}
+ */
+function userIdOf(value) {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+/**
+ * `{userId}` to spread into a stored record, or nothing when the id is not
+ * known (older records, a resolver without ids).
+ *
+ * @param {number | null | undefined} userId
+ * @returns {{userId?: number}}
+ */
+function userIdField(userId) {
+  return typeof userId === 'number' ? {userId} : {};
+}
+
+/**
+ * Whether a stored user record is this user's. GitHub logins can change
+ * hands (an account is renamed, someone else registers the old name), so the
+ * numeric id decides when both sides have one; older records without an id
+ * fall back to the login, ignoring case as GitHub does.
+ *
+ * @param {{login: string | null, userId?: number}} record
+ * @param {Viewer} user
+ */
+function sameUser(record, user) {
+  if (typeof record.login !== 'string') {
+    return false;
+  }
+  if (typeof record.userId === 'number' && user.id !== null) {
+    return record.userId === user.id;
+  }
+  return record.login.toLowerCase() === user.login.toLowerCase();
 }
 
 /**
@@ -386,7 +456,7 @@ function ownerOf(record) {
  */
 function ownsLike(like, caller) {
   if (caller.user) {
-    return like.login === caller.user.login;
+    return sameUser(like, caller.user);
   }
   return caller.guestKey !== null && like.login === null && like.guestKey === caller.guestKey;
 }
@@ -399,7 +469,7 @@ function ownsLike(like, caller) {
  * @param {Caller} caller
  */
 function ownsComment(comment, caller) {
-  if (caller.user && comment.login === caller.user.login) {
+  if (caller.user && sameUser(comment, caller.user)) {
     return true;
   }
   return caller.guestKey !== null && comment.login === null && comment.guestKey === caller.guestKey;
@@ -509,6 +579,7 @@ export function createCommunityHandler({
   /** @type {Map<string, {expires: number, viewer: Viewer}>} */
   const loginCache = new Map();
   const readLimiter = createRateLimiter(READ_LIMIT);
+  const githubReadLimiter = createRateLimiter(GITHUB_READ_LIMIT);
   const writeLimiter = createRateLimiter(WRITE_LIMIT);
   const guestLimiter = createRateLimiter(GUEST_WRITE_LIMIT);
   /** @type {Promise<void> | null} */
@@ -676,15 +747,27 @@ export function createCommunityHandler({
     return {file, sha, corrupt: false};
   }
 
-  /** @param {string} pageId */
+  /**
+   * A page for a read: from the cache, else from GitHub while the instance's
+   * GITHUB_READ_LIMIT allows it. Past that limit, an expired copy is served
+   * when there is one, and otherwise the wait in ms is returned.
+   *
+   * @param {string} pageId
+   * @returns {Promise<{file: PageFile} | {wait: number}>}
+   */
   async function readCached(pageId) {
     const hit = pageCache.get(pageId);
-    if (hit && clock() - hit.at < READ_CACHE_MS) {
-      return hit.file;
+    const time = clock();
+    if (hit && time - hit.at < READ_CACHE_MS) {
+      return {file: hit.file};
+    }
+    const wait = githubReadLimiter.take('github', time);
+    if (wait > 0) {
+      return hit ? {file: hit.file} : {wait};
     }
     const {file} = await readPage(pageId);
     remember(pageId, file);
-    return file;
+    return {file};
   }
 
   /** @param {string} pageId @param {PageFile} file */
@@ -717,7 +800,7 @@ export function createCommunityHandler({
       throw new GitHubFailure('verify', response.status);
     }
     const data = response.data ?? {};
-    const viewer = toViewer({login: data.login, name: data.name, avatarUrl: data.avatar_url});
+    const viewer = toViewer({login: data.login, id: data.id, name: data.name, avatarUrl: data.avatar_url});
     if (!viewer) {
       return null;
     }
@@ -828,7 +911,15 @@ export function createCommunityHandler({
       log('session lookup failed on a read');
     }
     const caller = {user, guestKey: isGuestId(guestId) ? guestKeyOf(/** @type {string} */ (guestId)) : null};
-    return reply(200, pageView(page, await readCached(page), caller));
+    const read = await readCached(page);
+    if ('wait' in read) {
+      return reply(
+        503,
+        {configured: true, error: READ_BUSY_ERROR},
+        {'Retry-After': String(Math.max(1, Math.ceil(read.wait / 1000)))},
+      );
+    }
+    return reply(200, pageView(page, read.file, caller));
   }
 
   /**
@@ -903,9 +994,18 @@ export function createCommunityHandler({
     if (!user && guestKey === null) {
       return badRequest(GUEST_ID_ERROR);
     }
-    // The site's username sign-in is only typed: when the browser says who it
-    // thinks it is, it must be the verified user. (A guest's `login` is ignored.)
-    if (user && typeof parsed.login === 'string' && parsed.login.toLowerCase() !== user.login.toLowerCase()) {
+    // When the browser says who it thinks it is, it must be the verified user
+    // (the typed username is never verified). A session write must say it:
+    // the cookie is sent whatever the page believes, so a write the page made
+    // as a guest (after a sign-out that did not reach the server, say) is
+    // refused rather than published under the GitHub account. (A guest's
+    // `login` is ignored.)
+    const named = typeof parsed.login === 'string' ? parsed.login : null;
+    if (
+      user &&
+      (named !== null || source === 'session') &&
+      (named === null || named.toLowerCase() !== user.login.toLowerCase())
+    ) {
       return reply(403, {
         configured: true,
         error:
@@ -932,7 +1032,9 @@ export function createCommunityHandler({
             return {changed: false};
           }
           file.likes.push(
-            actor ? {login: actor.login, at: isoNow()} : {login: null, guestKey: actorGuestKey, at: isoNow()},
+            actor
+              ? {login: actor.login, ...userIdField(actor.id), at: isoNow()}
+              : {login: null, guestKey: actorGuestKey, at: isoNow()},
           );
           return {changed: true};
         });
@@ -951,7 +1053,15 @@ export function createCommunityHandler({
         const createdAt = isoNow();
         /** @type {StoredComment} */
         const comment = actor
-          ? {id: commentId, login: actor.login, name: actor.name, avatarUrl: actor.avatarUrl, body: text, createdAt}
+          ? {
+              id: commentId,
+              login: actor.login,
+              ...userIdField(actor.id),
+              name: actor.name,
+              avatarUrl: actor.avatarUrl,
+              body: text,
+              createdAt,
+            }
           : {id: commentId, login: null, name: GUEST_NAME, guestKey: actorGuestKey, avatarUrl: null, body: text, createdAt};
         const extra = () => ({comment: commentView(page, comment, caller)});
         return write(page, caller, action, (file) => {
@@ -1170,20 +1280,21 @@ function tooManyRequests(waitMs) {
 }
 
 /**
- * A checked user from GitHub or from the session resolver, or null.
+ * A checked user from GitHub or from the session resolver, or null. `id` (the
+ * GitHub numeric id) is kept when it is a positive integer, else null.
  *
- * @param {unknown} value {login, name?, avatarUrl?}
+ * @param {unknown} value {login, id?, name?, avatarUrl?}
  * @returns {Viewer | null}
  */
 function toViewer(value) {
   if (!value || typeof value !== 'object') {
     return null;
   }
-  const {login, name, avatarUrl} = /** @type {Record<string, unknown>} */ (value);
+  const {login, id, name, avatarUrl} = /** @type {Record<string, unknown>} */ (value);
   if (typeof login !== 'string' || !LOGIN_PATTERN.test(login)) {
     return null;
   }
-  return {login, name: cleanName(name) ?? login, avatarUrl: httpsUrl(avatarUrl)};
+  return {login, id: userIdOf(id), name: cleanName(name) ?? login, avatarUrl: httpsUrl(avatarUrl)};
 }
 
 /**

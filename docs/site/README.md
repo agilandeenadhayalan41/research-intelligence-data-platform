@@ -77,6 +77,11 @@ npm test          # unit tests for src/lib and api/, including the MDX compile o
 
 `npm run serve -- --port 3077` serves on another port.
 
+CI (the `site` job in `.github/workflows/tests.yml`) runs `npm test` and
+`npm run typecheck` on every push and pull request, so the unit tests of the
+`api/` functions Vercel deploys gate every change; Vercel itself runs only
+`npm run build`.
+
 The build reads `git log` for the page history, so run it inside a git
 checkout. Outside one (or when git is missing) it still succeeds; the
 "last updated" and contributor fields are then empty until the browser loads
@@ -401,9 +406,10 @@ not shared: they stay in the visitor's browser.
 **Guests come first.** Anyone can read, like and comment right away, without
 signing in. Under the comment box the page says "Commenting as a guest ·
 Sign in with GitHub to show your name" (the link goes to GitHub's sign-in and
-back to the page; where sign-in is not available it just says "Commenting as a
-guest"). Who a like or comment is from follows who the visitor is at that
-moment:
+back to the page; where sign-in is not available it offers "Show your GitHub
+name with a username and a token" instead, and just says "Commenting as a
+guest" when likes are kept in the browser). Who a like or comment is from
+follows who the visitor is at that moment:
 
 - **As a guest**, the browser makes a random id the first time it likes or
   comments (a UUID v4, kept in `localStorage` under
@@ -434,7 +440,11 @@ moment:
   this browser stay deletable after signing in.
 - Names never come from the request: the function ignores any name, login or
   avatar in the body of a guest write, and refuses (403) a write whose `login`
-  is not the verified user.
+  is not the verified user. A write carried by the session cookie must name
+  the signed-in login (the site always does): one sent as a guest (no
+  `login`) while the cookie is still valid, say after a sign-out that did not
+  reach the server, is refused (403 "you are signed in as @…") instead of
+  being published under the GitHub account.
 
 ### How shared storage works
 
@@ -493,8 +503,15 @@ browser ──GET  /api/community?page=/docs/x.md   X-Guest-Id: <uuid>  [Cookie:
   works only on your own comment: a user's by its login, a guest's by the same
   guest id (also sent along by a signed-in browser), 403 otherwise, 404 when it
   is gone. When the browser sends `login` (the signed-in username), it must be
-  the verified user, otherwise 403 "this token belongs to @…"; a guest's
-  `login`, `name` or `avatarUrl` in the body is ignored. The answer is the
+  the verified user, otherwise 403 "this token belongs to @…" (or "you are
+  signed in as @…"); a session write must send it, so a write the page made as
+  a guest while the cookie is still valid is refused (403) rather than
+  committed under the GitHub account; a guest's `login`, `name` or
+  `avatarUrl` in the body is ignored. A user's like and comment also store
+  the GitHub numeric id (`userId`, from the session or from GitHub's `/user`):
+  GitHub logins can change hands after a rename, so ownership (`liked`,
+  `canDelete`, unlike, delete) follows the id when both sides have one, and
+  the login, ignoring case, for older records without it. The answer is the
   page's new state, seen by the caller.
 - **Errors.** 400 for a bad page id (`^/[A-Za-z0-9/_.~%-]{0,300}$`), an unknown
   action, a comment that is not 1-5,000 characters after trimming, or a guest
@@ -503,10 +520,12 @@ browser ──GET  /api/community?page=/docs/x.md   X-Guest-Id: <uuid>  [Cookie:
   methods other than GET and POST; 409 when a page is full (1,000 comments, or
   a page file over 900,000 bytes); 413 for a body over 16 KB; 429 when rate
   limited (with `Retry-After`); 502 when GitHub cannot be reached; 503
-  `{configured: false}` without the server token, and 503 "busy, try again"
-  after repeated write conflicts. No message ever contains a token or a guest
-  id. The function sends no CORS headers: only the site itself can call it
-  from a browser.
+  `{configured: false}` without the server token, 503 "busy, try again"
+  after repeated write conflicts, and 503 with `Retry-After` when the
+  instance's page reads from GitHub are used up (see
+  [Rate limits and spam](#rate-limits-and-spam)). No message ever contains a
+  token or a guest id. The function sends no CORS headers: only the site
+  itself can call it from a browser.
 - **The page id.** The site's page id is the page's repository path
   (`docs/overview/introduction.md`, `docs/site/blog/<file>.md`); the API uses
   it with a leading slash (`/docs/overview/introduction.md`), other
@@ -521,10 +540,11 @@ the first write creates it as an **orphan branch** (no shared history with
 root `vercel.json` with `{"git": {"deploymentEnabled": false}}`. Vercel reads
 `vercel.json` from the pushed commit, not from `main`, so this copy is what
 keeps the branch's commits from starting deployments (any data branch the
-function creates gets it, including a separate Preview branch). The
-`community-data` entry under `git.deploymentEnabled` in `main`'s `vercel.json`
-stays as a second guard. The branch has no workflow files, so CI never runs on
-it (`.github/workflows/tests.yml` also lists it under `branches-ignore`).
+function creates gets it, including one in a separate repository used for
+previews). The `community-data` entry under `git.deploymentEnabled` in
+`main`'s `vercel.json` stays as a second guard. The branch has no workflow
+files, so CI never runs on it (`.github/workflows/tests.yml` also lists it
+under `branches-ignore`).
 
 One file per page, `community/pages/<id>.json`, where `<id>` is the first 32
 hex characters of the SHA-256 of the API page id:
@@ -534,13 +554,14 @@ hex characters of the SHA-256 of the API page id:
   "version": 1,
   "pageId": "/docs/overview/introduction.md",
   "likes": [
-    {"login": "octocat", "at": "2026-10-16T12:00:00.000Z"},
+    {"login": "octocat", "userId": 583231, "at": "2026-10-16T12:00:00.000Z"},
     {"login": null, "guestKey": "3f9c0a7d51e2b864", "at": "2026-10-16T12:05:00.000Z"}
   ],
   "comments": [
     {
       "id": "6f1c…",
       "login": "octocat",
+      "userId": 583231,
       "name": "The Octocat",
       "avatarUrl": "https://avatars.githubusercontent.com/u/583231?v=4",
       "body": "Clear and useful, thanks.",
@@ -561,9 +582,10 @@ hex characters of the SHA-256 of the API page id:
 
 A guest entry has `login: null` and a `guestKey` (16 hex characters of the
 SHA-256 of the browser's random guest id; the id itself is never written).
-Likes are unique by login or guest key; comments are oldest first. The format
-only gained the guest fields, so files written before guests existed read
-unchanged. Every update goes
+A user entry has the login and, when known, the GitHub numeric `userId`.
+Likes are unique by user (id, else login) or guest key; comments are oldest
+first. The format only gained the guest fields and `userId`, so files written
+before them read unchanged. Every update goes
 through the contents API with the file's `sha` (compare and swap): when
 someone else changed the file first (409 or 422), the function reads it again
 and retries up to 4 times with a small random pause, then answers 503
@@ -588,8 +610,15 @@ printf '%s' '/docs/overview/introduction.md' | sha256sum | cut -c1-32
    (Metadata read-only is added automatically). Nothing else. Give it an
    expiry date.
 2. In the Vercel project, **Settings > Environment Variables**, add
-   `COMMUNITY_GITHUB_TOKEN` with that token for **Production** and
-   **Preview**. Optional: `COMMUNITY_REPO` (default
+   `COMMUNITY_GITHUB_TOKEN` with that token for **Production only**, never
+   for Preview. A preview runs the pull request's own code with the Preview
+   variables (its `api/` functions, its build scripts, and every post's MDX,
+   which is compiled at build time), and anyone can open a pull request from
+   a fork (the blog's editor and **Delete** do exactly that), so a token in
+   Preview is a token that can write to every branch of the repository,
+   `main` included, handed to whoever's pull request gets a preview.
+   Previews then answer 503 `{configured: false}` and keep likes and comments
+   in the browser. Optional: `COMMUNITY_REPO` (default
    `agilandeenadhayalan41/research-intelligence-data-platform`),
    `COMMUNITY_DATA_BRANCH` (default `community-data`; `main` and `master` are
    refused) and `COMMUNITY_DATA_DIR` (default `community`).
@@ -599,10 +628,13 @@ printf '%s' '/docs/overview/introduction.md' | sha256sum | cut -c1-32
    at once, create a new one and update the Vercel variable. Rotate it before
    it expires.
 
-Preview deployments write to the same branch as production when they share
-the variables, so testing a pull request's preview adds real likes and
-comments; set `COMMUNITY_DATA_BRANCH` to another branch for Preview to keep
-them apart.
+To try shared likes and comments on previews, use a **separate** token
+limited to a **separate** repository (or a fork used only for this), and set
+it with `COMMUNITY_REPO` for Preview; never put the production token in
+Preview, and never authorize a fork's pull request preview (Vercel asks for
+that) while any write token is in Preview. As a second guard, a branch
+ruleset on `main` (pull requests required, no direct pushes) keeps a leaked
+token from changing `main` directly.
 
 ### Without the server token (and with `npm start`)
 
@@ -611,7 +643,8 @@ The browser asks `GET /api/community` once per visit. Unless it answers
 as before (IndexedDB, else `localStorage`, else memory), and says so: "Saved in
 this browser only. Other visitors do not see your likes and comments." That is
 what happens with `npm start` and `npm run serve` (no function runs there), on
-a deployment without `COMMUNITY_GITHUB_TOKEN`, and when the API cannot be
+a deployment without `COMMUNITY_GITHUB_TOKEN` (previews, see
+[Setup for maintainers](#setup-for-maintainers)), and when the API cannot be
 reached. Nothing is moved to the repository later.
 
 To try the function locally, run `vercel dev` from the repository root with the
@@ -627,12 +660,19 @@ In each function instance's memory (best effort), for guests and users alike:
   refused ones too), whoever makes it;
 - on top of that, **10 guest writes per 10 minutes per client IP and guest
   id**;
-- **120 reads per minute per client IP**.
+- **120 reads per minute per client IP**;
+- **30 page reads a minute from GitHub per instance**, whoever asks: only
+  reads the 20-second cache cannot answer count. Past that, a page the
+  instance has seen is served from its expired copy, and any other answers
+  503 with `Retry-After`. Any page id that matches the pattern is accepted
+  and each new one costs a GitHub call, so without this one client reading
+  made-up page ids could spend the server token's whole hourly quota and stop
+  likes and comments for everyone.
 
-Beyond that the function answers 429 with `Retry-After`. GitHub's own limits
-apply to the server token (5,000 requests an hour, and fewer for
-content-creating requests); when GitHub rate limits the function it answers
-503.
+Beyond the per-IP limits the function answers 429 with `Retry-After`.
+GitHub's own limits apply to the server token (5,000 requests an hour, and
+fewer for content-creating requests); when GitHub rate limits the function it
+answers 503.
 
 Guest writes make the site easy to use and also easy to spam: a guest id is
 free, so the per-IP limit is what really bounds one network, and the limits
@@ -665,8 +705,9 @@ read cache).
 
 ### Privacy
 
-Shared likes and comments are public: the login, display name and avatar URL
-from GitHub (or, for a guest, only "Guest" and the guest key), the comment
+Shared likes and comments are public: the login, numeric user id, display
+name and avatar URL from GitHub (or, for a guest, only "Guest" and the guest
+key), the comment
 text and the dates are committed to a public repository and stay in its
 history after a deletion. The guest id stays in the browser and goes only to
 this site's `/api/community`, which keeps only its hash and never returns it;
@@ -680,13 +721,14 @@ GitHub who they are and is never stored. Drafts never leave the browser.
 
 The sign-in and the shared likes and comments meet in `api/community.mjs`:
 `createCommunityHandler({resolveSessionUser})` takes
-`(request) => {login, name, avatarUrl, htmlUrl} | null` (sync or async; the
+`(request) => {login, id, name, avatarUrl, htmlUrl} | null` (sync or async; the
 request carries `method`, `query`, `headers`, `body` and `ip`) and tries it
 before the Bearer token, on reads too (for `liked` and `canDelete`), and the
 function wires it to `getSessionUser(request, process.env)`, which verifies
 the `rid_session` cookie (with `SESSION_SECRET`, or `SESSION_SECRET_PREVIOUS`
-after a rotation). What it returns is checked (a valid GitHub login, an https
-avatar, else ignored); the author of a write always comes from it or from
+after a rotation). What it returns is checked (a valid GitHub login, a
+positive numeric id or none, an https avatar, else ignored); the author of a
+write always comes from it or from
 GitHub, never from the request body. Guests keep working as they are: author
 `{login: null, name: 'Guest'}`, likes keyed by `guest:<guestKey>` from
 `X-Guest-Id`, deletion only with the same guest id, and the rate limits apply
@@ -700,13 +742,13 @@ a cross-site page could not have made it: its `Content-Type` must be
 none), `Sec-Fetch-Site` must not be `cross-site`, and an `Origin` header, when
 sent, must be this host (`X-Forwarded-Host`, else `Host`). The site's own
 writes meet all three. Guest and token writes need `X-Guest-Id` or
-`Authorization`, custom headers that already force a preflight. Set the
+`Authorization`, custom headers that already force a preflight. The
 session cookie is set with `SameSite=Lax` (and `HttpOnly`, `Secure`,
 `Path=/`) as a second layer. `test/communitySession.test.mjs` runs the real
 `api/community.mjs` and `api/auth/*` functions on a local HTTP server against
 a fake GitHub: a GitHub sign-in, then a like and a comment carried by the
-session cookie alone (the verified author), a guest write, and a cross-site
-cookie write refused. See also
+session cookie (the verified author), a guest write, and a cross-site cookie
+write and a guest-only write that still carries the cookie, both refused. See also
 [Privacy: what is stored where](#privacy-what-is-stored-where).
 
 ### The storage adapter
@@ -718,8 +760,8 @@ All three kinds of data go through one interface, `CommunityStore`, in
 
 | Method | Returns |
 | --- | --- |
-| `getLikes(pageId)` | `{count, likedBy}` |
-| `toggleLike(pageId, userKey)` | `{count, likedBy, liked?}`; `userKey` is the GitHub login, or `'guest'`. `liked` is set by the shared store for a guest (guests are not in `likedBy`) |
+| `getLikes(pageId)` | `{count, likedBy, liked?}` |
+| `toggleLike(pageId, userKey)` | `{count, likedBy, liked?}`; `userKey` is the GitHub login, or `'guest'`. `liked` is set by the shared store for a guest or a signed-in (session) user, whose like the API works out from the cookie or the guest id; with a token, look for the login in `likedBy` |
 | `listComments(pageId)` | comments, oldest first: `{id, pageId, author: {login, name, avatarUrl}, body, createdAt, canDelete?}` (`canDelete` from the shared API) |
 | `addComment(pageId, {author, body})` | the new comment; throws when the trimmed body is not 1-5000 characters |
 | `deleteComment(pageId, id, userKey)` | `true` when the comment was the user's and was deleted |
@@ -887,7 +929,7 @@ The editor writes a post in the browser, with a **live preview on the right**
 | Typed username (only where sign-in is not available), name, avatar URL, profile URL | `localStorage` | `api.github.com`: the username, to read the public profile |
 | GitHub token (optional) | `localStorage`, this device only | `api.github.com`, as the `Authorization` header; where GitHub sign-in is not available and a typed username is set, this site's `/api/community` with each like or comment, only to confirm the login (never stored there) |
 | Guest id (random UUID) | `localStorage` (`rid-community:v1:guest-id`), this browser only | This site's `/api/community` as `X-Guest-Id`, which keeps only a 16-hex SHA-256 prefix of it (the guest key) |
-| Likes and comments (shared store) | The `community-data` branch of this public repository: login, name, avatar URL (or "Guest" and the guest key), comment text, dates | Everyone: they are public, and stay in the branch history even after a deletion |
+| Likes and comments (shared store) | The `community-data` branch of this public repository: login, GitHub user id, name, avatar URL (or "Guest" and the guest key), comment text, dates | Everyone: they are public, and stay in the branch history even after a deletion |
 | Likes and comments (without the server token), editor drafts | IndexedDB (or `localStorage`, or memory) | Nowhere |
 | Page history from GitHub | `localStorage`, one hour per page (people only; no emails) | `api.github.com`: the page's file path, to read its commits |
 | Blog post sent with **Open pull request** | Not stored by the site | `api.github.com`, as a commit and a pull request |

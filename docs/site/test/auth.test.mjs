@@ -20,6 +20,7 @@ import {
   buildLoginUrl,
   fetchMe,
   getGuestId,
+  mustStaySignedIn,
   normalizeProfile,
   parseAccounts,
   parseMeResponse,
@@ -244,6 +245,24 @@ describe('parseMeResponse / fetchMe / requestSignOut', () => {
     assert.equal(await requestSignOut({fetchImpl: failing.fetchImpl}), false);
     const notFound = recordingFetch(() => new Response('', {status: 404}));
     assert.equal(await requestSignOut({fetchImpl: notFound.fetchImpl}), false);
+  });
+
+  test('a failed sign-out keeps the visitor signed in whenever the cookie may still be valid', () => {
+    const signedIn = {kind: 'signed-in', user: {...PROFILE}};
+    // Sign out clicked while availability was still 'checking': the awaited
+    // /api/auth/me answer confirmed the session, the page may not have
+    // re-rendered yet, and the sign-out POST failed.
+    assert.equal(mustStaySignedIn({ok: false, availability: 'checking', me: signedIn}), true);
+    assert.equal(mustStaySignedIn({ok: false, availability: 'available', me: undefined}), true);
+    assert.equal(mustStaySignedIn({ok: false, availability: 'available', me: {kind: 'signed-out', configured: true}}), true);
+    // No session cookie to keep in step: a local sign-out is fine.
+    assert.equal(mustStaySignedIn({ok: false, availability: 'checking', me: {kind: 'unreachable'}}), false);
+    assert.equal(mustStaySignedIn({ok: false, availability: 'unreachable', me: {kind: 'unreachable'}}), false);
+    assert.equal(mustStaySignedIn({ok: false, availability: 'not-configured', me: {kind: 'signed-out', configured: false}}), false);
+    // The server cleared the cookie.
+    for (const availability of ['checking', 'available', 'unreachable', 'not-configured']) {
+      assert.equal(mustStaySignedIn({ok: true, availability, me: signedIn}), false, availability);
+    }
   });
 });
 

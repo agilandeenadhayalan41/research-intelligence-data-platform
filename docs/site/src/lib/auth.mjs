@@ -391,7 +391,9 @@ export async function fetchMe({fetchImpl, timeoutMs = 8000} = {}) {
 
 /**
  * Asks the server to clear the session cookie. Resolves false when the
- * server could not be reached (the caller signs out locally anyway).
+ * server could not be reached; the caller then keeps the visitor signed in
+ * (where sign-in is available) and asks them to try again (see
+ * mustStaySignedIn).
  *
  * @param {{fetchImpl?: typeof fetch}} [options]
  * @returns {Promise<boolean>}
@@ -412,6 +414,24 @@ export async function requestSignOut({fetchImpl} = {}) {
   } catch {
     return false;
   }
+}
+
+/**
+ * After a sign-out request, whether the visitor must stay signed in here
+ * (and be asked to try again) instead of becoming a guest locally: the
+ * request failed and the session cookie may still be valid, because sign-in
+ * is available on this deployment or because /api/auth/me (awaited before
+ * the request) confirmed a session. Clearing the identity in the page while
+ * the cookie lives would make later "guest" writes travel with the cookie.
+ * Where sign-in is unreachable or not configured there is no cookie to keep
+ * in step, so a local sign-out is fine.
+ *
+ * @param {{ok: boolean, availability: string, me?: MeResult | null}} input
+ *   `availability` as the page knows it now; `me` the awaited /api/auth/me answer.
+ * @returns {boolean}
+ */
+export function mustStaySignedIn({ok, availability, me}) {
+  return !ok && (availability === 'available' || me?.kind === 'signed-in');
 }
 
 // ---------------------------------------------------------------------------

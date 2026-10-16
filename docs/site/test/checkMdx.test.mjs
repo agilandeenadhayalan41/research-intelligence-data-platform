@@ -37,6 +37,27 @@ describe('check-mdx: the real docs', () => {
     assert.deepEqual([...names, 'Details', 'Head'].sort(), [...GLOBAL_COMPONENTS].sort());
   });
 
+  test('src/theme/MDXComponents.tsx keeps the theme map, so img and mermaid stay the zoom wrappers', () => {
+    const source = readFileSync(path.join(SITE_DIR, 'src/theme/MDXComponents.tsx'), 'utf8');
+    assert.match(source, /^import MDXComponentsOriginal from '@theme-original\/MDXComponents';$/m);
+    const registered = /const MDXComponents = \{([\s\S]*?)\};/.exec(source)?.[1] ?? '';
+    const entries = registered
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    assert.equal(entries[0], '...MDXComponentsOriginal,', 'the theme map comes first; the rest only adds to it');
+    for (const entry of entries.slice(1)) {
+      // Capitalized shorthand entries only: never `img`, `mermaid` or another
+      // replacement of a theme entry.
+      assert.match(entry, /^[A-Z]\w*,$/, entry);
+      assert.notEqual(entry, 'Mermaid,');
+    }
+    // The theme map's img and mermaid entries resolve to this site's zoom wrappers.
+    for (const wrapper of ['src/theme/MDXComponents/Img/index.tsx', 'src/theme/Mermaid/index.tsx']) {
+      assert.match(readFileSync(path.join(SITE_DIR, wrapper), 'utf8'), /Zoom/, wrapper);
+    }
+  });
+
   test('new blog posts from the editor template compile', async () => {
     for (const format of ['md', 'mdx']) {
       const source = newPostTemplate({title: 'A post', format, date: '2026-10-16'});

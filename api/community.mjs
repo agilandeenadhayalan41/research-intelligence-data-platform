@@ -6,7 +6,9 @@
 // docs/site/test). Settings, read from the environment on the first request:
 //
 //   COMMUNITY_GITHUB_TOKEN  required, server only: a fine-grained token for
-//                           this repository with Contents read and write
+//                           this repository with Contents read and write.
+//                           Production only, never Preview: a preview runs a
+//                           pull request's own code (docs/site/README.md)
 //   COMMUNITY_REPO          default agilandeenadhayalan41/research-intelligence-data-platform
 //   COMMUNITY_DATA_BRANCH   default community-data (never main)
 //   COMMUNITY_DATA_DIR      default community

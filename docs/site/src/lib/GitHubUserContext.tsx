@@ -57,6 +57,7 @@ import {
   USER_STORAGE_KEY,
   buildLoginUrl,
   fetchMe,
+  mustStaySignedIn,
   parseAccounts,
   parseStoredProfile,
   readAuthHash,
@@ -394,9 +395,12 @@ export function GitHubUserProvider({children}: {children: ReactNode}): React.JSX
       // for the signed-in user).
       // A late /api/auth/me answer could re-issue the cookie after the clear:
       // let it land first (fetchMe never rejects and gives up after 8 s).
-      await mePromise.current?.catch(() => undefined);
+      // Decide from that answer, not from `mode`: a click while the check
+      // was still running must not end in a local-only sign-out that leaves
+      // a valid cookie behind.
+      const me = await mePromise.current?.catch(() => undefined);
       const ok = await requestSignOut();
-      if (!ok && mode === 'available') {
+      if (mustStaySignedIn({ok, availability: availabilityRef.current, me})) {
         show('error', 'Could not sign out: the site could not be reached. Try again.');
         return;
       }

@@ -47,13 +47,14 @@ the footer) runs in your browser:
      request.
    - **Open pull request** commits the post to a new branch and opens a pull
      request against `main` for you. It needs a GitHub token, which you can
-     add in the sign-in menu at the right of the navigation bar. If you
-     cannot push to the repository, the editor forks it and opens the pull
-     request from your fork.
+     add in the account menu at the right of the navigation bar (the arrow
+     next to Sign in, or your avatar). If you cannot push to the repository,
+     the editor forks it and opens the pull request from your fork.
 
 Drafts are saved automatically, in this browser only, and you can reopen them
-from the editor later. The GitHub token is kept on this device only and is
-sent nowhere but the GitHub API.
+from the editor later. The GitHub token is kept on this device only. It is
+used with the GitHub API and, only where GitHub sign-in is not available, to
+confirm your name on likes and comments.
 
 ## Write a post in a pull request
 
@@ -84,6 +85,6 @@ the pull request is merged.
 ## Likes and comments
 
 Each post has a like button and comments, like the doc pages. They are shared
-with everyone and saved in this site's GitHub repository. Anyone can read
-them; to like or comment, sign in from the navbar and add a GitHub token in
-the account menu, so the site can check your GitHub account.
+with everyone and saved in this site's GitHub repository. Anyone can like and
+comment right away as a guest; sign in with GitHub (navbar, right) to show
+your GitHub name. No token is needed for that.
