@@ -17,15 +17,15 @@ The issue's stop rule ("If approval, data sample or cloud permission is missing,
 - **Covered:** GCP_SANDBOX, DEV and QA, each as one enterprise-managed project. PROD is requested only when DE-27 ([#148]) can show the QA to PROD gate ([ADR 0001 D3](../adr/0001-gcp-architecture-and-service-selection.md#d3-data-location-and-environment-isolation)), and LOCAL is not an enterprise environment.
 - **Recorded here:** for each fact, its state, the answer for a decision, and the #125 comment that records the approval with its date; for each role, whether a holder is assigned. Resources are named only by role: the Bronze bucket, the Silver bucket, the analytical dataset `openalex`, and the identity classes of ADR 0001 D11.
 - **Never recorded here:** project IDs or numbers; organization, folder or billing-account IDs; bucket names; identity, group or person names; account handles; emails; network names; IP ranges; run IDs; amounts or prices. The repository and its docs site are public.
-- **Where real identifiers live:** once the Cloud platform owner provisions an enterprise project, its identifiers go to the per-environment configuration that DE-13 ([#134]) defines, reached through the symbolic names already in use (`GOOGLE_CLOUD_PROJECT`, `GCS_BUCKET`, `BIGQUERY_DATASET`) and supplied at deploy time through the DE-27 ([#148]) protected GitHub environments and DE-23 ([#144]) Secret Manager references.
-- **Amounts:** budget and spend-cap amounts, quota values, per-query caps and instance limits are not published in this repository; they are held by the Cloud platform owner, and DE-26 ([#147]) sets the values ([ADR 0001 D13](../adr/0001-gcp-architecture-and-service-selection.md#d13-observability-and-cost-guardrails)). This inventory records only that a budget and a spend cap are approved, which is how the ADR's "budget amounts" input is answered in public.
+- **Where real identifiers live:** once the Cloud platform owner provisions an enterprise project, its identifiers go to the per-environment configuration that DE-13 ([#134]) defines, reached through symbolic names (today `GOOGLE_CLOUD_PROJECT`, `GCS_BUCKET` and `BIGQUERY_DATASET`; ADR 0001 D1 replaces the single `GCS_BUCKET` with a Bronze and a Silver bucket binding) and supplied at deploy time through the DE-27 ([#148]) protected GitHub environments and DE-23 ([#144]) Secret Manager references.
+- **Amounts:** budget and spend-cap amounts, quota values, per-environment per-query caps and instance limits are not published in this repository; they are held by the Cloud platform owner, and DE-26 ([#147]) sets the values ([ADR 0001 D13](../adr/0001-gcp-architecture-and-service-selection.md#d13-observability-and-cost-guardrails)). This inventory records only that a budget and a spend cap are approved, which is how the ADR's "budget amounts" input is answered in public.
 - **Checks:** the validator rejects any identifier-shaped text in the YAML, and a test applies the same scanner to this page. A bare project ID without a numeric suffix, or a bare bucket name, cannot be told apart from an ordinary word; the YAML has no field that could hold one, and review of this page is the remaining control.
 
 ## Current gate result
 
 Generated from [`config/enterprise-environments/inventory.yaml`](../../config/enterprise-environments/inventory.yaml) by `render_inventory_status` in [`enterprise_inventory.py`](../../src/research_platform/readiness/enterprise_inventory.py). A test compares this section with the YAML byte for byte, so edit the YAML and regenerate this section; never edit it by hand. Schema `enterprise-environment-inventory-v1`, as of 2026-10-16.
 
-**Gate verdict: `BLOCKED`.** 0 of 3 enterprise environments have every fact approved.
+**Gate verdict: `BLOCKED`.** 0 of 3 enterprise environments have no blocker.
 
 | Environment | Enterprise project | Inventory verdict | Facts approved | Blockers |
 |---|---|---|---|---|
@@ -115,9 +115,9 @@ Roles follow the [ADR 0001 ownership table](../adr/0001-gcp-architecture-and-ser
 - **Security and governance owner:** for each environment `separate-identities`, `human-access-role-groups` and `no-cross-environment-grants`; for the program `residency-requirement`, `in-organization-deploys`, `perimeter-and-cmek`, `egress-to-public-source`, `source-access` and `managed-catalog`; and any time-boxed single-identity exception for a sandbox smoke run, recorded on its issue beforehand ([ADR 0001 D11](../adr/0001-gcp-architecture-and-service-selection.md#d11-identity-and-access-policy)).
 - **Lead architect:** for the program `gke-mandate` and `sql-transformation-mandate`; the ruling when the standing-instances answer is `NOT_ACCEPTED`; the choice between Workflows and Composer when the shared-composer-environment answer is `AVAILABLE` ([ADR 0001 D6](../adr/0001-gcp-architecture-and-service-selection.md#d6-orchestration-cloud-workflows-triggered-by-cloud-scheduler)); and any superseding ADR that an answer under "Answers that keep an environment blocked" requires.
 - **Data engineering owner:** no catalog item. The holder must still be assigned: ADR 0001 has DE-04 assign every sign-off role holder, and the validation runs that follow this gate are Data Engineering's.
-- **API product owner:** no catalog item. The holder must still be assigned for the same reason; the role's own inputs belong to DE-28 ([#149]) and DE-30 ([#151]).
+- **API product owner:** no catalog item. The holder must still be assigned for the same reason; the role's own inputs are those of the ADR 0001 ownership table and are not catalog items.
 
-A `NOT_APPROVED` or `OTHER_STANDARD` answer for `managed-catalog` does not block this gate: ADR 0001 hands either outcome to DE-25 ([#146]) ([ADR 0001 D12](../adr/0001-gcp-architecture-and-service-selection.md#d12-data-and-rights-policy)). A `REJECTED` record for `selected-services-allowed` blocks this gate, and the selected service it names engages that decision's row in the ADR's [Not selected](../adr/0001-gcp-architecture-and-service-selection.md#not-selected) table.
+A `NOT_APPROVED` or `OTHER_STANDARD` answer for `managed-catalog` does not block this gate: ADR 0001 hands either outcome to DE-25 ([#146]) ([ADR 0001 D12](../adr/0001-gcp-architecture-and-service-selection.md#d12-data-and-rights-policy)). A `REJECTED` record for `selected-services-allowed` blocks this gate; replacing a refused selected service needs a fallback that ADR 0001 names or a superseding ADR ([ADR 0001 Rollback](../adr/0001-gcp-architecture-and-service-selection.md#rollback)).
 
 ## How an environment reaches READY_TO_VALIDATE
 
@@ -139,7 +139,7 @@ Item: bronze-bucket         (or: enterprise-project, or: role-holder)
 State: APPROVED             (or: REQUESTED, REJECTED; ASSIGNED for a role holder)
 Answer: -                   (decisions only, for example TWO_BUCKETS_ALLOWED)
 Owner role: Cloud platform owner
-Recorded outside the repository by the holder of the owner role on 2026-11-02.
+Recorded outside the repository by the holder of the owner role (for a role holder: by the organization) on 2026-11-02.
 This comment holds no names, account handles, emails, identifiers, amounts or prices.
 ```
 
@@ -162,7 +162,7 @@ The validator accepts as evidence only a comment on [#125] in this repository (`
 | [#28] / PR [#82] | Readiness model, symbolic identifiers, forbidden labels | the schema vocabulary (`EnvironmentName`, `SettingsModel`) | any cloud environment |
 | [#91] / PR [#101] | Billing must be active; bucket settings precedent (uniform bucket-level access, public access prevention); a regional bucket that ADR 0001 D3 replaces with the US multi-region | `enterprise-billing`, `bronze-bucket`, `silver-bucket`, `resource-location-policy` | an enterprise project |
 | [#92] / PR [#102] | API enablement, a byte cap before any job, dataset location US | `core-apis`, `analytical-dataset`, `query-quotas` | an enterprise project |
-| [#103] (PRs [#104] to [#107]) | One project per environment, because the dataset name `openalex` is fixed until DE-13 | `separate-non-prod-projects`, `analytical-dataset` | an enterprise project |
+| [#103] (PRs [#104] to [#107]) | A dataset literally named `openalex` in location US, because the repository SQL hard-codes the name until DE-13 ([#108]'s operator-decisions table derives one project per environment from it) | `separate-non-prod-projects`, `analytical-dataset` | an enterprise project |
 | [#108] (PRs [#109] to [#111], [#113] to [#117]) | The "Operator decisions needed" table, which this catalog generalizes; keyless impersonation that used no service-account keys; IAM API enablement; the cross-environment negative probe; the personal billing project-link quota | `key-creation-disabled`, `core-apis`, `no-cross-environment-grants`, `enterprise-billing` | enterprise-managed environments, which its closing comment left open |
 | [#124] / PR [#162] | ADR 0001 and its DE-04 inputs; the identifier and price patterns of `test_adr_records.py` | the whole catalog and the identifier scanner | any environment |
 
@@ -216,7 +216,7 @@ Each DE issue below needs the listed items approved before its own cloud work. A
 | DE-31 ([#152]) | `human-access-role-groups` |
 | DE-35 ([#156]) | `gke-mandate` |
 
-Every other cloud DE issue needs an approved environment and a recorded spend cap before any cloud action (ADR 0001 Status).
+Every cloud DE issue, listed above or not, also needs an approved environment and a recorded spend cap before any cloud action (ADR 0001 Status).
 
 ## Validation
 

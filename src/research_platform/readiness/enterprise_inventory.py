@@ -573,7 +573,7 @@ class EnterpriseInventoryError(ValueError):
 # nothing glued to them; masked so that comment ids are not read as numbers.
 _OWN_REFERENCE_RE = re.compile(
     rf"{_REPOSITORY_URL_RE}/(?:issues|pull)/[1-9][0-9]{{0,5}}"
-    rf"(?:#issuecomment-[1-9][0-9]{{0,19}})?(?![\w/?&=%@.:+,#-])"
+    rf"(?:#issuecomment-[1-9][0-9]{{0,19}})?(?![\w/?&=%@.:+#-])"
 )
 PRIVATE_IDENTIFIER_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}"),
@@ -632,7 +632,9 @@ class _UniqueKeyLoader(yaml.SafeLoader):
         return super().construct_mapping(node, deep=deep)
 
 
-_COMMENT_RE = re.compile(r"(?:^|\s)#")
+# PyYAML also starts a comment right after a quote or a flow indicator ("x"#, }#, ,#),
+# so any "#" not preceded by a letter or digit counts; "125#issuecomment-" stays data.
+_COMMENT_RE = re.compile(r"(?:^|[^0-9A-Za-z])#")
 
 
 def _yaml_line(exc: yaml.YAMLError) -> str:
@@ -672,6 +674,18 @@ def _validate(text: str) -> tuple[EnterpriseEnvironmentInventory | None, tuple[s
         return None, (*errors, f"inventory: duplicate key{_yaml_line(exc)}")
     except yaml.YAMLError as exc:
         return None, (*errors, f"inventory: not valid YAML{_yaml_line(exc)}")
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+        # SafeLoader constructors raise these for "!!int x", "!!bool x" or 2026-02-30,
+        # and their messages can quote the scalar, so none is echoed.
+        return None, (*errors, "inventory: not valid YAML")
+    # Anchors, aliases, tags and directives carry text that never reaches the
+    # closed-vocabulary model, so they are refused (the text loaded, so it scans).
+    for token in yaml.scan(text, Loader=yaml.SafeLoader):
+        if isinstance(token, (yaml.AnchorToken, yaml.AliasToken, yaml.TagToken, yaml.DirectiveToken)):
+            errors.append(
+                f"line {token.start_mark.line + 1}: "
+                "YAML anchors, aliases, tags and directives are not allowed"
+            )
     if not isinstance(raw, dict):
         return None, (*errors, "inventory: must be a YAML mapping")
     try:
@@ -954,7 +968,7 @@ def render_inventory_status(inventory: EnterpriseEnvironmentInventory) -> str:
         f"Schema `{assessment.schema_version}`, as of {assessment.as_of.isoformat()}.",
         "",
         f"**Gate verdict: `{assessment.gate.value}`.** {ready} of {len(INVENTORY_ENVIRONMENTS)} "
-        "enterprise environments have every fact approved.",
+        "enterprise environments have no blocker.",
         "",
         "| Environment | Enterprise project | Inventory verdict | Facts approved | Blockers |",
         "|---|---|---|---|---|",

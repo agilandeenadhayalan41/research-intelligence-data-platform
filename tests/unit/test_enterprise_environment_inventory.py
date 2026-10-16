@@ -126,8 +126,15 @@ def _ready_dict() -> dict[str, Any]:
     return data
 
 
+class _NoAliasDumper(yaml.SafeDumper):
+    """Writes repeated values in full: the validator refuses anchors and aliases."""
+
+    def ignore_aliases(self, data: Any) -> bool:
+        return True
+
+
 def _dump(data: dict[str, Any]) -> str:
-    return INVENTORY_HEADER + yaml.safe_dump(data, sort_keys=False)
+    return INVENTORY_HEADER + yaml.dump(data, Dumper=_NoAliasDumper, sort_keys=False)
 
 
 def _parse(data: dict[str, Any]) -> EnterpriseEnvironmentInventory:
@@ -312,9 +319,12 @@ def test_synthetic_all_approved_enterprise_inventory_is_ready_to_validate() -> N
         assert result.facts_approved == result.facts_total == 31
 
 
-def test_one_missing_approval_blocks_only_that_environment() -> None:
+@pytest.mark.parametrize(
+    ("state", "reason"), [("REQUESTED", "requested, not approved"), ("REJECTED", "rejected")]
+)
+def test_one_missing_approval_blocks_only_that_environment(state: str, reason: str) -> None:
     data = _ready_dict()
-    _env_fact(data, "DEV", "bronze-bucket")["state"] = "REQUESTED"
+    _env_fact(data, "DEV", "bronze-bucket")["state"] = state
     assessment = assess_enterprise_inventory(_parse(data))
     verdicts = {r.environment: r for r in assessment.environments}
     assert verdicts[EnvironmentName.GCP_SANDBOX].verdict is InventoryVerdict.READY_TO_VALIDATE
@@ -322,7 +332,7 @@ def test_one_missing_approval_blocks_only_that_environment() -> None:
     dev = verdicts[EnvironmentName.DEV]
     assert dev.verdict is InventoryVerdict.BLOCKED and dev.facts_approved == 30
     assert [(b.kind, b.subject, b.owner_role, b.reason) for b in dev.blockers] == [
-        (BlockerKind.FACT, "bronze-bucket", OwnerRole.CLOUD_PLATFORM_OWNER, "requested, not approved")
+        (BlockerKind.FACT, "bronze-bucket", OwnerRole.CLOUD_PLATFORM_OWNER, reason)
     ]
     assert assessment.gate is InventoryVerdict.BLOCKED
 
@@ -681,13 +691,39 @@ def test_duplicate_yaml_keys_are_rejected() -> None:
          "inventory: must start with the fixed header comment (INVENTORY_HEADER)"),
         (lambda t: t.replace("program_facts:\n", "program_facts:\n  # note\n"),
          "line 22: comments are allowed only in the fixed header"),
-        (lambda t: t.replace("as_of: 2026-10-16\n", "as_of: 2026-10-16  # today\n"),
+        (lambda t: re.sub(r"^(as_of: \S+)$", r"\1  # today", t, count=1, flags=re.MULTILINE),
          "line 14: comments are allowed only in the fixed header"),
+        (lambda t: re.sub(r"^as_of: (\S+)$", r'as_of: "\1"#x', t, count=1, flags=re.MULTILINE),
+         "line 14: comments are allowed only in the fixed header"),
+        (lambda t: t.replace("NOT_ASSIGNED}\n", "NOT_ASSIGNED}#x\n", 1),
+         "line 16: comments are allowed only in the fixed header"),
     ],
-    ids=["no-header", "comment-line", "inline-comment"],
+    ids=["no-header", "comment-line", "inline-comment", "after-quote", "after-flow"],
 )
 def test_comments_outside_the_fixed_header_are_rejected(edit: Callable[[str], str], expected: str) -> None:
     assert inventory_errors(edit(_committed_text())) == (expected,)
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        lambda t: re.sub(r"^as_of: (\S+)$", r"as_of: &d \1", t, count=1, flags=re.MULTILINE),
+        lambda t: re.sub(r"^as_of: (\S+)$", r"as_of: !!timestamp \1", t, count=1, flags=re.MULTILINE),
+        lambda t: t.replace(INVENTORY_HEADER, INVENTORY_HEADER + "%TAG !x! tag:example.org,2026:\n---\n", 1),
+    ],
+    ids=["anchor", "tag", "directive"],
+)
+def test_yaml_anchors_tags_and_directives_are_rejected(edit: Callable[[str], str]) -> None:
+    errors = inventory_errors(edit(_committed_text()))
+    assert any(
+        e.endswith(": YAML anchors, aliases, tags and directives are not allowed") for e in errors
+    ), errors
+
+
+@pytest.mark.parametrize("value", ["!!int SECRET-X", "!!bool SECRET-X", "2026-02-30"])
+def test_unconstructible_scalars_are_rejected_without_echo(value: str) -> None:
+    text = re.sub(r"^as_of: \S+$", f"as_of: {value}", _committed_text(), count=1, flags=re.MULTILINE)
+    assert inventory_errors(text) == ("inventory: not valid YAML",)
 
 
 def test_missing_inventory_file_raises(tmp_path: Path) -> None:
@@ -716,6 +752,8 @@ IDENTIFIER_SAMPLES = [
     (f"see {REPOSITORY_URL}/issues/125?u=owner@example.com", "an email address"),
     (f"{REPOSITORY_URL}/blob/main/projects/my-proj-a1b2c3", "a projects/<id> path"),
     (f"{REPOSITORY_URL}/x,ci@my-proj.iam.gserviceaccount.com", "a service-account identity"),
+    (f"{REPOSITORY_URL}/issues/1251234567890", "a project-number-like token"),
+    (f"{REPOSITORY_URL}/issues/125@example.com", "an email address"),
 ]
 
 
@@ -738,8 +776,11 @@ def test_validator_rejects_private_identifiers(sample: str, kind: str) -> None:
         "The #108 Stage 2 runs used synthetic-100100-works and synthetic-10k-works.",
         "Recorded outside the repository on 2026-11-02.",
         "Python 3.13 and pydantic 2.13.5",
+        f"- {{item: separate-non-prod-projects, state: REQUESTED, evidence: {{ref: {REPOSITORY_URL}"
+        "/issues/125#issuecomment-6114407084, recorded_on: 2026-11-02}}",
     ],
-    ids=["issue-link", "pull-link", "comment-link", "synthetic-scales", "date", "versions"],
+    ids=["issue-link", "pull-link", "comment-link", "synthetic-scales", "date", "versions",
+         "flow-comment-link"],
 )
 def test_identifier_scanner_allows_own_references_and_known_tokens(text: str) -> None:
     assert private_identifier_errors(text) == ()
@@ -816,6 +857,24 @@ def test_render_is_deterministic_and_ascii() -> None:
         assert rendered.endswith("|\n\n") and not rendered.endswith("\n\n\n")
     assert "**Gate verdict: `READY_TO_VALIDATE`.**" in render_inventory_status(_parse(_ready_dict()))
     assert "**Gate verdict: `BLOCKED`.**" in render_inventory_status(load_enterprise_inventory())
+    link = f" ([{READY_AS_OF.isoformat()}]({REPOSITORY_URL}/issues/125#issuecomment-101))"
+    assert render_inventory_status(_parse(_ready_dict())).count(link) == (
+        len(INVENTORY_ENVIRONMENTS)
+        + len(ROLE_ORDER)
+        + len(INVENTORY_ENVIRONMENTS) * len(ENVIRONMENT_ITEMS)
+        + len(PROGRAM_ITEMS)
+    )
+
+
+def test_render_counts_environments_without_a_blocker() -> None:
+    assert "3 of 3 enterprise environments have no blocker." in render_inventory_status(
+        _parse(_ready_dict())
+    )
+    data = _ready_dict()
+    holder = data["role_holders"][0]
+    holder["holder"] = "NOT_ASSIGNED"
+    del holder["evidence"]
+    assert "0 of 3 enterprise environments have no blocker." in render_inventory_status(_parse(data))
 
 
 ENV_TOKEN = re.compile(r"(?<![\w-])(?:GCP_SANDBOX|GCP sandbox|Sandbox|sandbox|LOCAL|DEV|QA|PROD)(?![\w-])")
