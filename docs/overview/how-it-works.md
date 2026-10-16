@@ -69,6 +69,10 @@ and [Query routing](../architecture/query-routing.md). Spark/Dataproc and
 Iceberg/BigLake remain optional future choices, to revisit only if measured
 needs warrant them.
 
+<Steps numbered={false}>
+
+<Step>
+
 ## Foundation (Steps 01–04)
 
 The first four steps set up what every later stage builds on.
@@ -90,6 +94,9 @@ The first four steps set up what every later stage builds on.
 Details: the README's
 [step table](../../README.md#roadmap-completion-status) and
 [Environment readiness](../architecture/environment-readiness.md#configuration).
+
+</Step>
+<Step>
 
 ## Sources and sampling (Steps 05–08)
 
@@ -118,6 +125,9 @@ Details: [OpenAlex discovery and manifest contract](../architecture/openalex-man
 [Source profiling](../architecture/openalex-source-profiling.md),
 [Public data sources](../architecture/public-data-sources.md).
 
+</Step>
+<Step>
+
 ## Raw landing (Step 09, GCS via #9)
 
 This stage stores the exact bytes that were downloaded, once and forever, so
@@ -139,6 +149,9 @@ project (#91), again as a least-privilege service account (#108 Stage 1), and
 in personal DEV and QA projects (#108 Stage 3).
 
 Details: [Immutable raw landing](../architecture/immutable-local-landing.md).
+
+</Step>
+<Step>
 
 ## Control and provenance (Step 10)
 
@@ -169,6 +182,9 @@ after the DE-12 gates pass.
 
 Details: [Pipeline control](../architecture/pipeline-control.md).
 
+</Step>
+<Step>
+
 ## Canonical model (Step 11)
 
 This stage defines the portable shape that OpenAlex records are turned into,
@@ -191,6 +207,9 @@ OpenAlex's public documentation, because no real payload has been profiled
 yet.
 
 Details: [OpenAlex canonical model](../architecture/openalex-canonical-model.md).
+
+</Step>
+<Step>
 
 ## Ingestion and deletions (Steps 12–13)
 
@@ -219,6 +238,9 @@ public ledger, about 160 MB compressed, is not ingested by the local runner.
 Details: [Local Works ingestion](../architecture/local-works-ingestion.md),
 [OpenAlex deletions](../architecture/openalex-deletions.md).
 
+</Step>
+<Step>
+
 ## Query patterns and placement (Step 14)
 
 This stage writes down, before any database design, what consumers are
@@ -240,6 +262,9 @@ rejects that placement without `MEASURED` evidence. ISSN/eISSN lookup stays
 
 Details: [Query-pattern registry](../architecture/query-pattern-benchmarks.md),
 [Query routing](../architecture/query-routing.md).
+
+</Step>
+<Step>
 
 ## BigQuery models and publication (Step 15)
 
@@ -269,6 +294,9 @@ Stage 2), and in DEV and QA at about 10k (#108 Stage 3).
 Details: [BigQuery analytical models](../architecture/bigquery-analytical-models.md),
 [GCP: BigQuery-first](../architecture/gcp-bigquery-first.md).
 
+</Step>
+<Step>
+
 ## Gold marts (Step 16)
 
 This stage defines the consumer-facing summary tables, built so that
@@ -288,6 +316,9 @@ cost, latency or reuse, and fixtures or preference alone cannot promote a mart.
 
 Details: [Gold analytical marts](../architecture/gold-analytical-marts.md).
 
+</Step>
+<Step>
+
 ## Data quality (Step 17)
 
 This stage decides whether data is good enough to show consumers, and blocks
@@ -306,6 +337,9 @@ required gate at runtime. Quality code only observes. It never repairs data,
 fills gaps or resurrects Works.
 
 Details: [Data quality](../architecture/data-quality.md).
+
+</Step>
+<Step>
 
 ## Data Service and serving (Step 18, #23, #118)
 
@@ -352,6 +386,9 @@ Details: [Data Service](../architecture/data-service.md),
 [Work lookup projection (#23)](../architecture/serving-work-lookup-projection.md),
 [PostgreSQL Warehouse](../architecture/postgres-warehouse.md).
 
+</Step>
+<Step>
+
 ## Orchestration, end to end (Steps 19–21)
 
 This stage runs everything above as one bounded pipeline, describes how a
@@ -382,3 +419,6 @@ described on the [Status](status.md#environment-readiness) page.
 Details: [End-to-end pipeline](../architecture/end-to-end-pipeline.md),
 [Orchestration](../architecture/orchestration.md),
 [Environment readiness](../architecture/environment-readiness.md).
+
+</Step>
+</Steps>

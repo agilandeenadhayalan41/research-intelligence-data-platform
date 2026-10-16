@@ -40,7 +40,7 @@ page that defines it.
 | Billing floor | BigQuery's minimum billing of 10 MiB per table. At the small synthetic scales used so far, billed bytes are dominated by this floor, so the recorded cost figures are "floor artifacts", not workload cost | [Recorded run #103](../architecture/bigquery-analytical-models.md#recorded-run-103) |
 | `BIGQUERY_ANALYTICAL` | Two meanings. As a placement, answer the pattern with an analytical BigQuery query. As a readiness domain, the BigQuery adapter and models | [Placements](../architecture/query-pattern-benchmarks.md#placement-values-only-these), [Readiness matrix](../architecture/environment-readiness.md#current-truthful-matrix-summary) |
 | `BIGQUERY_PLUS_CACHE` | Placement: BigQuery behind an API/cache for point lookups. It is the current placement for DOI and OpenAlex-ID lookups | [Placements](../architecture/query-pattern-benchmarks.md#placement-values-only-these) |
-| `BLOCKED` / `NOT_IMPLEMENTED` | Per-domain readiness level (not an overall status): a missing runtime capability blocks readiness. Every mandatory PROD domain is `BLOCKED` today, so PROD is `NOT_READY` overall | [Evidence legend](../architecture/environment-readiness.md#evidence-legend) |
+| <Badge>`BLOCKED`</Badge> / <Badge>`NOT_IMPLEMENTED`</Badge> | Per-domain readiness level (not an overall status): a missing runtime capability blocks readiness. Every mandatory PROD domain is `BLOCKED` today, so PROD is `NOT_READY` overall | [Evidence legend](../architecture/environment-readiness.md#evidence-legend) |
 | Bounded development sample | The deterministic selection of at most `max_files=1` file of at most 25,000,000 bytes, with a reason code for every skipped file | [Bounded sample](../architecture/openalex-manifest-contract.md#bounded-development-sample) |
 
 ## C
@@ -50,13 +50,13 @@ page that defines it.
 | `can_promote` | The promotion check. It needs adjacent order, a `READY` source, and a target that is `READY_TO_VALIDATE` or `READY` with no mandatory-domain gaps. It has no manual override, and it returns false for every pair today | [Promotion gates](../architecture/environment-readiness.md#cicd-and-promotion-gates) |
 | Canonical model | Portable, normalized OpenAlex entities and relationships, with PyArrow schemas as the source of truth. Independent of any database's physical design | [Canonical model](../architecture/openalex-canonical-model.md) |
 | Claim token / lease | How one worker owns a `PROCESSING` file. Completion needs the current token and an unexpired lease. Stale leases are recovered explicitly | [Claim / lease sequence](../architecture/pipeline-control.md#claim--lease-sequence) |
-| `CLOUD_UNVERIFIED` | Readiness level: a cloud path is required, but it is not cloud-verified. Either there is no execution evidence, or there are only ad hoc runs, as for the data-quality and Gold SQL in the #103/#108 runs | [Evidence legend](../architecture/environment-readiness.md#evidence-legend) |
+| <Badge>`CLOUD_UNVERIFIED`</Badge> | Readiness level: a cloud path is required, but it is not cloud-verified. Either there is no execution evidence, or there are only ad hoc runs, as for the data-quality and Gold SQL in the #103/#108 runs | [Evidence legend](../architecture/environment-readiness.md#evidence-legend) |
 | Clustering (`OBSERVED`) | BigQuery cluster keys chosen from query filters. Clustering was assessed (`OBSERVED`) for 4 of 11 patterns in #108 Stage 2, those reading tables of at least 64 MiB. Only `citation-relationships` (a filter on the leading cluster column) showed a reduction, to 0.157 of the dry-run estimate. The three filters on non-leading cluster columns showed none, and the cause was not isolated. Elsewhere it is NOT MEASURED | [Recorded run #108 Stage 2](../architecture/bigquery-analytical-models.md#recorded-run-108-stage-2) |
 | CMEK (customer-managed encryption keys) | Encryption with keys the customer controls rather than Google's defaults. Not validated for GCS in any environment | [GCS readiness](../architecture/environment-readiness.md#gcs-readiness) |
 | `COMPUTE_ON_READ` | Gold mart mode: computed from the analytical tables at read time | [Materialization honesty](../architecture/gold-analytical-marts.md#materialization-honesty) |
 | Composer / Airflow | GCP's managed Airflow and the Airflow scheduler. Not deployed. The Step 20 contracts are shaped to map onto an Airflow DAG later | [Airflow / Composer](../architecture/orchestration.md#airflow--composer-compatibility-future) |
 | `CONFLICT` | Publication decision: an equal lineage date (or no dates to compare) but a different checksum, so precedence cannot be decided. The Work is not applied | [Works MERGE precedence](../architecture/bigquery-analytical-models.md#works-merge-precedence) |
-| `CONTRACT_DEFINED` | Readiness level: specs, SQL or contracts exist, but they are not proven in the cloud | [Evidence legend](../architecture/environment-readiness.md#evidence-legend) |
+| <Badge>`CONTRACT_DEFINED`</Badge> | Readiness level: specs, SQL or contracts exist, but they are not proven in the cloud | [Evidence legend](../architecture/environment-readiness.md#evidence-legend) |
 | `ControlStore` | The write protocol for pipeline-control state (in-memory for tests, PostgreSQL for durable local runs). It is separate from the read-only `Warehouse.query` | [Write boundary](../architecture/pipeline-control.md#write--transaction-boundary) |
 
 ## D
@@ -67,7 +67,7 @@ page that defines it.
 | Dataform | A possible future owner of selected BigQuery SQL transforms. Not implemented, and never the ingestion or control plane | [Dataform boundary](../architecture/orchestration.md#dataform-boundary) |
 | Deletion barrier | Kept when a deletion arrives for a Work not yet stored: an authoritative `(work_id, deleted_date)` pair, not a fabricated Work. A later, older `ACTIVE` record is `STALE`, and a newer one needs a restore | [Deletion barrier](../architecture/end-to-end-pipeline.md#unknown-work-deletion-barrier) |
 | Deletion ledger | OpenAlex's cumulative `deleted_ids.csv.gz` (`work_id,deleted_date`), about 160 MB compressed. Its logical entity is `works-deletions` | [Authoritative source](../architecture/openalex-deletions.md#authoritative-public-source) |
-| `DEMONSTRATED_LOCAL` | Readiness level: proven offline, with DuckDB or in memory | [Evidence legend](../architecture/environment-readiness.md#evidence-legend) |
+| <Badge>`DEMONSTRATED_LOCAL`</Badge> | Readiness level: proven offline, with DuckDB or in memory | [Evidence legend](../architecture/environment-readiness.md#evidence-legend) |
 | Dry run / `maximum_bytes_billed` | The `BigQueryWarehouse` cost guards. It estimates bytes before running, then caps billed bytes per job | [Cost / scan safety](../architecture/bigquery-analytical-models.md#cost--scan-safety) |
 | DuckDB | The local engine for `SEMANTIC_ONLY` checks and for the local `DuckDBWarehouse` adapter. Its results are not BigQuery evidence | [BigQuery-first](../architecture/gcp-bigquery-first.md#design-principles) |
 
@@ -140,7 +140,7 @@ page that defines it.
 
 | Term | Meaning | Defined in |
 | --- | --- | --- |
-| `NOT_READY` | Overall status when any mandatory domain is below `READY_TO_VALIDATE` (`BLOCKED`, `CLOUD_UNVERIFIED`, `CONTRACT_DEFINED` or `DEMONSTRATED_LOCAL`). `LOCAL` is always `NOT_READY`. Every environment is `NOT_READY` today | [Readiness matrix](../architecture/environment-readiness.md#current-truthful-matrix-summary), [Promotion gates](../architecture/environment-readiness.md#cicd-and-promotion-gates) |
+| <Badge>`NOT_READY`</Badge> | Overall status when any mandatory domain is below `READY_TO_VALIDATE` (`BLOCKED`, `CLOUD_UNVERIFIED`, `CONTRACT_DEFINED` or `DEMONSTRATED_LOCAL`). `LOCAL` is always `NOT_READY`. Every environment is `NOT_READY` today | [Readiness matrix](../architecture/environment-readiness.md#current-truthful-matrix-summary), [Promotion gates](../architecture/environment-readiness.md#cicd-and-promotion-gates) |
 
 ## O
 
@@ -171,8 +171,8 @@ page that defines it.
 
 | Term | Meaning | Defined in |
 | --- | --- | --- |
-| `READY` | Overall status when every mandatory domain is `VERIFIED`. No environment has it | [Promotion gates](../architecture/environment-readiness.md#cicd-and-promotion-gates) |
-| `READY_TO_VALIDATE` | Readiness level: the prerequisites to begin cloud validation are met. It is also an overall status, when every mandatory domain is `READY_TO_VALIDATE` or `VERIFIED`. That is enough for a promotion *target*, but not for a source | [Evidence legend](../architecture/environment-readiness.md#evidence-legend), [Promotion gates](../architecture/environment-readiness.md#cicd-and-promotion-gates) |
+| <Badge>`READY`</Badge> | Overall status when every mandatory domain is `VERIFIED`. No environment has it | [Promotion gates](../architecture/environment-readiness.md#cicd-and-promotion-gates) |
+| <Badge>`READY_TO_VALIDATE`</Badge> | Readiness level: the prerequisites to begin cloud validation are met. It is also an overall status, when every mandatory domain is `READY_TO_VALIDATE` or `VERIFIED`. That is enough for a promotion *target*, but not for a source | [Evidence legend](../architecture/environment-readiness.md#evidence-legend), [Promotion gates](../architecture/environment-readiness.md#cicd-and-promotion-gates) |
 | `RecordProvenance` | Record-level lineage linking a canonical record to its asset, checksum and run | [Lineage](../architecture/pipeline-control.md#lineage) |
 | `REPLACE_BY_WORK_ID` | The relationship refresh: delete and re-insert an eligible Work's rows inside one BigQuery transaction | [Relationship REPLACE](../architecture/bigquery-analytical-models.md#relationship-tables--transactional-replace_by_work_id) |
 | `RESTORE_REQUIRED` / `RestoreRequiredError` | A newer `ACTIVE` record arrives for a tombstoned Work. It is never silently restored | [Version precedence](../architecture/openalex-deletions.md#version-precedence) |
@@ -205,7 +205,7 @@ page that defines it.
 
 | Term | Meaning | Defined in |
 | --- | --- | --- |
-| `VERIFIED` | Readiness level: actual cloud evidence exists for that domain in that environment. Today only `GCS_RAW_LANDING` and `BIGQUERY_ANALYTICAL` have it, in GCP_SANDBOX, DEV and QA | [Evidence legend](../architecture/environment-readiness.md#evidence-legend), [Status](status.md#environment-readiness) |
+| <Badge>`VERIFIED`</Badge> | Readiness level: actual cloud evidence exists for that domain in that environment. Today only `GCS_RAW_LANDING` and `BIGQUERY_ANALYTICAL` have it, in GCP_SANDBOX, DEV and QA | [Evidence legend](../architecture/environment-readiness.md#evidence-legend), [Status](status.md#environment-readiness) |
 
 ## W
 

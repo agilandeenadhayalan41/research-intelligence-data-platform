@@ -1,0 +1,124 @@
+/*
+ * The same look for <Step> children and for a Markdown ordered list inside
+ * <Steps>: a numbered circle (or a dot) per item, joined by a vertical line.
+ */
+.steps {
+  --rid-step-size: 1.875rem;
+  --rid-step-gap: 1rem;
+  margin-bottom: var(--ifm-leading);
+}
+
+.list,
+.steps > ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: rid-step;
+}
+
+.step,
+.steps > ol > li {
+  position: relative;
+  margin: 0;
+  padding: 0 0 1.25rem calc(var(--rid-step-size) + var(--rid-step-gap));
+  counter-increment: rid-step;
+}
+
+/* The number. */
+.step::before,
+.steps > ol > li::before {
+  content: counter(rid-step);
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--rid-step-size);
+  height: var(--rid-step-size);
+  border: 1px solid var(--rid-primary-soft-strong);
+  border-radius: 50%;
+  background: var(--rid-primary-soft);
+  color: var(--rid-primary-strong);
+  font-size: 0.875rem;
+  font-weight: var(--ifm-font-weight-bold);
+  line-height: 1;
+}
+
+/* The line to the next step. */
+.step::after,
+.steps > ol > li::after {
+  content: '';
+  position: absolute;
+  top: calc(var(--rid-step-size) + 0.375rem);
+  bottom: 0.375rem;
+  left: calc(var(--rid-step-size) / 2 - 1px);
+  width: 2px;
+  border-radius: 1px;
+  background: var(--rid-border-color);
+}
+
+.step:last-child,
+.steps > ol > li:last-child {
+  padding-bottom: 0;
+}
+
+.step:last-child::after,
+.steps > ol > li:last-child::after {
+  display: none;
+}
+
+/* Dots instead of numbers. */
+.dots .step::before,
+.dots > ol > li::before {
+  content: '';
+  top: calc((var(--rid-step-size) - 0.875rem) / 2);
+  left: calc((var(--rid-step-size) - 0.875rem) / 2);
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 3px solid var(--ifm-color-primary);
+  background: var(--ifm-background-color);
+}
+
+.title {
+  margin: 0.125rem 0 0.375rem;
+  color: var(--ifm-heading-color);
+  font-weight: var(--ifm-font-weight-semibold);
+}
+
+/* The first line of a step sits level with its marker. */
+.step > :first-child,
+.steps > ol > li > :first-child {
+  margin-top: 0;
+}
+
+.step > h2:first-child,
+.step > h3:first-child {
+  padding-top: 0.125rem;
+}
+
+.step > h2 {
+  font-size: 1.625rem;
+}
+
+.step > :last-child,
+.steps > ol > li > :last-child {
+  margin-bottom: 0;
+}
+
+/* A Markdown list item that is a single paragraph has no extra spacing. */
+.steps > ol > li > p {
+  margin-bottom: 0.5rem;
+}
+
+/* Bulleted lists inside a step keep first-level bullets (not the browser's
+   nested-list circles). */
+.step ul,
+.steps > ol > li ul {
+  list-style-type: disc;
+}
+
+.step ul ul,
+.steps > ol > li ul ul {
+  list-style-type: circle;
+}

@@ -10,6 +10,7 @@
     "serve": "docusaurus serve",
     "clear": "docusaurus clear",
     "typecheck": "tsc",
+    "check:mdx": "node scripts/check-mdx.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {

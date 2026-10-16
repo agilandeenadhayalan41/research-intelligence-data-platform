@@ -1,0 +1,56 @@
+.badge {
+  display: inline-block;
+  padding: 0.0625rem 0.5rem;
+  border: 1px solid var(--rid-badge-border);
+  border-radius: 999px;
+  background: var(--rid-badge-bg);
+  color: var(--rid-badge-text);
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.78em;
+  font-weight: var(--ifm-font-weight-semibold);
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  vertical-align: 0.06em;
+  white-space: nowrap;
+}
+
+/* Markdown inside the badge (`code`, **bold**) takes the badge's look. */
+.badge code,
+.badge strong {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  vertical-align: baseline;
+}
+
+.success {
+  --rid-badge-text: var(--rid-tone-success-text);
+  --rid-badge-bg: var(--rid-tone-success-bg);
+  --rid-badge-border: var(--rid-tone-success-border);
+}
+
+.warning {
+  --rid-badge-text: var(--rid-tone-warning-text);
+  --rid-badge-bg: var(--rid-tone-warning-bg);
+  --rid-badge-border: var(--rid-tone-warning-border);
+}
+
+.danger {
+  --rid-badge-text: var(--rid-tone-danger-text);
+  --rid-badge-bg: var(--rid-tone-danger-bg);
+  --rid-badge-border: var(--rid-tone-danger-border);
+}
+
+.info {
+  --rid-badge-text: var(--rid-tone-info-text);
+  --rid-badge-bg: var(--rid-tone-info-bg);
+  --rid-badge-border: var(--rid-tone-info-border);
+}
+
+.neutral {
+  --rid-badge-text: var(--rid-tone-neutral-text);
+  --rid-badge-bg: var(--rid-tone-neutral-bg);
+  --rid-badge-border: var(--rid-tone-neutral-border);
+}

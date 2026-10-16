@@ -533,7 +533,7 @@ project with a least-privilege identity before item 7 (tracked in #139).
 
 Operator decision for #108 (2026-10-11): Stage 2 uses the synthetic `large`
 preset (`scripts/bigquery_sandbox_103.py --scale large`, 100,100 batch-1 works).
-Its results will be labelled MEASURED (synthetic-<N>), and item 2 (a
+Its results will be labelled MEASURED (synthetic-\<N>), and item 2 (a
 representative slice) stays open. No public-slice path is built.
 
 Generating the `large` cycle locally was estimated at 20 hours, because

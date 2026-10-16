@@ -34,8 +34,9 @@ The [blog editor](/blog/editor) (**Write a post** in the footer) runs in your
 browser:
 
 1. Start a new post from the template, or open an existing post.
-2. Choose the format: `md` (Markdown, like the docs) or `mdx` (Markdown with
-   JSX and the site's components).
+2. Choose the format: `md` or `mdx`. Both are parsed as MDX, like the docs, so
+   both can use the site's components; the format only sets the file extension
+   and the truncate marker.
 3. Write on the left. The preview on the right shows the post with the site's
    styles as you type, and shows compile errors there instead of breaking the
    page.
