@@ -25,6 +25,11 @@ their own browser (see [Privacy](#privacy-what-stays-in-the-browser)).
 | `src/theme/NavbarItem/ComponentTypes.tsx`, `src/components/GitHubUserNavbarItem/` | The `custom-githubUser` navbar item: avatar and username, or "Sign in" |
 | `src/theme/DocItem/Content/`, `src/theme/DocItem/Footer/`, `src/theme/BlogPostItem/Footer/` | Wrappers around the theme components that add the page metadata, history and community blocks |
 | `src/components/PageMetaBar/`, `PageHistory/`, `PageCommunity/` | Reading time and last update; contributors; likes and comments |
+| `src/theme/MDXComponents/Img/`, `src/theme/Mermaid/` | Wrappers around the theme's Markdown image and Mermaid diagram that add the [zoom](#image-and-diagram-zoom) |
+| `src/components/Zoom/` | The zoom: lightbox, in-page toolbar, browser side of the downloads |
+| `src/lib/panzoom.mjs`, `src/lib/usePanZoom.ts` | Pan and zoom math, and the React hook that drives both zoom modes with it |
+| `src/lib/download.mjs` | Download file names, the standalone SVG of a diagram, the PNG export size |
+| `src/types/react-dom.d.ts` | Types for `createPortal` (the site does not install `@types/react-dom`) |
 | `src/lib/storage.mjs` | The community store (likes, comments, editor drafts) behind one adapter interface |
 | `src/lib/github.mjs` | GitHub REST helpers: page commits, public profiles, the blog pull-request flow |
 | `src/lib/readingTime.mjs` | Word count and minutes to read for a Markdown source |
@@ -33,6 +38,7 @@ their own browser (see [Privacy](#privacy-what-stays-in-the-browser)).
 | `src/remark/repo-links.mjs` | Rewrites relative links that leave `docs/` (for example `../../sql/...`) to GitHub URLs |
 | `src/css/custom.css` | Theme colours and design tokens, navbar, footer, table and diagram rules, avatar utility classes, focus rings, dark mode |
 | `static/img/logo.svg` | Navbar logo and favicon |
+| `static/img/blog/` | Images used by blog posts |
 
 ## Requirements
 
@@ -347,6 +353,53 @@ block and the `[data-theme='dark']` block.
   (an overlapping row of avatars); `rid-sr-only` (visually hidden, read by
   screen readers); `rid-muted-note` (small muted notes such as "Saved in this
   browser").
+
+## Image and diagram zoom
+
+Every Markdown image (`![alt](src)`, and `<img>` in `.md` files) and every
+Mermaid diagram, in the docs, the blog and the pages, can be enlarged. It is
+built with pointer events and CSS, with no extra dependency.
+
+- **Full screen.** Click the image or diagram, or Tab to it and press Enter.
+  It opens over the dimmed page, fitted to the screen. Zoom with the mouse
+  wheel or a trackpad pinch (at the cursor), two fingers on a touch screen, a
+  double click or double tap (fit and 2x), or the buttons (zoom in, zoom out,
+  fit, 100 %). Drag to move in any direction; the image cannot be dragged off
+  the screen. Keys: `+` and `-` zoom, `0` fits, `1` is the actual size, the
+  arrows move (Shift: further), Escape closes. A click beside the image (not
+  the end of a drag) or the Close button also closes it, and focus goes back
+  to the image. Zoom runs from 0.5x to 8x the fitted size (images: up to 4x
+  their natural size when that is larger), and 100 % is always reachable.
+  Images also have **Open original** (a new tab).
+- **In the page.** Hovering an image or diagram (or tabbing to it) shows a
+  small toolbar: zoom in, zoom out, reset, full screen and download. Zoomed in
+  place, the element keeps its size and position in the page and its content
+  moves inside that box (drag, arrow keys). The mouse wheel zooms in place
+  only with Ctrl or Cmd held, or while the zoomed element has focus (after you
+  drag it or use its toolbar), so the page still scrolls normally.
+- **Download in high quality.** Images: the original file, never a resized
+  copy, named after the file (`/img/x.png` is `x.png`; an image Docusaurus
+  inlined, under 10 KB, is named after its alt text). Another site's image is
+  fetched when that site allows it (CORS); otherwise it opens in a new tab
+  with the note "Use Save image as… to download". Diagrams: **SVG** (vector,
+  with the page's computed styles inlined so it looks the same anywhere) or
+  **PNG** (3x the size it is shown at in the page, at least 2000 px on the
+  longest side, on a white or dark background that matches the colour mode;
+  the same on every screen, whatever its pixel density). Diagram files are
+  named after the page and the diagram's position on it, for example
+  `overview-how-it-works-diagram-1.png`.
+- **Opting out.** `![alt](src "no-zoom")` or the class `no-zoom` keeps an image
+  plain. An image inside a link keeps its link and gets no zoom.
+- **In `.mdx`**, a JSX `<img>` tag is not passed through the theme. For a
+  zoomable image there, use `![alt](src)` or
+  `import Img from '@theme/MDXComponents/Img';` and `<Img src="..." alt="..." />`.
+- The server-rendered page shows the image exactly as without the zoom (also
+  without JavaScript); the button and the toolbar are added once the image has
+  loaded. The zoom button's label is `Zoom image: <alt text>`.
+
+The math (fit, zoom at a point, pan within bounds, wheel and pinch) is in
+`src/lib/panzoom.mjs` and the download helpers in `src/lib/download.mjs`, both
+unit-tested (`test/panzoom.test.mjs`, `test/download.test.mjs`).
 
 ## Writing docs
 
