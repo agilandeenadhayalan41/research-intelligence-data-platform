@@ -1,0 +1,97 @@
+.history {
+  margin-top: 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--rid-border-color);
+}
+
+.title {
+  margin-bottom: 0.75rem;
+  font-size: 1.25rem;
+}
+
+.last {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.strong {
+  font-weight: var(--ifm-font-weight-semibold);
+}
+
+.summary {
+  margin-bottom: 0.5rem;
+  color: var(--ifm-color-emphasis-800);
+  font-size: 0.9375rem;
+}
+
+.people {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.5rem;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+
+.person {
+  margin: 0;
+}
+
+.personLink {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  height: 100%;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--rid-border-color);
+  border-radius: var(--rid-radius-sm);
+  background: var(--rid-surface-raised);
+  color: var(--ifm-font-color-base);
+  transition: border-color var(--ifm-transition-fast) ease, box-shadow var(--ifm-transition-fast) ease;
+}
+
+a.personLink:hover {
+  border-color: var(--rid-primary-soft-strong);
+  box-shadow: var(--rid-shadow-sm);
+  color: var(--ifm-font-color-base);
+  text-decoration: none;
+}
+
+.personText {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.personName {
+  overflow: hidden;
+  font-weight: var(--ifm-font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.personCommits {
+  color: var(--ifm-color-emphasis-700);
+  font-size: 0.8125rem;
+}
+
+.more {
+  margin-bottom: 0.75rem;
+  font-size: 0.875rem;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+  margin-bottom: 0;
+}
+
+.historyLink {
+  white-space: nowrap;
+}

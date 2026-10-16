@@ -9,6 +9,11 @@ import repoLinks from './src/remark/repo-links.mjs';
 const REPO_URL =
   'https://github.com/agilandeenadhayalan41/research-intelligence-data-platform';
 const EDIT_URL_BASE = `${REPO_URL}/edit/main/docs/`;
+const REPO = {
+  owner: 'agilandeenadhayalan41',
+  name: 'research-intelligence-data-platform',
+  branch: 'main',
+};
 
 // Public URL of the deployed site. Vercel sets VERCEL_PROJECT_PRODUCTION_URL
 // (a bare host name, no scheme) on every build; SITE_URL overrides it.
@@ -62,6 +67,19 @@ const config: Config = {
 
   themes: ['@docusaurus/theme-mermaid'],
 
+  // Build-time page metadata (reading time, git history) for every doc and
+  // blog post, read by the page components through usePluginData.
+  plugins: ['./src/plugins/page-meta/index.js'],
+
+  // Read in the browser through useDocusaurusContext().siteConfig.customFields.
+  customFields: {
+    repo: REPO,
+    // Where likes, comments and editor drafts are kept: 'browser' stores them
+    // permanently in each visitor's own browser (IndexedDB). A remote adapter
+    // (an API plus a database) can be added later behind the same interface.
+    communityStore: 'browser',
+  },
+
   i18n: {
     defaultLocale: 'en',
     locales: ['en'],
@@ -96,8 +114,22 @@ const config: Config = {
           // leave docs/ become GitHub URLs instead of broken site links.
           beforeDefaultRemarkPlugins: [repoLinks],
         },
-        blog: false,
-        pages: false,
+        // Blog posts live in docs/site/blog (outside the docs plugin's folder
+        // set, which excludes site/**). Editable in the browser at /blog/editor.
+        blog: {
+          path: './blog',
+          routeBasePath: 'blog',
+          showReadingTime: true,
+          blogSidebarTitle: 'Recent posts',
+          blogSidebarCount: 'ALL',
+          editUrl: `${REPO_URL}/edit/main/docs/site/`,
+          onInlineAuthors: 'ignore',
+          onUntruncatedBlogPosts: 'ignore',
+        },
+        // React and MDX pages in src/pages: the home page and the blog editor.
+        pages: {
+          path: './src/pages',
+        },
         theme: {
           customCss: './src/css/custom.css',
         },
@@ -127,23 +159,21 @@ const config: Config = {
           position: 'left',
           label: 'Docs',
         },
-        {
-          type: 'doc',
-          docId: 'overview/status',
-          position: 'left',
-          label: 'Status',
-        },
-        {
-          type: 'doc',
-          docId: 'overview/glossary',
-          position: 'left',
-          label: 'Glossary',
-        },
+        // Plain links, not `type: 'doc'`: a doc item counts as active on every
+        // page of its sidebar, and all docs share one sidebar, so Docs,
+        // Status and Glossary would all be highlighted together. The strict
+        // link check still fails the build if either page goes away.
+        {to: '/overview/status', label: 'Status', position: 'left'},
+        {to: '/overview/glossary', label: 'Glossary', position: 'left'},
+        // Last tab of the top bar.
+        {to: '/blog', label: 'Blog', position: 'left'},
         {
           href: REPO_URL,
           label: 'GitHub',
           position: 'right',
         },
+        // Optional GitHub sign-in: avatar and username once signed in.
+        {type: 'custom-githubUser', position: 'right'},
       ],
     },
     footer: {
@@ -152,12 +182,19 @@ const config: Config = {
         {
           title: 'Docs',
           items: [
-            {label: 'Introduction', to: '/'},
+            {label: 'Introduction', to: '/overview/introduction'},
             {label: 'How it works', to: '/overview/how-it-works'},
             {label: 'Status', to: '/overview/status'},
             {label: 'Roadmap', to: '/architecture/roadmap'},
             {label: 'Getting started', to: '/overview/getting-started'},
             {label: 'Glossary', to: '/overview/glossary'},
+          ],
+        },
+        {
+          title: 'Community',
+          items: [
+            {label: 'Blog', to: '/blog'},
+            {label: 'Write a post', to: '/blog/editor'},
           ],
         },
         {

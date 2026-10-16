@@ -1,5 +1,4 @@
 ---
-slug: /
 sidebar_position: 1
 title: Introduction
 description: What the Research Intelligence Data Platform is, the problem it addresses, who it is for, the rules it follows, and how to read these docs.

@@ -1,0 +1,164 @@
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16.5rem), 1fr));
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 1.25rem 1.25rem 1.5rem;
+  border: 1px solid var(--rid-border-color);
+  border-radius: var(--rid-radius-md);
+  background: var(--rid-surface-raised);
+  box-shadow: var(--rid-shadow-sm);
+}
+
+.linked {
+  transition:
+    border-color var(--ifm-transition-fast) ease,
+    box-shadow var(--ifm-transition-fast) ease;
+}
+
+.linked:hover {
+  border-color: var(--ifm-color-primary);
+  box-shadow: var(--rid-shadow-md);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .linked {
+    transition:
+      border-color var(--ifm-transition-fast) ease,
+      box-shadow var(--ifm-transition-fast) ease,
+      transform var(--ifm-transition-fast) ease;
+  }
+
+  .linked:hover {
+    transform: translateY(-2px);
+  }
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  margin-bottom: 0.875rem;
+  border-radius: var(--rid-radius-sm);
+  background: var(--rid-primary-soft);
+  color: var(--rid-primary-strong);
+}
+
+.icon svg {
+  width: 1.375rem;
+  height: 1.375rem;
+}
+
+.title {
+  margin: 0 0 0.5rem;
+  padding-right: 1.5rem;
+  font-size: 1.0625rem;
+  line-height: 1.35;
+}
+
+.link {
+  color: var(--ifm-heading-color);
+  text-decoration: none;
+}
+
+.link:hover {
+  color: var(--ifm-color-primary);
+  text-decoration: none;
+}
+
+/* Stretch the link over the whole card. */
+.link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+}
+
+/* The focus ring goes around the card, not just the title text. */
+.link:focus-visible {
+  outline: none;
+}
+
+.link:focus-visible::after {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: 2px;
+  border-radius: var(--rid-radius-md);
+}
+
+.body {
+  color: var(--ifm-color-emphasis-700);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+}
+
+.body > :last-child {
+  margin-bottom: 0;
+}
+
+.arrow {
+  position: absolute;
+  top: 1.25rem;
+  right: 1.25rem;
+  color: var(--ifm-color-emphasis-500);
+  font-size: 1.125rem;
+  line-height: 1;
+  transition: color var(--ifm-transition-fast) ease;
+}
+
+.linked:hover .arrow {
+  color: var(--ifm-color-primary);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .arrow {
+    transition:
+      color var(--ifm-transition-fast) ease,
+      transform var(--ifm-transition-fast) ease;
+  }
+
+  .linked:hover .arrow {
+    transform: translateX(3px);
+  }
+}
+
+/* Narrow screens: icon beside the title instead of above it. */
+@media (max-width: 600px) {
+  .withIcon {
+    display: grid;
+    grid-template-columns: 2.5rem minmax(0, 1fr);
+    column-gap: 1rem;
+    align-items: start;
+    padding: 1rem 1rem 1.125rem;
+  }
+
+  .withIcon .icon {
+    grid-row: 1 / span 2;
+    margin-bottom: 0;
+  }
+
+  .withIcon .title,
+  .withIcon .body {
+    grid-column: 2;
+  }
+
+  .withIcon .title {
+    margin-top: 0.5rem;
+  }
+
+  .arrow {
+    top: 1rem;
+    right: 1rem;
+  }
+}

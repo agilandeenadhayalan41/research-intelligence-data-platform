@@ -1,0 +1,104 @@
+/* Home page banner. Colours and shapes come from the --rid-* tokens in
+   src/css/custom.css, so light and dark mode are handled there. */
+
+.hero {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2.5rem;
+  max-width: var(--rid-home-max-width);
+  margin: 0 auto 3.5rem;
+  padding: clamp(1.75rem, 5vw, 4rem) clamp(1.25rem, 4.5vw, 3.5rem);
+  border: 1px solid var(--rid-border-color);
+  border-radius: var(--rid-radius-lg);
+  background: var(--rid-hero-background);
+}
+
+/* Faint grid that fades out towards the bottom left. */
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(var(--rid-hero-grid-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--rid-hero-grid-color) 1px, transparent 1px);
+  background-size: 2rem 2rem;
+  -webkit-mask-image: radial-gradient(ellipse at 85% 0%, #000 0%, transparent 70%);
+  mask-image: radial-gradient(ellipse at 85% 0%, #000 0%, transparent 70%);
+  pointer-events: none;
+}
+
+@media (min-width: 997px) {
+  .withGraphic {
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+    align-items: center;
+  }
+}
+
+.text {
+  min-width: 0;
+}
+
+.eyebrow {
+  display: inline-block;
+  margin: 0 0 1rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  background: var(--rid-primary-soft);
+  color: var(--rid-primary-strong);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 0 0 1rem;
+  color: var(--ifm-heading-color);
+  font-size: clamp(2rem, 1.4rem + 2.6vw, 3.25rem);
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+
+.tagline {
+  max-width: 42rem;
+  margin: 0 0 1.25rem;
+  color: var(--ifm-color-emphasis-800);
+  font-size: clamp(1.0625rem, 1rem + 0.4vw, 1.25rem);
+  line-height: 1.5;
+}
+
+.lead {
+  max-width: 42rem;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.lead > p:last-of-type {
+  margin-bottom: 0;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.75rem;
+}
+
+.button {
+  /* Infima buttons do not wrap their label; a long one would overflow. */
+  white-space: normal;
+}
+
+@media (max-width: 480px) {
+  .actions {
+    flex-direction: column;
+  }
+}
+
+.graphic {
+  min-width: 0;
+}
