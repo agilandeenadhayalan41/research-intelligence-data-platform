@@ -24,12 +24,32 @@ Service capabilities run locally. None is deployed as a service yet.
 The platform is a Python codebase, and everything can be developed and tested
 on a laptop, offline, with tiny synthetic data.
 
-| Page | Read it for |
-| --- | --- |
-| [How it works](how-it-works.md) | The end-to-end data flow, one stage at a time |
-| [Status](status.md) | What has been validated, where, and how strongly. What is not proven yet |
-| [Getting started](getting-started.md) | The repository layout and how to run the tests locally |
-| [Glossary](glossary.md) | The status labels and terms used across these docs |
+<Cards>
+<Card icon="flow">
+
+[How it works](how-it-works.md)\
+The end-to-end data flow, one stage at a time
+
+</Card>
+<Card icon="status">
+
+[Status](status.md)\
+What has been validated, where, and how strongly. What is not proven yet
+
+</Card>
+<Card icon="terminal">
+
+[Getting started](getting-started.md)\
+The repository layout and how to run the tests locally
+
+</Card>
+<Card icon="book">
+
+[Glossary](glossary.md)\
+The status labels and terms used across these docs
+
+</Card>
+</Cards>
 
 ## The problem it addresses
 
@@ -59,11 +79,15 @@ A lineage chain links every canonical record back to the run that wrote it,
 the checksum of the bytes it came from and the source file
 ([lineage](../architecture/pipeline-control.md#lineage)).
 
-> **Target, not running infrastructure.** This path is the target
-> architecture, shown in the
-> [diagram on How it works](how-it-works.md#the-flow-at-a-glance). Most stages
-> are implemented and tested locally. Only some have cloud evidence, and none
-> is deployed to production. See [Status](status.md).
+<Callout type="info">
+
+**Target, not running infrastructure.** This path is the target
+architecture, shown in the
+[diagram on How it works](how-it-works.md#the-flow-at-a-glance). Most stages
+are implemented and tested locally. Only some have cloud evidence, and none
+is deployed to production. See [Status](status.md).
+
+</Callout>
 
 ## Who it is for
 
@@ -121,6 +145,8 @@ are on the [Status](status.md) page.
 
 ## How to read these docs
 
+<Steps>
+
 1. **Start with the overview pages** in order: this page,
    [How it works](how-it-works.md), [Status](status.md), then keep the
    [Glossary](glossary.md) open. [Getting started](getting-started.md) covers
@@ -130,6 +156,8 @@ are on the [Status](status.md) page.
    order), analytics, serving, and operations and readiness. Two more groups
    hold the [lead coverage register](../requirements/openalex-lead-coverage.md)
    (requirements traceability) and the proposed next target architecture.
+
+</Steps>
 
 Some reading tips:
 

@@ -2,6 +2,7 @@ import {themes as prismThemes} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 
+import {jsxLinksAfter, jsxLinksBefore} from './src/remark/jsx-links.mjs';
 import repoLinks from './src/remark/repo-links.mjs';
 import {DEFAULT_EXCLUDED_AUTHORS} from './src/lib/github.mjs';
 
@@ -56,9 +57,19 @@ const config: Config = {
   },
 
   markdown: {
-    // .md files are parsed as CommonMark (not MDX), so existing docs that
-    // contain "<" or "{" render as they do on GitHub. .mdx files stay MDX.
-    format: 'detect',
+    // Every doc and blog post is parsed as MDX, whatever its extension, so
+    // the .md files can use the site's components (src/theme/MDXComponents.tsx)
+    // without imports. The files keep their .md names: GitHub's per-file
+    // history (used by the page history) does not follow renames, and the
+    // tests, the register and cross-links name the .md paths. A literal "{" or
+    // "<" in prose is escaped as \{ or \<; `npm run check:mdx` checks every file.
+    format: 'mdx',
+    // HTML comments (<!-- ... -->) stay valid, as on GitHub, so they need no
+    // MDX {/* ... */} form (which GitHub would show as text in a .md file).
+    // The other MDX 1 compatibility options stay off.
+    mdx1Compat: {
+      comments: true,
+    },
     mermaid: true,
     hooks: {
       onBrokenMarkdownLinks: 'throw',
@@ -125,7 +136,10 @@ const config: Config = {
           editUrl: ({docPath}) => `${EDIT_URL_BASE}${docPath}`,
           // Must run before Docusaurus resolves Markdown links, so links that
           // leave docs/ become GitHub URLs instead of broken site links.
-          beforeDefaultRemarkPlugins: [repoLinks],
+          // jsxLinksBefore/After let a component's link attribute
+          // (<Card href="status.md">) be resolved like a Markdown link.
+          beforeDefaultRemarkPlugins: [jsxLinksBefore, repoLinks],
+          remarkPlugins: [jsxLinksAfter],
         },
         // Blog posts live in docs/site/blog (outside the docs plugin's folder
         // set, which excludes site/**). Editable in the browser at /blog/editor.
@@ -138,6 +152,8 @@ const config: Config = {
           editUrl: `${REPO_URL}/edit/main/docs/site/`,
           onInlineAuthors: 'ignore',
           onUntruncatedBlogPosts: 'ignore',
+          beforeDefaultRemarkPlugins: [jsxLinksBefore],
+          remarkPlugins: [jsxLinksAfter],
         },
         // React and MDX pages in src/pages: the home page and the blog editor.
         pages: {

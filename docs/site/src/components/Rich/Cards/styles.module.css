@@ -1,0 +1,233 @@
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 0.875rem;
+  margin: 0 0 var(--ifm-leading);
+  padding: 0;
+  list-style: none;
+}
+
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 1rem 1.125rem 1.125rem;
+  border: 1px solid var(--rid-border-color);
+  border-radius: var(--rid-radius-md);
+  background: var(--rid-surface-raised);
+  box-shadow: var(--rid-shadow-sm);
+}
+
+/* Cards in a grid: no list spacing from the theme. */
+.grid > .card + .card {
+  margin-top: 0;
+}
+
+.linked {
+  transition:
+    border-color var(--ifm-transition-fast) ease,
+    box-shadow var(--ifm-transition-fast) ease;
+}
+
+.linked:hover,
+.markdownCard:has(> .body > p:first-child > a:first-child):hover {
+  border-color: var(--ifm-color-primary);
+  box-shadow: var(--rid-shadow-md);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-right: 1.5rem;
+}
+
+.icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--rid-radius-sm);
+  background: var(--rid-primary-soft);
+  color: var(--rid-primary-strong);
+}
+
+.icon svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.title {
+  margin: 0;
+  color: var(--ifm-heading-color);
+  font-size: 1rem;
+  font-weight: var(--ifm-font-weight-semibold);
+  line-height: 1.35;
+}
+
+.link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.link:hover {
+  color: var(--ifm-color-primary);
+  text-decoration: none;
+}
+
+/* Stretch the link over the whole card. */
+.link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+}
+
+/* The focus ring goes around the card, not just the title text. */
+.link:focus-visible {
+  outline: none;
+}
+
+.link:focus-visible::after {
+  outline: 2px solid var(--rid-focus-color);
+  outline-offset: 2px;
+  border-radius: var(--rid-radius-md);
+}
+
+.description,
+.body {
+  margin: 0;
+  color: var(--ifm-color-emphasis-700);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+}
+
+.body > :last-child {
+  margin-bottom: 0;
+}
+
+/* Links inside the text stay clickable above the stretched card link. */
+.linked .body a {
+  position: relative;
+  z-index: 2;
+}
+
+.arrow {
+  position: absolute;
+  top: 1.125rem;
+  right: 1.125rem;
+  color: var(--ifm-color-emphasis-500);
+  font-size: 1.0625rem;
+  line-height: 1;
+}
+
+.linked:hover .arrow {
+  color: var(--ifm-color-primary);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .linked {
+    transition:
+      border-color var(--ifm-transition-fast) ease,
+      box-shadow var(--ifm-transition-fast) ease,
+      transform var(--ifm-transition-fast) ease;
+  }
+
+  .linked:hover {
+    transform: translateY(-2px);
+  }
+
+  .arrow {
+    transition:
+      color var(--ifm-transition-fast) ease,
+      transform var(--ifm-transition-fast) ease;
+  }
+
+  .linked:hover .arrow {
+    transform: translateX(3px);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Markdown form: <Card> without a title, text led by a Markdown link  */
+/* ------------------------------------------------------------------ */
+
+.markdownCard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 0;
+  padding-right: 2.5rem;
+}
+
+.markdownCard.withIcon {
+  grid-template-columns: 2.25rem minmax(0, 1fr);
+  column-gap: 0.75rem;
+}
+
+/* The leading link is the title... */
+.markdownCard > .body > p:first-child > a:first-child {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--ifm-heading-color);
+  font-size: 1rem;
+  font-weight: var(--ifm-font-weight-semibold);
+  line-height: 1.35;
+  text-decoration: none;
+}
+
+.markdownCard > .body > p:first-child > a:first-child:hover {
+  color: var(--ifm-color-primary);
+}
+
+/* ...a line break after it (kept for GitHub) adds no gap here... */
+.markdownCard > .body > p:first-child > a:first-child + br {
+  display: none;
+}
+
+/* ...and it is stretched over the whole card. */
+.markdownCard > .body > p:first-child > a:first-child::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+}
+
+.markdownCard > .body > p:first-child > a:first-child:focus-visible {
+  outline: none;
+}
+
+.markdownCard > .body > p:first-child > a:first-child:focus-visible::after {
+  outline: 2px solid var(--rid-focus-color);
+  outline-offset: 2px;
+  border-radius: var(--rid-radius-md);
+}
+
+/* Only that link is stretched; later links keep their own target. */
+.markdownCard > .body > p:first-child > a:first-child ~ a,
+.markdownCard > .body > :not(:first-child) a {
+  position: relative;
+  z-index: 2;
+}
+
+.markdownCard > .icon {
+  margin-top: -0.375rem;
+}
+
+.markdownCard .arrow {
+  display: none;
+}
+
+.markdownCard:has(> .body > p:first-child > a:first-child) .arrow {
+  display: block;
+}
+
+.markdownCard:has(> .body > p:first-child > a:first-child):hover .arrow {
+  color: var(--ifm-color-primary);
+}

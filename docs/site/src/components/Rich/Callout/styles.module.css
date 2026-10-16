@@ -1,0 +1,66 @@
+.callout {
+  --rid-callout-text: var(--rid-tone-neutral-text);
+  --rid-callout-bg: var(--rid-tone-neutral-bg);
+  --rid-callout-border: var(--rid-tone-neutral-border);
+  display: flex;
+  gap: 0.75rem;
+  margin: 0 0 var(--ifm-leading);
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--rid-callout-border);
+  border-left: 4px solid var(--rid-callout-text);
+  border-radius: var(--rid-radius-sm);
+  background: var(--rid-callout-bg);
+}
+
+.note {
+  --rid-callout-text: var(--rid-tone-neutral-text);
+  --rid-callout-bg: var(--rid-tone-neutral-bg);
+  --rid-callout-border: var(--rid-tone-neutral-border);
+}
+
+.tip {
+  --rid-callout-text: var(--rid-tone-success-text);
+  --rid-callout-bg: var(--rid-tone-success-bg);
+  --rid-callout-border: var(--rid-tone-success-border);
+}
+
+.info {
+  --rid-callout-text: var(--rid-tone-info-text);
+  --rid-callout-bg: var(--rid-tone-info-bg);
+  --rid-callout-border: var(--rid-tone-info-border);
+}
+
+.warning {
+  --rid-callout-text: var(--rid-tone-warning-text);
+  --rid-callout-bg: var(--rid-tone-warning-bg);
+  --rid-callout-border: var(--rid-tone-warning-border);
+}
+
+.danger {
+  --rid-callout-text: var(--rid-tone-danger-text);
+  --rid-callout-bg: var(--rid-tone-danger-bg);
+  --rid-callout-border: var(--rid-tone-danger-border);
+}
+
+.icon {
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin-top: 0.125rem;
+  color: var(--rid-callout-text);
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+}
+
+.content > :last-child {
+  margin-bottom: 0;
+}
+
+.title {
+  margin: 0 0 0.25rem;
+  color: var(--rid-callout-text);
+  font-weight: var(--ifm-font-weight-bold);
+}

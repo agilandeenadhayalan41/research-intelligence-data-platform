@@ -490,7 +490,7 @@ export function newPostTemplate({title, format = 'md', date} = {}) {
   const formatNote =
     format === 'mdx'
       ? 'This post is MDX, so it can use JSX and the site components as well as Markdown.'
-      : 'This post is Markdown (CommonMark): headings, lists, tables, links, images and code blocks.';
+      : 'This post is Markdown, parsed as MDX like the docs: headings, lists, tables, links, images, code blocks and the site components. Escape a literal `{` or `<` in text as `\\{` or `\\<`.';
   return [
     '---',
     `title: ${JSON.stringify(cleanTitle)}`,

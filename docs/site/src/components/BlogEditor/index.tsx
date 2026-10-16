@@ -594,8 +594,8 @@ export default function BlogEditor(): ReactNode {
             {doc.kind === 'existing'
               ? 'Set by the file extension of the published post.'
               : doc.format === 'mdx'
-                ? 'MDX: Markdown plus JSX and the site components.'
-                : 'Markdown (CommonMark), like the docs.'}
+                ? 'An .mdx file. Same syntax as md; the usual choice when the post imports components.'
+                : 'An .md file, like the docs. Parsed as MDX, so the site components work here too.'}
           </span>
         </fieldset>
 
@@ -738,20 +738,15 @@ export default function BlogEditor(): ReactNode {
           <div className={styles.previewScroll}>
             <Preview
               body={split.body}
-              format={doc.format}
               frontMatter={split.frontMatter}
               readingMinutes={minutes}
               onStatus={setCompileStatus}
             />
           </div>
           <p className={styles.paneFooter}>
-            {doc.format === 'mdx'
-              ? 'MDX runs JavaScript in this page: only preview MDX you trust. '
-              : ''}
-            The preview uses CommonMark{doc.format === 'mdx' ? ' and MDX' : ''} with the site&apos;s
-            components; tables, admonitions (<code>:::note</code>)
-            {doc.format === 'md' ? ', imports and HTML tags' : ' and imports'} are rendered only in
-            the published build.
+            MDX runs JavaScript in this page: only preview posts you trust. The preview compiles
+            the post as MDX, as the build does, with the site&apos;s components; tables, admonitions
+            (<code>:::note</code>) and imports are rendered only in the published build.
           </p>
         </section>
       </div>
