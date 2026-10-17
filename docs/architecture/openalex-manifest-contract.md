@@ -284,8 +284,15 @@ all error paths close the response; after a stream is returned, failures are
 reported and never retried from byte zero. Compensation is a whole-object restart
 by the caller: local ingestion lands nothing from an interrupted stream, a later
 run re-fetches from byte zero, and identical replays are idempotent (DE-05 tests in
-`tests/integration/test_real_source_profile.py`). Range resume is deferred to
-DE-06 (#127). Its preconditions, from the 2026-10-16 LOCAL inspection: S3 serves
+`tests/integration/test_real_source_profile.py`). DE-06 (#127) keeps that
+whole-object restart. Under the 25,000,000-byte per-object cap a restart re-reads
+at most 25,000,000 bytes, and landing refuses a byte count unlike the declared
+size (for streams that report it, and on the GCS backend for any asset with a
+known size), an MD5 unlike a single-part ETag, and a gzip payload that ends
+inside a member, so such a payload does not land. Range resume stays deferred
+until an issue lifts the cap; the objects it would help are above the cap (a
+1,070,341,481-byte Parquet part, [source profiling](openalex-source-profiling.md)).
+Its preconditions, from the 2026-10-16 LOCAL inspection: S3 serves
 anonymous `Range` reads and object versions, and releases rewrite keys in place,
 so every range must be pinned with `If-Match` (or a `versionId`), the 206 ETag must
 equal the pinned ETag, and the reassembled object must match the S3 full-object
@@ -328,7 +335,8 @@ interface is preserved: `to_source_asset()` adapts validated metadata using the
 stable `asset_id`. The connector itself still writes nothing. Landing and
 storage are implemented by the `ObjectStore` adapters (Step 09
 `LocalObjectStore`, #9 `GCSObjectStore`), the Step 12/13 local ingestion
-runners land source bytes through `LocalObjectStore`, and the DuckDB,
+runners land source bytes through `LocalObjectStore` (or `GCSObjectStore` under
+the DE-06 opt-in), and the DuckDB,
 PostgreSQL and BigQuery `Warehouse` adapters (#8, #7, #10) run queries. That
 path has run only on synthetic payloads: no real OpenAlex payload has been landed
 by repository code. A real Works pair was retrieved and profiled only in the

@@ -55,8 +55,10 @@ consumer, and every environment is
   content with `IngestionProvenance`. Raw data and provenance are not overwritten;
   identical replay is a no-op and conflicts fail explicitly. `GCSObjectStore`
   (#9) implements the same create-only contract on GCS and passed live smokes in
-  GCP_SANDBOX and the personal DEV/QA projects, but no pipeline lands to GCS yet:
-  the Step 12/13 pipelines require `storage.backend=local` (tracked in #127).
+  GCP_SANDBOX and the personal DEV/QA projects. The Step 12/13 runners land
+  into GCS only under an explicit opt-in (`allow_gcs_landing=True`, an injected
+  source connector, `environment: gcp-sandbox`), tested offline against fakes;
+  no live landing through ingestion is recorded yet (#127).
 - **Pipeline control (contracts):** typed `PipelineRun` / `SourceFileControl` /
   `RecordProvenance` models, explicit DISCOVERED→PROCESSING→SUCCESS|FAILED
   lifecycle, claim/lease rules, and a `ControlStore` write protocol separate from

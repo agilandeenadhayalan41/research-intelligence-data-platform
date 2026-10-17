@@ -16,7 +16,7 @@ from typing import BinaryIO, Final, Protocol, runtime_checkable
 
 from research_platform.config.models import CloudConfig, StorageConfig
 from research_platform.provenance.models import IngestionProvenance
-from research_platform.storage.base import ObjectStore
+from research_platform.storage.base import ObjectStat, ObjectStore
 from research_platform.storage.errors import (
     ChecksumMismatchError,
     IncompleteObjectError,
@@ -197,6 +197,36 @@ class GCSObjectStore(ObjectStore):
             raise IncompleteObjectError("committed content checksum is inconsistent")
         buffer.seek(0)
         return _CallerOwnedReadStream(buffer)
+
+    def stat(self, key: str) -> ObjectStat:
+        """Reload object metadata only (one metadata GET, no media download).
+
+        Requires committed ``rp_provenance`` and returns it with the size,
+        generation, crc32c and md5 exactly as GCS reports them. Never returns a
+        bucket name.
+        """
+        object_name, content_name = self._resolve_key(key)
+        if content_name == _PROVENANCE_NAME:
+            raise InvalidObjectKeyError("object key basename is reserved for provenance")
+        blob = self._blob(object_name)
+        try:
+            blob.reload()
+        except Exception as error:
+            if _is_not_found(error):
+                raise ObjectNotFoundError("object not found") from error
+            raise
+        committed = self._provenance_from_blob(blob)
+        size = getattr(blob, "size", None)
+        if size is None:
+            raise IncompleteObjectError("store did not report the object size")
+        generation = getattr(blob, "generation", None)
+        return ObjectStat(
+            size_bytes=int(size),
+            provenance=committed,
+            version=None if generation is None else str(generation),
+            crc32c=getattr(blob, "crc32c", None),
+            md5_base64=getattr(blob, "md5_hash", None),
+        )
 
     def _resolve_key(self, key: str) -> tuple[str, str]:
         relative = validate_object_key(key)

@@ -14,8 +14,10 @@ class StorageConfig(SettingsModel):
     """Object-store settings.
 
     The ``local`` default serves local runs and tests; it is not a cloud target.
-    No factory selects a store from ``backend``: the local pipelines default to
-    ``LocalObjectStore``, and ``GCSObjectStore`` only checks for ``gcs``.
+    ``object_store_from_config`` (``storage/factory.py``) selects
+    ``LocalObjectStore`` for ``local`` and ``GCSObjectStore`` for ``gcs``; the
+    Step 12/13 runners use ``gcs`` only under ``allow_gcs_landing=True`` with an
+    injected connector.
     """
 
     backend: Literal["local", "gcs"] = "local"

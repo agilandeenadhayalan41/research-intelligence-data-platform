@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import re
+from uuid import UUID
+
 from research_platform.sources.openalex.deletion_metadata import (
     OpenAlexDeletionAssetMetadata,
 )
 from research_platform.sources.openalex.metadata import OpenAlexAssetMetadata
+from research_platform.storage.errors import InvalidObjectKeyError
 from research_platform.storage.keys import validate_object_key
 
 
@@ -85,3 +89,30 @@ def openalex_deletion_raw_provenance_key(
     content_key = openalex_deletion_raw_object_key(metadata)
     parent, _, _ = content_key.rpartition("/")
     return f"{parent}/provenance.json"
+
+
+_MANIFEST_ENTITY = re.compile(r"^[a-z][a-z0-9-]*$")
+
+
+def openalex_landing_manifest_key(entity: str, run_id: UUID, asset_id: str) -> str:
+    """Build the create-only key of one run's landing manifest for one asset.
+
+    Layout::
+
+        manifests/openalex/<entity>/run_id=<uuid>/asset_id=<asset-id>/landing.json
+
+    Separate from the ``openalex/...`` raw prefix (ADR 0001 D1). Leaf invariant:
+    ``run_id=`` directories only hold ``asset_id=`` directories, and each
+    ``asset_id=`` directory holds only ``landing.json`` (plus ``provenance.json``
+    in ``LocalObjectStore``, which keeps one object per directory). Nothing is
+    written directly under an entity or run directory.
+    """
+    if not isinstance(entity, str) or not _MANIFEST_ENTITY.fullmatch(entity):
+        raise InvalidObjectKeyError("manifest entity must be a lower-case slug")
+    if not isinstance(run_id, UUID):
+        raise InvalidObjectKeyError("manifest run_id must be a UUID")
+    if not isinstance(asset_id, str) or not asset_id or "/" in asset_id:
+        raise InvalidObjectKeyError("manifest asset_id must be one key segment")
+    key = f"manifests/openalex/{entity}/run_id={run_id}/asset_id={asset_id}/landing.json"
+    validate_object_key(key)
+    return key

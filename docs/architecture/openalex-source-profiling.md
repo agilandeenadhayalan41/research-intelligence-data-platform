@@ -572,7 +572,9 @@ Hand-offs recorded here and not implemented by DE-05:
 - `ingestion/jsonl.py` keeps duplicate keys last-wins: DE-10 ([#131]).
 - Range resume with `If-Match` or `versionId` pinning; `OpenAlexTruncatedError`
   classified as `UNKNOWN` by `_classify_failure` (`pipeline.py`); no `RETRIEVAL`
-  branch in `deletion_pipeline.py`: DE-06 ([#127]).
+  branch in `deletion_pipeline.py`: DE-06 ([#127]). DE-06 classifies both as
+  `RETRIEVAL` and keeps range resume deferred under the per-object cap
+  ([manifest contract](openalex-manifest-contract.md#bounded-development-sample)).
 - Change triggers (combined-manifest ETag, version id or date), and canonical
   versioning when a release rewrites the same `updated_date` partition (the
   partition date is equal and the checksum differs, which the current versioning

@@ -1,7 +1,8 @@
 # Local-only placeholder, not a deployed QA environment.
 # storage.backend local and warehouse.analytical duckdb are local values, NOT
-# the GCP target (GCS + BigQuery). Nothing runs with this file: the local
-# pipelines and the Step 19 runner accept environment: local only.
+# the GCP target (GCS + BigQuery). Nothing runs with this file: the Step 12/13
+# pipelines accept environment: local, or gcp-sandbox only with the explicit
+# DE-06 GCS opt-in, and the Step 19 runner accepts environment: local only.
 # The #108 Stage 3 runs in the operator's personal project labelled QA
 # (synthetic data; not an enterprise-managed QA) used the operator scripts in
 # scripts/ with GOOGLE_CLOUD_PROJECT and their own flags, not this file.

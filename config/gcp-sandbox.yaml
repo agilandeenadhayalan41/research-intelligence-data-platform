@@ -1,6 +1,10 @@
 # Shape only: GCS/BigQuery identifiers from environment variables; creates no
-# resources. Nothing runs with this file: the local pipelines and the Step 19
-# runner accept environment: local only, and no code builds an adapter from it.
+# resources. The CLIs and the Step 19 runner refuse this file. The Step 12/13
+# library entry points land into GCS with it only when a caller passes
+# allow_gcs_landing=True and an injected (synthetic) source connector (DE-06,
+# #127); real OpenAlex payloads in the cloud need DE-24/DE-05 approval first.
+# BIGQUERY_DATASET must be set too. The opt-in live test (make test-gcs-live)
+# writes its own placeholder-only config instead of using this file.
 # The #103 and #108 Stage 1-2 GCP_SANDBOX runs (operator-owned project,
 # synthetic data) used the operator scripts in scripts/ with
 # GOOGLE_CLOUD_PROJECT and their own flags, not this file; the repo BigQuery SQL

@@ -301,8 +301,9 @@ make build
 | Command | Purpose |
 | --- | --- |
 | `make install` | Install the package in editable mode with development dependencies |
-| `make test` | Run default offline unit/integration tests (`-m "not postgres"`) |
+| `make test` | Run default offline unit/integration tests (`-m "not postgres and not openalex_live and not gcs_live"`) |
 | `make test-unit` | Run only unit tests (also excludes postgres) |
+| `make test-gcs-live` | Opt-in live GCS landing checks (DE-06) that the repository owner runs in a project they control; never part of `make test` or CI |
 | `make test-orchestration` | Focused Step 20 orchestration contract tests (also covered by `make test`) |
 | `make test-postgres-ingestion` | Separately invoked local PostgreSQL Steps 12–13 transaction tests |
 | `make test-postgres-warehouse` | Separately invoked local PostgreSQL `Warehouse.query` tests (#7) |
@@ -360,10 +361,15 @@ working directory. Python does not automatically load `.env`.
 | [`config/gcp-sandbox.yaml`](config/gcp-sandbox.yaml) | GCS/BigQuery identifier shape from environment variables; no resources created |
 | [`config/dev.yaml`](config/dev.yaml), [`config/qa.yaml`](config/qa.yaml), [`config/prod.yaml`](config/prod.yaml) | Local-only placeholders (local storage, DuckDB), not verified deployments |
 
-No runtime factory selects a storage or warehouse engine from these files. The
-recorded #103, #108 and #118 cloud runs (GCP_SANDBOX and the personal DEV/QA
-projects) were driven by operator-run scripts in `scripts/` with their own
-flags and `GOOGLE_CLOUD_PROJECT`, not by loading these YAML files.
+No runtime factory selects a warehouse engine from these files.
+`object_store_from_config` selects the landing store from `storage.backend`, and
+the Step 12/13 runners use `gcs` only when a caller passes
+`allow_gcs_landing=True` and an injected source connector with
+`environment: gcp-sandbox` (DE-06, #127); the CLIs and the Step 19 runner refuse
+non-local configuration. The recorded #103, #108 and #118 cloud runs
+(GCP_SANDBOX and the personal DEV/QA projects) were driven by operator-run
+scripts in `scripts/` with their own flags and `GOOGLE_CLOUD_PROJECT`, not by
+loading these YAML files.
 
 The scaffold still includes `warehouse.transactional: postgres`; no runtime code
 reads that setting, and it does not make operational serving mandatory.

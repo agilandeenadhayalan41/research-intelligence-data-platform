@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
-import tempfile
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO, Literal, Protocol
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from research_platform.canonical.memory import InMemoryCanonicalStore
 from research_platform.canonical.openalex.deletions import RestoreRequiredError
@@ -44,6 +42,13 @@ from research_platform.ingestion.errors import (
     IngestionError,
     IngestionFormatError,
 )
+from research_platform.ingestion.raw_landing import (
+    GCS_LANDING_ENVIRONMENTS,
+    classify_retrieval_or_landing,
+    land_raw_asset,
+    require_store_matches_config,
+    write_run_landing_manifest,
+)
 from research_platform.persistence.deletion_unit_of_work import (
     DeletionCounters,
     DeletionPublishRequest,
@@ -57,7 +62,8 @@ from research_platform.sources.openalex.deletion_metadata import (
 )
 from research_platform.storage.base import ObjectStore
 from research_platform.storage.errors import ObjectConflictError, ObjectStoreError
-from research_platform.storage.local import LocalObjectStore
+from research_platform.storage.factory import object_store_from_config
+from research_platform.storage.landing_manifest import LandingManifest
 from research_platform.storage.openalex_layout import openalex_deletion_raw_object_key
 
 if TYPE_CHECKING:
@@ -109,15 +115,25 @@ def run_openalex_deletions_local_ingest(
     lease_ttl: timedelta = DEFAULT_LEASE,
     now: Callable[[], datetime] | None = None,
     decode_limits: CsvDeletionDecodeLimits | None = None,
+    allow_gcs_landing: bool = False,
 ) -> LocalDeletionsIngestResult:
     """Process one bounded deletion CSV.GZ against an explicitly selected config.
 
     ``deletion_asset`` must be supplied by the caller (manifest discovery for
     deletions is not part of this slice; URI template uncertainty is documented).
+    The store follows ``storage.backend``; ``allow_gcs_landing=True`` (DE-06) is
+    the only way to land into GCS (``storage.backend=gcs``,
+    ``environment=gcp-sandbox``).
     """
     clock = now or (lambda: datetime.now(tz=UTC))
     config = load_config(Path(config_path))
-    _require_local_config(config)
+    _require_local_config(config, allow_gcs_landing=allow_gcs_landing)
+    if connector is None:
+        raise IngestionConfigError(
+            "deletion ingest requires an explicit connector/fetch source"
+        )
+    objects = object_store or object_store_from_config(config)
+    require_store_matches_config(config, objects, label="deletion ingest")
     limits = decode_limits or CsvDeletionDecodeLimits()
 
     owns_connection = False
@@ -147,12 +163,6 @@ def run_openalex_deletions_local_ingest(
     else:
         control = control_store or InMemoryControlStore()
         canonical = canonical_store or InMemoryCanonicalStore()
-
-    objects = object_store or LocalObjectStore(config.storage)
-    if connector is None:
-        raise IngestionConfigError(
-            "deletion ingest requires an explicit connector/fetch source"
-        )
 
     started = clock()
     try:
@@ -246,6 +256,7 @@ def ingest_deletion_asset(
 
     Does not create or finish ``PipelineRun``. Callers own run lifecycle.
     """
+    require_store_matches_config(config, objects, label="deletion ingest")
     if clock is None:
         clock = lambda: datetime.now(tz=UTC)  # noqa: E731
     if decode_limits is None:
@@ -296,14 +307,31 @@ def ingest_deletion_asset(
 
     raw_key = openalex_deletion_raw_object_key(asset)
     try:
-        checksum, retrieved_at = _land_raw(
+        landed = land_raw_asset(
             asset=asset,
             run_id=run.run_id,
             connector=connector,
             objects=objects,
             raw_key=raw_key,
             max_bytes=config.sample_selection.max_file_size_bytes,
+            decompressed_limit=decode_limits.max_decompressed_bytes,
+            storage_backend=config.storage.backend,
             clock=clock,
+            temp_prefix="oa-del-",
+            temp_suffix=".csv.gz",
+        )
+        checksum, retrieved_at = landed.checksum, landed.retrieved_at
+        # Bronze facts, written before (and independent of) canonical publication.
+        write_run_landing_manifest(
+            objects,
+            LandingManifest(
+                entity=asset.entity,
+                pipeline_name=run.pipeline_name,
+                run_id=run.run_id,
+                run_created_at=run.created_at,
+                storage_backend=config.storage.backend,
+                entry=landed.entry,
+            ),
         )
         processed_at = clock()
         retrieval_provenance = IngestionProvenance.model_validate(
@@ -385,64 +413,6 @@ def _record_stream_factory(
     return open_records
 
 
-def _land_raw(
-    *,
-    asset: OpenAlexDeletionAssetMetadata,
-    run_id: UUID,
-    connector: _Fetchable,
-    objects: ObjectStore,
-    raw_key: str,
-    max_bytes: int,
-    clock: Callable[[], datetime],
-) -> tuple[str, datetime]:
-    retrieved_at = clock()
-    source_asset = asset.to_source_asset()
-    digest = hashlib.sha256()
-    size = 0
-    with tempfile.NamedTemporaryFile(prefix="oa-del-", suffix=".csv.gz") as tmp:
-        with connector.fetch(source_asset) as payload:
-            while True:
-                chunk = payload.read(64 * 1024)
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > max_bytes:
-                    raise IngestionFormatError(
-                        "retrieved payload exceeds configured max_file_size_bytes"
-                    )
-                digest.update(chunk)
-                tmp.write(chunk)
-        tmp.flush()
-        tmp.seek(0)
-        checksum = digest.hexdigest()
-        provenance = IngestionProvenance.model_validate(
-            {
-                "run_id": run_id,
-                "source": "openalex",
-                "source_uri": asset.file_uri,
-                "retrieved_at": retrieved_at,
-                "sha256": checksum,
-            }
-        )
-        try:
-            objects.put_if_absent(raw_key, tmp, provenance)
-        except ObjectConflictError:
-            if not _raw_checksum_matches(objects, raw_key, checksum):
-                raise
-        return checksum, retrieved_at
-
-
-def _raw_checksum_matches(objects: ObjectStore, raw_key: str, checksum: str) -> bool:
-    digest = hashlib.sha256()
-    with objects.open(raw_key) as handle:
-        while True:
-            chunk = handle.read(64 * 1024)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest() == checksum
-
-
 def _stats(asset_id: str, counters: DeletionCounters) -> DeletionIngestStats:
     return DeletionIngestStats(
         asset_id=asset_id,
@@ -457,11 +427,21 @@ def _stats(asset_id: str, counters: DeletionCounters) -> DeletionIngestStats:
     )
 
 
-def _require_local_config(config: PlatformConfig) -> None:
-    if config.environment != "local":
-        raise IngestionConfigError("local deletion ingest requires environment=local")
-    if config.storage.backend != "local":
-        raise IngestionConfigError("local deletion ingest requires storage.backend=local")
+def _require_local_config(
+    config: PlatformConfig, *, allow_gcs_landing: bool = False
+) -> None:
+    if allow_gcs_landing:
+        if config.storage.backend != "gcs":
+            raise IngestionConfigError("allow_gcs_landing requires storage.backend=gcs")
+        if config.environment not in GCS_LANDING_ENVIRONMENTS:
+            raise IngestionConfigError(
+                "GCS landing is allowed for environment=gcp-sandbox only"
+            )
+    else:
+        if config.environment != "local":
+            raise IngestionConfigError("local deletion ingest requires environment=local")
+        if config.storage.backend != "local":
+            raise IngestionConfigError("local deletion ingest requires storage.backend=local")
     if config.sample_selection.max_files != 1:
         raise IngestionConfigError(
             "default local deletion ingest requires sample_selection.max_files=1"
@@ -489,4 +469,7 @@ def _classify_failure(error: BaseException) -> tuple[FailureCategory, str]:
         return FailureCategory.VALIDATION, "invalid local deletion configuration"
     if isinstance(error, ObjectStoreError):
         return FailureCategory.LANDING, "immutable landing failed"
+    typed = classify_retrieval_or_landing(error)
+    if typed is not None:
+        return typed
     return FailureCategory.UNKNOWN, "deletion ingest failed"

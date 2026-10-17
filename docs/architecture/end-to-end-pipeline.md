@@ -77,7 +77,7 @@ final validation
 | discover | Manifest / source discovery | 05, 06 |
 | select | Deterministic bounded sample selection | 07 |
 | ingest | Claimed retrieval into the pipeline control plane | 10, 12 |
-| immutable landing | Atomic raw content + provenance publish | 03, 09, 12 |
+| immutable landing | Atomic raw content + provenance publish, then a landing manifest per asset (DE-06) | 03, 09, 12 |
 | canonicalize | Map/upsert ACTIVE canonical entities & relationships | 11, 12 |
 | changes/deletions | Apply Works tombstones / Policy A precedence | 13 |
 | analytical models | Build analytical projections from canonical | 15 |

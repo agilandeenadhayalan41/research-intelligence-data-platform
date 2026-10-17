@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
+from typing import BinaryIO
 from uuid import uuid4
 
 import pytest
@@ -19,6 +20,7 @@ from research_platform.storage.base import ObjectStore
 from research_platform.storage.errors import (
     ChecksumMismatchError,
     IncompleteObjectError,
+    InvalidObjectKeyError,
     ObjectConflictError,
     ObjectNotFoundError,
 )
@@ -347,3 +349,47 @@ def test_deterministic_provenance_bytes(
             "raw/item/source.bin"
         ]
         assert stored.metadata["rp_provenance"].encode("utf-8") == first
+
+
+def test_stat_reports_size_and_committed_provenance(
+    tmp_path: Path, store_case: _StoreCase, store_factory: StoreFactory
+) -> None:
+    store = store_factory(tmp_path)
+    body = b"stat-bytes"
+    provenance = _provenance(body)
+    store.put_if_absent("raw/item/source.bin", BytesIO(body), provenance)
+    stat = store.stat("raw/item/source.bin")
+    assert stat is not None
+    assert (stat.size_bytes, stat.provenance) == (len(body), provenance)
+    if store_case.backend == "local":
+        assert stat.version is stat.crc32c is stat.md5_base64 is None
+    else:
+        assert stat.version == "1"
+        assert stat.md5_base64 is not None and stat.crc32c is not None
+
+
+def test_stat_of_a_missing_key_raises_not_found(tmp_path: Path, store_factory: StoreFactory) -> None:
+    store = store_factory(tmp_path)
+    with pytest.raises(ObjectNotFoundError):
+        store.stat("raw/item/source.bin")
+
+
+def test_stat_rejects_the_reserved_provenance_basename(
+    tmp_path: Path, store_factory: StoreFactory
+) -> None:
+    store = store_factory(tmp_path)
+    with pytest.raises(InvalidObjectKeyError):
+        store.stat("raw/item/provenance.json")
+
+
+def test_object_store_stat_defaults_to_none_for_other_stores() -> None:
+    class _Minimal(ObjectStore):
+        def put_if_absent(
+            self, key: str, content: BinaryIO, provenance: IngestionProvenance
+        ) -> None:
+            raise NotImplementedError
+
+        def open(self, key: str) -> BinaryIO:
+            raise NotImplementedError
+
+    assert _Minimal().stat("raw/item/source.bin") is None

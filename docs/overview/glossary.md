@@ -121,6 +121,7 @@ page that defines it.
 
 | Term | Meaning | Defined in |
 | --- | --- | --- |
+| Landing manifest | One create-only JSON object per pipeline run and source asset under `manifests/openalex/`, recording the raw object the run landed or verified: key, SHA-256, sizes, MD5, source ETag and version id when reported, the run that committed the object, the store's generation and digests, and which checks ran. It holds no bucket, project or account names (DE-06) | [GCS landing through ingestion](../architecture/immutable-local-landing.md#gcs-landing-through-ingestion-de-06-127) |
 | Lineage date (`lineage_source_updated_date`) | The date that decides version precedence: the source `updated_date` for an active record, or the `deleted_date` for a tombstone. Relationship tables partition on it. It is separate from the Work's own `source_updated_date` | [Record date vs lineage date](../architecture/bigquery-analytical-models.md#work-record-date-vs-lineage-date) |
 | Least-privilege service account | An identity with only the permissions a run needs, for example object create/get on one prefix, or job create/list plus edit on one dataset | [Recorded run #108 Stage 1](../architecture/bigquery-analytical-models.md#recorded-run-108-stage-1) |
 | `LOCAL` | The evidence-only rung for offline and `SEMANTIC_ONLY` results. It is never a cloud promotion rung | [Progression](../architecture/environment-readiness.md#progression) |

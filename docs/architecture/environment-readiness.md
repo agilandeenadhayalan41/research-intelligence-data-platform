@@ -101,9 +101,11 @@ on synthetic data only; it does not make its environment ready.
 - The dev/qa/prod files configured none of the cloud runs. The #103 and #108
   runs (GCP_SANDBOX and the personal DEV/QA projects) were driven by the
   operator-run `scripts/` with their own flags; the earlier #91 and #92
-  GCP_SANDBOX smokes predate those scripts. The local pipelines refuse any
-  `storage.backend` other than `local`, and no code selects a cloud backend
-  from these files.
+  GCP_SANDBOX smokes predate those scripts. The Step 12/13 runners select a
+  store from `storage.backend` and accept `gcs` only when a caller passes
+  `allow_gcs_landing=True` and an injected source connector with
+  `environment: gcp-sandbox` (DE-06); the CLIs and the Step 19 runner never do,
+  and no code selects a cloud backend from the dev/qa/prod files.
 
 ---
 
