@@ -1,8 +1,11 @@
 """Caps, gating, fault injection and value-free recording for the opt-in live GCS test.
 
 Used by ``tests/integration/test_approved_gcs_raw_landing.py`` (DE-06, #127) and
-unit-tested offline in ``tests/unit/test_gcs_live_harness.py``. Nothing here runs
-in default CI against a real bucket. Every refusal is ``pytest.fail(...,
+``tests/integration/test_canonical_gcs_release.py`` (DE-07, #128), and unit-tested
+offline in ``tests/unit/test_gcs_live_harness.py`` and
+``tests/unit/test_canonical_gcs_release_harness.py``. The module constants are the
+DE-06 caps and prefix; a caller passes its own through the keyword parameters.
+Nothing here runs in default CI against a real bucket. Every refusal is ``pytest.fail(...,
 pytrace=False)`` with a message that never repeats a supplied value, so no
 project, bucket or account name reaches the console.
 
@@ -96,7 +99,9 @@ def require_real_cloud_client(credentials: object, env: Mapping[str, str]) -> No
         refuse("live run refused: STORAGE_EMULATOR_HOST is set")
 
 
-def open_live_client(env: Mapping[str, str], repo: Path) -> tuple[LiveSettings, Any, FaultSession, str]:
+def open_live_client(
+    env: Mapping[str, str], repo: Path, *, max_http_requests: int = MAX_HTTP_REQUESTS
+) -> tuple[LiveSettings, Any, FaultSession, str]:
     """Return settings, a storage client over a ``FaultSession``, and the credential type name.
 
     Settings are validated before Application Default Credentials are read.
@@ -108,7 +113,7 @@ def open_live_client(env: Mapping[str, str], repo: Path) -> tuple[LiveSettings, 
 
     credentials, _ = google.auth.default(scopes=[READ_WRITE_SCOPE])
     require_real_cloud_client(credentials, env)
-    session = FaultSession(AuthorizedSession(credentials))
+    session = FaultSession(AuthorizedSession(credentials), max_requests=max_http_requests)
     client = storage.Client(project=settings.project, credentials=credentials, _http=session)
     return settings, client, session, type(credentials).__name__
 
@@ -128,8 +133,9 @@ class FaultSession:
     ``InjectedAbort`` (a non-retryable error after the object committed).
     """
 
-    def __init__(self, inner: Any) -> None:
+    def __init__(self, inner: Any, *, max_requests: int = MAX_HTTP_REQUESTS) -> None:
         self._inner = inner
+        self.max_requests = max_requests
         self.abort_next_chunk_before_send = False
         self.raise_after_next_final_chunk = False
         self.http_requests = 0
@@ -140,7 +146,7 @@ class FaultSession:
         return getattr(self._inner, name)
 
     def request(self, method: str, url: str, *args: Any, **kwargs: Any) -> Any:
-        if self.http_requests + 1 > MAX_HTTP_REQUESTS:
+        if self.http_requests + 1 > self.max_requests:
             refuse("live budget exceeded: refusing to send")
         self.http_requests += 1
         if method.upper() == "DELETE":
@@ -167,15 +173,27 @@ def _is_final_chunk(content_range: str) -> bool:
 
 
 class BudgetedPrefixStore(ObjectStore):
-    """Confines every key under ``de06-live/<token>/`` and enforces the put caps in code.
+    """Confines every key under ``<live_prefix>/<token>/`` and enforces the put caps in code.
 
     A cap breach fails the run before the inner store is called. ``keys`` records
     the logical (unprefixed) keys that were attempted.
     """
 
-    def __init__(self, inner: ObjectStore, token: str) -> None:
+    def __init__(
+        self,
+        inner: ObjectStore,
+        token: str,
+        *,
+        live_prefix: str = LIVE_PREFIX,
+        max_put_attempts: int = MAX_PUT_ATTEMPTS,
+        max_object_bytes: int = MAX_OBJECT_BYTES,
+        max_total_put_bytes: int = MAX_TOTAL_PUT_BYTES,
+    ) -> None:
         self.inner = inner
-        self.prefix = f"{LIVE_PREFIX}/{token}"
+        self.prefix = f"{live_prefix}/{token}"
+        self.max_put_attempts = max_put_attempts
+        self.max_object_bytes = max_object_bytes
+        self.max_total_put_bytes = max_total_put_bytes
         validate_object_key(f"{self.prefix}/probe")
         self.put_attempts = 0
         self.put_bytes = 0
@@ -189,9 +207,9 @@ class BudgetedPrefixStore(ObjectStore):
         size = content.seek(0, io.SEEK_END) - start
         content.seek(start)
         if (
-            self.put_attempts + 1 > MAX_PUT_ATTEMPTS
-            or size > MAX_OBJECT_BYTES
-            or self.put_bytes + size > MAX_TOTAL_PUT_BYTES
+            self.put_attempts + 1 > self.max_put_attempts
+            or size > self.max_object_bytes
+            or self.put_bytes + size > self.max_total_put_bytes
         ):
             refuse("live budget exceeded: refusing to upload")
         physical = self.physical_key(key)

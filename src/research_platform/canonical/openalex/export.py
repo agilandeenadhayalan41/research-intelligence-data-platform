@@ -8,7 +8,7 @@ columns, so a BigQuery Parquet load sees the contract's ``REQUIRED`` modes.
 
 Rows are flattened exactly like the PostgreSQL canonical store:
 ``model_dump(mode="python", exclude={"lineage"})`` merged with
-``row_codec.lineage_columns``. Enums are written as ``.value`` and ``run_id``
+``lineage_codec.lineage_columns``. Enums are written as ``.value`` and ``run_id``
 as its canonical UUID string (BigQuery ``run_id`` is ``STRING``). Row order is
 the snapshot order (``InMemoryCanonicalStore.snapshot`` sorts by grain key).
 
@@ -17,17 +17,21 @@ columns, schema equality, and no nulls in non-nullable columns. Parquet writer
 options are pinned, so identical input yields identical bytes under the same
 PyArrow version.
 
-Exports are derived data. Write them to a scratch directory or the git-ignored
-``data/sample/``, never under immutable raw-landing keys. No network, cloud or
-BigQuery calls are made here.
+Local exports are scratch copies for tests and the #103 sandbox loads: write
+them to a scratch directory or the git-ignored ``data/sample/``, never under
+immutable raw-landing keys. The system-of-record form is a Silver release built
+by ``publisher.build_canonical_release`` (ADR 0001 D1), which uses the same
+Parquet options. No network, cloud or BigQuery calls are made here.
 """
 
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Final, Iterable, Mapping
 from uuid import UUID, uuid4
 
@@ -37,6 +41,7 @@ from pydantic import Field, field_validator, model_validator
 
 from research_platform.canonical.memory import CanonicalSnapshot
 from research_platform.canonical.openalex.errors import CanonicalExportError
+from research_platform.canonical.openalex.lineage_codec import lineage_columns
 from research_platform.canonical.openalex.models import (
     Author,
     Funder,
@@ -56,7 +61,6 @@ from research_platform.canonical.openalex.models import (
     WorkTopic,
 )
 from research_platform.canonical.openalex.schemas import CANONICAL_SCHEMAS
-from research_platform.persistence.postgres.row_codec import lineage_columns
 
 __all__ = [
     "CANONICAL_TABLE_MODELS",
@@ -68,10 +72,12 @@ __all__ = [
     "PARQUET_COMPRESSION",
     "PARQUET_FORMAT_VERSION",
     "PARQUET_TEMP_SUFFIX",
+    "PARQUET_WRITE_OPTIONS",
     "canonical_parquet_path",
     "canonical_row",
     "canonical_table_to_arrow",
     "export_snapshot_to_parquet",
+    "pinned_parquet_bytes",
     "read_canonical_parquet",
     "snapshot_to_arrow",
     "validate_canonical_arrow_table",
@@ -133,6 +139,10 @@ _PARQUET_WRITE_OPTIONS: Final[Mapping[str, Any]] = {
     "allow_truncated_timestamps": False,
     "store_schema": True,
 }
+
+# Read-only view of the pinned options for the Silver release writer (ADR 0001 D1:
+# releases use the pinned writer options of this module).
+PARQUET_WRITE_OPTIONS: Final[Mapping[str, Any]] = MappingProxyType(_PARQUET_WRITE_OPTIONS)
 
 _HASH_CHUNK_BYTES = 1024 * 1024
 
@@ -364,6 +374,19 @@ def write_canonical_parquet(
         byte_size=target.stat().st_size,
         sha256=_sha256_file(target),
     )
+
+
+def pinned_parquet_bytes(table: pa.Table, *, row_group_size: int) -> bytes:
+    """Encode ``table`` in memory with the pinned writer options and an explicit row-group size.
+
+    No schema validation: callers validate their rows first. Identical input
+    yields identical bytes under the same PyArrow version.
+    """
+    if isinstance(row_group_size, bool) or not isinstance(row_group_size, int) or row_group_size < 1:
+        raise CanonicalExportError("row_group_size must be a positive integer")
+    sink = io.BytesIO()
+    pq.write_table(table, sink, row_group_size=row_group_size, **_PARQUET_WRITE_OPTIONS)
+    return sink.getvalue()
 
 
 def export_snapshot_to_parquet(

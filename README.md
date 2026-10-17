@@ -178,8 +178,9 @@ flowchart LR
   do not create a giant flattened table or couple canonical schemas to a serving
   engine. Object storage plus Parquet is the canonical data layer (lead §3.1,
   §30); [ADR 0001 D1](docs/adr/0001-gcp-architecture-and-service-selection.md#d1-canonical-gcs-layout-and-release-manifests)
-  selects the Cloud Storage Parquet release layout, to be built in DE-07
-  (#128). Today canonical Parquet is only a local export.
+  selects the Cloud Storage Parquet release layout. DE-07 (#128) builds those
+  releases from landed Bronze and tests them offline against local and fake
+  Cloud Storage stores; no live run is recorded.
 - **Start GCP analytics with BigQuery.** Derive partitioning, clustering, bounded
   scans, and materializations from query evidence. DuckDB results do not prove
   BigQuery SQL compatibility.
@@ -304,6 +305,7 @@ make build
 | `make test` | Run default offline unit/integration tests (`-m "not postgres and not openalex_live and not gcs_live"`) |
 | `make test-unit` | Run only unit tests (also excludes postgres) |
 | `make test-gcs-live` | Opt-in live GCS landing checks (DE-06) that the repository owner runs in a project they control; never part of `make test` or CI |
+| `make test-canonical-gcs-live` | Opt-in live Silver release checks (DE-07) that the repository owner runs in a project they control; never part of `make test` or CI |
 | `make test-orchestration` | Focused Step 20 orchestration contract tests (also covered by `make test`) |
 | `make test-postgres-ingestion` | Separately invoked local PostgreSQL Steps 12–13 transaction tests |
 | `make test-postgres-warehouse` | Separately invoked local PostgreSQL `Warehouse.query` tests (#7) |
@@ -463,7 +465,7 @@ src\research_platform\
   sources\openalex\            Metadata, parser, selector, connector, profiler, connectivity/profile CLIs
   storage\                    ObjectStore contract; LocalObjectStore; GCSObjectStore
   control\                    Pipeline-control models, lifecycle, ControlStore protocol, in-memory store
-  canonical\openalex\         Portable OpenAlex canonical models, schemas, mapping
+  canonical\openalex\         Portable OpenAlex canonical models, schemas, mapping, Parquet export, Silver releases
   persistence\                Unit-of-work boundaries; local durable PostgresControlStore/PostgresCanonicalStore
   ingestion\                  Step 12–13 local Works ingestion and deletions pipelines and CLIs
   benchmarks\                 Query-pattern registry models, fan-out fixtures, FIXTURE_ONLY harness
