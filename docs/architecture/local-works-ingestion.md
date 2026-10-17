@@ -2,7 +2,9 @@
 
 Step 12 implements one bounded local Works ingestion slice behind the Step 10
 transaction boundary. It is not end-to-end serving publication, BigQuery load,
-GCS landing, Airflow, or multi-file orchestration.
+GCS landing, Airflow, or multi-file orchestration. DE-06 (#127) later added an
+opt-in GCS landing path to this runner
+([GCS landing through ingestion](immutable-local-landing.md#gcs-landing-through-ingestion-de-06-127)).
 
 ## Dependencies
 
@@ -52,8 +54,11 @@ result = run_openalex_works_local_ingest(
 )
 ```
 
-Requires `environment=local`, `storage.backend=local`,
-`sample_selection.max_files=1`, and `max_file_size_bytes <= 25000000`.
+Requires `sample_selection.max_files=1`, `max_file_size_bytes <= 25000000`, and
+`environment=local` with `storage.backend=local` (the default), or, only when the
+caller passes `allow_gcs_landing=True` and an injected connector,
+`environment=gcp-sandbox` with `storage.backend=gcs`
+([GCS landing through ingestion](immutable-local-landing.md#gcs-landing-through-ingestion-de-06-127)).
 
 Offline unit tests inject a fake connector and use:
 
@@ -206,8 +211,9 @@ Raw landing is immutable and may outlive a failed control completion. Retries
 never overwrite raw bytes. `ObjectStore.put_if_absent` treats identical
 content+provenance as a no-op and conflicting state as an error. When a prior
 FAILED attempt already landed bytes, Step 12 accepts a content-checksum match
-for the same key (retrieval `run_id` in sidecar provenance may differ) and
-reruns only the database publication transaction.
+for the same key (retrieval `run_id` in the committed provenance may differ;
+the new run's landing manifest records `existing_object_verified` and the
+committing run) and reruns only the database publication transaction.
 
 ## Local PostgreSQL integration tests
 

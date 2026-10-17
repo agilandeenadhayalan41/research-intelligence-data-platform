@@ -19,3 +19,34 @@ class IngestionDecodeError(IngestionError, ValueError):
 
 class IngestionSkippedError(IngestionError):
     """No eligible file was selected for this run."""
+
+
+class IngestionRetrievalError(IngestionError):
+    """Retrieved source bytes are incomplete or differ from the declared source object.
+
+    Raised before any raw object is landed; a later run re-fetches the asset.
+    """
+
+
+class SourceSizeMismatchError(IngestionRetrievalError):
+    """The retrieved byte count differs from the declared size (``RETRIEVAL``)."""
+
+
+class SourcePayloadIncompleteError(IngestionRetrievalError):
+    """A gzip payload ends inside a member (``RETRIEVAL``)."""
+
+
+class SourceListingMismatchError(IngestionRetrievalError):
+    """The source Content-Length differs from the manifest listing (``VALIDATION``)."""
+
+
+class SourceChecksumMismatchError(IngestionRetrievalError):
+    """A single-part source ETag differs from the MD5 of the bytes (``CHECKSUM``)."""
+
+
+class RawLandingError(IngestionError):
+    """The object store failed while landing or verifying raw bytes (``LANDING``).
+
+    The message never carries keys, buckets, projects or provider text; the
+    provider exception, when there is one, is chained as ``__cause__``.
+    """

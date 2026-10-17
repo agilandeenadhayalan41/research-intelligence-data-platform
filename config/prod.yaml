@@ -2,7 +2,8 @@
 # No PROD environment exists: the readiness registry keeps every mandatory PROD
 # domain BLOCKED. storage.backend local and warehouse.analytical duckdb are
 # local values, NOT the production target, and nothing runs with this file:
-# the local pipelines and the Step 19 runner accept environment: local only.
+# the Step 12/13 pipelines accept environment: local, or gcp-sandbox only with
+# the explicit DE-06 GCS opt-in, and the Step 19 runner accepts local only.
 # Real environment configuration: DE-13 (#134) and DE-04 (#125). Promotion
 # gates: DE-27 (#148), which keeps PROD blocked until every gate is VERIFIED.
 environment: prod

@@ -3,6 +3,8 @@
 Step 13 applies bounded, idempotent OpenAlex Work deletions while preserving
 immutable raw bytes, lineage, and transactional correctness. It does not
 implement BigQuery models, GCS, Airflow, or a generic schema-migration system.
+DE-06 (#127) later added an opt-in GCS landing path to this runner
+([GCS landing through ingestion](immutable-local-landing.md#gcs-landing-through-ingestion-de-06-127)).
 
 ## Authoritative public source
 

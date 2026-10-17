@@ -33,4 +33,5 @@ markers = [
     "integration: local integration tests; no external services required",
     "postgres: requires local PostgreSQL via POSTGRES_DSN; skipped when unavailable",
     "openalex_live: reads the public OpenAlex snapshot over anonymous HTTPS within fixed byte caps; needs OPENALEX_LIVE_TESTS=1 and a budget ledger; never in default CI",
+    "gcs_live: writes synthetic objects to an existing GCS bucket in a project the repository owner controls, within fixed caps; needs GCS_LIVE_TESTS=1 and the confirm variables; never in default CI",
 ]

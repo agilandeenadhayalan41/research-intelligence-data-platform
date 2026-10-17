@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from research_platform.canonical.memory import InMemoryCanonicalStore
 from research_platform.canonical.openalex.activity import is_deleted_work
-from research_platform.config.models import StorageConfig
+from research_platform.config.models import CloudConfig, StorageConfig
 from research_platform.control import InMemoryControlStore, PipelineRunStatus
 from research_platform.e2e import (
     PIPELINE_NAME,
@@ -48,7 +48,10 @@ from research_platform.sources.openalex.deletion_metadata import (
 )
 from research_platform.sources.openalex.metadata import OpenAlexAssetMetadata
 from research_platform.sources.openalex.sample import OpenAlexSampleSelection
+from research_platform.storage.gcs import GCSObjectStore
+from research_platform.storage.landing_manifest import read_landing_manifest
 from research_platform.storage.local import LocalObjectStore
+from tests.support.fake_gcs import FakeGCSClient
 
 
 def _ts(*, hour: int = 1) -> datetime:
@@ -1310,3 +1313,76 @@ def test_cli_failure_includes_recovery_guidance(
     assert payload["recovery_action"]
     assert payload["recovery_action"] == RecoveryAction.CORRECT_BOUNDS_AND_RERUN.value
     assert "Traceback" not in payload.get("safe_error", "")
+
+
+# ---------------------------------------------------------------------------
+# DE-06 (#127): landing manifests and the store/config guard in Step 19
+# ---------------------------------------------------------------------------
+
+
+def test_step19_run_writes_one_local_landing_manifest_per_asset(tmp_path: Path) -> None:
+    control = InMemoryControlStore()
+    canonical = InMemoryCanonicalStore()
+    asset = _asset()
+    del_asset = _deletion_asset()
+    landing = tmp_path / "landing"
+    cfg = _write_config(tmp_path / "cfg", landing)
+    objects = LocalObjectStore(StorageConfig(backend="local", landing_path=landing))
+
+    def run() -> object:
+        return run_bounded_e2e_pipeline(
+            cfg,
+            works_connector=FakeConnector(
+                assets=[asset], payloads={asset.file_uri: _gz_jsonl([_work("W1")])}
+            ),
+            deletion_asset=del_asset,
+            deletion_connector=FakeDeletionConnector(
+                {del_asset.file_uri: _gz_csv([("W9", "2024-02-01")])}
+            ),
+            control_store=control,
+            canonical_store=canonical,
+            object_store=objects,
+            now=_clock(),
+        )
+
+    result = run()
+    assert result.success
+    run_id = result.run.run_id
+    expected = sorted(
+        [
+            f"manifests/openalex/works/run_id={run_id}/asset_id={asset.asset_id}/landing.json",
+            f"manifests/openalex/works-deletions/run_id={run_id}/asset_id={del_asset.asset_id}/landing.json",
+        ]
+    )
+    written = sorted(str(p.relative_to(landing)) for p in landing.rglob("landing.json"))
+    assert written == expected
+    for key in expected:
+        manifest = read_landing_manifest(objects, key)
+        assert manifest.storage_backend == "local" and manifest.run_id == run_id
+
+    replay = run()
+    assert replay.success
+    assert sorted(str(p.relative_to(landing)) for p in landing.rglob("landing.json")) == expected
+
+
+def test_step19_refuses_an_injected_gcs_store_under_local_config(tmp_path: Path) -> None:
+    client = FakeGCSClient()
+    store = GCSObjectStore(
+        StorageConfig(backend="gcs", bucket="synthetic-bucket"),
+        CloudConfig(project_id="synthetic-project"),
+        client=client,
+    )
+    asset = _asset()
+    cfg = _write_config(tmp_path / "cfg", tmp_path / "landing")
+    result = run_bounded_e2e_pipeline(
+        cfg,
+        works_connector=FakeConnector(
+            assets=[asset], payloads={asset.file_uri: _gz_jsonl([_work("W1")])}
+        ),
+        object_store=store,
+        now=_clock(),
+    )
+    assert not result.success
+    ingest = next(s for s in result.stages if s.stage is StageName.INGEST)
+    assert ingest.status is StageStatus.FAILED
+    assert client.buckets == {}

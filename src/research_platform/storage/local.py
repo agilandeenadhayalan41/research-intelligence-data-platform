@@ -12,7 +12,7 @@ from typing import BinaryIO, Final
 
 from research_platform.config.models import StorageConfig
 from research_platform.provenance.models import IngestionProvenance
-from research_platform.storage.base import ObjectStore
+from research_platform.storage.base import ObjectStat, ObjectStore
 from research_platform.storage.errors import (
     ChecksumMismatchError,
     IncompleteObjectError,
@@ -132,6 +132,18 @@ class LocalObjectStore(ObjectStore):
         self._verify_committed_integrity(object_dir, content_path)
         # Caller owns the returned read-only binary stream and must close it.
         return content_path.open("rb")
+
+    def stat(self, key: str) -> ObjectStat:
+        """Report the committed size and provenance without re-hashing content."""
+        object_dir, content_path, content_name = self._resolve(key)
+        if content_name == _PROVENANCE_NAME:
+            raise InvalidObjectKeyError("object key basename is reserved for provenance")
+        if not self._is_committed(object_dir, content_path):
+            raise ObjectNotFoundError("object not found")
+        return ObjectStat(
+            size_bytes=content_path.stat().st_size,
+            provenance=load_provenance(object_dir / _PROVENANCE_NAME),
+        )
 
     def _resolve(self, key: str) -> tuple[Path, Path, str]:
         validate_object_key(key)
