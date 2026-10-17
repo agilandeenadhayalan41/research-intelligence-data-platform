@@ -14,17 +14,28 @@ export type BuildAuthor = {
   lastSha: string | null;
 };
 
+/** Commits by automation authors (bots, AI tools): counted, never named. */
+export type BuildAutomation = {
+  commits: number;
+  /** ISO 8601, of the most recent one. */
+  lastDate: string | null;
+  lastSha: string | null;
+};
+
 export type PageMetaEntry = {
   readingMinutes: number | null;
   words: number | null;
+  /** Author of the latest commit by a person. */
   lastAuthor: string | null;
   /** ISO 8601. */
   lastDate: string | null;
   lastSha?: string | null;
-  /** Number of commits that changed the file; null when git had no answer. */
+  /** Number of commits by people that changed the file; null when git had no answer. */
   commits: number | null;
-  /** Most commits first; null when git had no answer. */
+  /** People only, most commits first; null when git had no answer. */
   authors: BuildAuthor[] | null;
+  /** Only when automation authors changed the file. */
+  automation?: BuildAutomation;
 };
 
 export type BlogSource = {
@@ -64,6 +75,18 @@ export function usePageMeta(repoPath: string | null | undefined): PageMetaEntry 
 /** Raw sources of the blog posts (for the blog editor), newest file first. */
 export function useBlogSources(): BlogSource[] {
   return usePageMetaData()?.blogSources ?? [];
+}
+
+/**
+ * customFields.pageHistory.excludeAuthors from docusaurus.config.ts: the
+ * automation authors left out of the page history. Undefined when it is not
+ * set (the default list of src/lib/github.mjs applies).
+ */
+export function useExcludedAuthors(): readonly string[] | undefined {
+  const {siteConfig} = useDocusaurusContext();
+  const pageHistory = siteConfig.customFields?.pageHistory as {excludeAuthors?: unknown} | undefined;
+  const list = pageHistory?.excludeAuthors;
+  return Array.isArray(list) ? list.filter((item): item is string => typeof item === 'string') : undefined;
 }
 
 /** customFields.repo from docusaurus.config.ts, or null when it is missing. */

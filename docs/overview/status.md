@@ -6,19 +6,23 @@ description: What is complete, what has been validated and where, how ready each
 
 # Status
 
-> **Last updated from `main` @ `d6a71a5` (2026-10-13), plus the #123 (DE-02)
-> corrections.** This page summarizes the repository at that commit, and the
-> GitHub issue states on that date. The readiness levels, the promotion
-> outcomes and the code paths under `src/` and `scripts/` are unchanged since
-> `206105e`. #123 changed wording only (docs, config and SQL comments,
-> docstrings, and descriptive strings such as the registry's rationale text),
-> added a docs summary of the four #118 runs, and added and updated offline
-> tests that check the docs against the registry. If a detailed page disagrees
-> with this one, check the dates on that page's "Recorded run" sections and
-> the readiness levels in
-> [`src/research_platform/readiness/registry.py`](../../src/research_platform/readiness/registry.py).
-> For the status of each requirement of the lead architecture, see the
-> [lead coverage register](../requirements/openalex-lead-coverage.md).
+<Callout type="info">
+
+**Last updated from `main` @ `d6a71a5` (2026-10-13), plus the #123 (DE-02)
+corrections.** This page summarizes the repository at that commit, and the
+GitHub issue states on that date. The readiness levels, the promotion
+outcomes and the code paths under `src/` and `scripts/` are unchanged since
+`206105e`. #123 changed wording only (docs, config and SQL comments,
+docstrings, and descriptive strings such as the registry's rationale text),
+added a docs summary of the four #118 runs, and added and updated offline
+tests that check the docs against the registry. If a detailed page disagrees
+with this one, check the dates on that page's "Recorded run" sections and
+the readiness levels in
+[`src/research_platform/readiness/registry.py`](../../src/research_platform/readiness/registry.py).
+For the status of each requirement of the lead architecture, see the
+[lead coverage register](../requirements/openalex-lead-coverage.md).
+
+</Callout>
 
 ## At a glance
 
@@ -226,17 +230,17 @@ and the last row is each environment's overall status.
 
 | Domain | LOCAL | GCP_SANDBOX | DEV | QA | PROD |
 | --- | --- | --- | --- | --- | --- |
-| `GCS_RAW_LANDING` | DEMONSTRATED_LOCAL | **VERIFIED** | **VERIFIED** | **VERIFIED** | BLOCKED |
-| `BIGQUERY_ANALYTICAL` | CONTRACT_DEFINED | **VERIFIED** | **VERIFIED** | **VERIFIED** | BLOCKED |
-| `CONFIGURATION` | DEMONSTRATED_LOCAL | CONTRACT_DEFINED | CONTRACT_DEFINED | CONTRACT_DEFINED | BLOCKED |
-| `DATA_QUALITY`, `GOLD_MARTS`, `DATA_SERVICE` | DEMONSTRATED_LOCAL | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
-| `ORCHESTRATION`, `PUBLICATION_CONCURRENCY` | CONTRACT_DEFINED | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
-| `IDENTITY_IAM`, `WORKLOAD_IDENTITY`, `SECRETS` | CONTRACT_DEFINED | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
-| `OBSERVABILITY`, `COST_CONTROLS`, `NETWORKING`, `GOVERNANCE`, `SECURITY`, `LINEAGE`, `RECOVERY` | CONTRACT_DEFINED | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
-| `ROLLBACK` | DEMONSTRATED_LOCAL | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
-| `CI_CD` | DEMONSTRATED_LOCAL | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | CLOUD_UNVERIFIED | BLOCKED |
-| `OPERATIONAL_STORE_OPTIONAL` | CONTRACT_DEFINED | CONTRACT_DEFINED | CONTRACT_DEFINED | CONTRACT_DEFINED | CONTRACT_DEFINED |
-| **Overall** | NOT_READY | **NOT_READY** | **NOT_READY** | **NOT_READY** | **NOT_READY** |
+| `GCS_RAW_LANDING` | <Badge>DEMONSTRATED_LOCAL</Badge> | <Badge>**VERIFIED**</Badge> | <Badge>**VERIFIED**</Badge> | <Badge>**VERIFIED**</Badge> | <Badge>BLOCKED</Badge> |
+| `BIGQUERY_ANALYTICAL` | <Badge>CONTRACT_DEFINED</Badge> | <Badge>**VERIFIED**</Badge> | <Badge>**VERIFIED**</Badge> | <Badge>**VERIFIED**</Badge> | <Badge>BLOCKED</Badge> |
+| `CONFIGURATION` | <Badge>DEMONSTRATED_LOCAL</Badge> | <Badge>CONTRACT_DEFINED</Badge> | <Badge>CONTRACT_DEFINED</Badge> | <Badge>CONTRACT_DEFINED</Badge> | <Badge>BLOCKED</Badge> |
+| `DATA_QUALITY`, `GOLD_MARTS`, `DATA_SERVICE` | <Badge>DEMONSTRATED_LOCAL</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>BLOCKED</Badge> |
+| `ORCHESTRATION`, `PUBLICATION_CONCURRENCY` | <Badge>CONTRACT_DEFINED</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>BLOCKED</Badge> |
+| `IDENTITY_IAM`, `WORKLOAD_IDENTITY`, `SECRETS` | <Badge>CONTRACT_DEFINED</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>BLOCKED</Badge> |
+| `OBSERVABILITY`, `COST_CONTROLS`, `NETWORKING`, `GOVERNANCE`, `SECURITY`, `LINEAGE`, `RECOVERY` | <Badge>CONTRACT_DEFINED</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>BLOCKED</Badge> |
+| `ROLLBACK` | <Badge>DEMONSTRATED_LOCAL</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>BLOCKED</Badge> |
+| `CI_CD` | <Badge>DEMONSTRATED_LOCAL</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>CLOUD_UNVERIFIED</Badge> | <Badge>BLOCKED</Badge> |
+| `OPERATIONAL_STORE_OPTIONAL` | <Badge>CONTRACT_DEFINED</Badge> | <Badge>CONTRACT_DEFINED</Badge> | <Badge>CONTRACT_DEFINED</Badge> | <Badge>CONTRACT_DEFINED</Badge> | <Badge>CONTRACT_DEFINED</Badge> |
+| **Overall** | <Badge>NOT_READY</Badge> | <Badge>**NOT_READY**</Badge> | <Badge>**NOT_READY**</Badge> | <Badge>**NOT_READY**</Badge> | <Badge>**NOT_READY**</Badge> |
 
 How to read it:
 

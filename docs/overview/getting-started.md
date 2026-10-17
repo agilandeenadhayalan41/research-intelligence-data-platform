@@ -45,6 +45,10 @@ psycopg. CI runs install, check, test and build on Python 3.12 and 3.14
 ## Running it locally
 
 Default tests need no cloud credentials, no network and no external services.
+
+<Tabs groupId="shell">
+<TabItem value="powershell" label="PowerShell" default>
+
 From the repository root, in PowerShell:
 
 ```powershell
@@ -56,7 +60,22 @@ make check
 make build
 ```
 
+</TabItem>
+<TabItem value="bash" label="Linux or macOS">
+
 On Linux or macOS, activate with `source .venv/bin/activate` instead.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+make install
+make test
+make check
+make build
+```
+
+</TabItem>
+</Tabs>
 
 `make test` runs the offline suite and excludes PostgreSQL-marked tests. The
 PostgreSQL suites are separate targets (`make test-postgres-ingestion`,

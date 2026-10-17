@@ -13,6 +13,8 @@ import * as runtime from 'react/jsx-runtime';
 import MDXComponents from '@theme/MDXComponents';
 import type {MDXComponents as MDXComponentMap, MDXContent} from 'mdx/types';
 
+import {htmlCommentsToMdx} from '@site/src/lib/htmlComments.mjs';
+
 import type {PostFrontMatter} from './frontMatter';
 import styles from './styles.module.css';
 
@@ -26,7 +28,6 @@ export type CompileStatus =
 interface PreviewProps {
   /** Post source with the front matter blanked out (see splitFrontMatter). */
   body: string;
-  format: PostFormat;
   frontMatter: PostFrontMatter | null;
   readingMinutes: number;
   /** Told whenever a compile starts, succeeds or fails. */
@@ -64,14 +65,13 @@ function loadMdx(): Promise<MdxModule> {
 const dateFormat = new Intl.DateTimeFormat('en', {dateStyle: 'long', timeZone: 'UTC'});
 
 /**
- * Live preview of a post: compiles the source with @mdx-js/mdx (format 'md'
- * or 'mdx') and renders it with the site's MDX components, so it looks like
- * the published post. Compile and render errors are shown in the pane.
- * Must only be rendered in the browser.
+ * Live preview of a post: compiles the source with @mdx-js/mdx as MDX, the
+ * way the site's build parses every post (.md or .mdx), and renders it with
+ * the site's MDX components, so it looks like the published post. Compile and
+ * render errors are shown in the pane. Must only be rendered in the browser.
  */
 export default function Preview({
   body,
-  format,
   frontMatter,
   readingMinutes,
   onStatus,
@@ -89,7 +89,7 @@ export default function Preview({
     statusRef.current?.({state: 'compiling'});
     const timer = window.setTimeout(
       () => {
-        void compile(body, format).then((result) => {
+        void compile(body).then((result) => {
           if (sequence.current !== version) {
             return; // A newer edit is being compiled.
           }
@@ -108,7 +108,7 @@ export default function Preview({
       version > 1 ? DEBOUNCE_MS : 0,
     );
     return () => window.clearTimeout(timer);
-  }, [body, format]);
+  }, [body]);
 
   const title = frontMatter?.title ?? null;
   const date = frontMatter?.date ?? null;
@@ -118,7 +118,7 @@ export default function Preview({
       {error && (
         <div className={styles.compileError} role="alert">
           <p className={styles.compileErrorTitle}>
-            {format === 'mdx' ? 'MDX' : 'Markdown'} error
+            MDX error
             {error.location ? ` at ${error.location}` : ''}
           </p>
           <pre className={styles.compileErrorMessage}>{error.message}</pre>
@@ -187,7 +187,6 @@ function RenderContent({compiled}: {compiled: Compiled}): ReactNode {
 
 async function compile(
   body: string,
-  format: PostFormat,
 ): Promise<Omit<Compiled, 'version'> | {error: CompileError}> {
   let mdx: MdxModule;
   try {
@@ -203,12 +202,13 @@ async function compile(
   }
   const imports: string[] = [];
   try {
-    const evaluated = await mdx.evaluate(body, {
+    const evaluated = await mdx.evaluate(htmlCommentsToMdx(body, mdx), {
       ...(runtime as unknown as Pick<
         Parameters<MdxModule['evaluate']>[1],
         'Fragment' | 'jsx' | 'jsxs'
       >),
-      format,
+      // The build parses .md posts as MDX too (markdown.format: 'mdx').
+      format: 'mdx',
       development: false,
       baseUrl: window.location.href,
       remarkPlugins: [[remarkPreview, {imports}]],
@@ -221,7 +221,7 @@ async function compile(
     }
     return {Content: evaluated.default, components};
   } catch (error) {
-    return {error: describeError(error, format)};
+    return {error: describeError(error)};
   }
 }
 
@@ -232,7 +232,7 @@ interface MessageLike {
   message?: unknown;
 }
 
-function describeError(error: unknown, format: PostFormat): CompileError {
+function describeError(error: unknown): CompileError {
   const value = (error ?? {}) as MessageLike;
   const message =
     typeof value.reason === 'string' && value.reason
@@ -245,11 +245,11 @@ function describeError(error: unknown, format: PostFormat): CompileError {
       ? `line ${value.line}${typeof value.column === 'number' ? `, column ${value.column}` : ''}`
       : null;
   let hint: string | null = null;
-  if (format === 'mdx' && /<!--|html comment/i.test(message)) {
-    hint = 'HTML comments are not allowed in MDX. Use {/* comment */} instead.';
-  } else if (format === 'mdx' && /acorn|expression|unexpected character/i.test(message)) {
+  if (/<!--|html comment/i.test(message)) {
+    hint = 'Put an HTML comment on lines of its own, or use {/* comment */} instead.';
+  } else if (/acorn|expression|unexpected character|closing tag/i.test(message)) {
     hint =
-      'In MDX, "{" starts a JavaScript expression and "<" starts JSX. Escape them as \\{ and \\<, or switch the format to md.';
+      'Posts are MDX (.md too): "{" starts a JavaScript expression and "<" starts JSX. Escape them as \\{ and \\< when they are text.';
   }
   return {message, location, hint};
 }

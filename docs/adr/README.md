@@ -27,6 +27,8 @@ An architecture decision record (ADR) records one decision, or one closely linke
 
 Every ADR has these H2 sections, in this order. A section that does not apply stays, with one line saying why (for example "Not applicable: this ADR selects no technology").
 
+<Steps>
+
 1. `## Status`: the status, the acceptance rule, the date, the base commit, the sign-off roles, and any decision that is *selected, not locked* or conditional.
 2. `## Context`: the problem, the lead sections involved, current evidence with links, and what is not proven.
 3. `## Decisions`: one `### Dn <title>` per decision, numbered from D1. Each carries the bold labels **Decision**, **Options considered**, **Rationale**, **Consequences**, **Not selected** (each option with a measurable revisit trigger), **Implemented by** (DE ids with issue links) and **Evidence** (repository links, or "not yet measured").
@@ -38,6 +40,8 @@ Every ADR has these H2 sections, in this order. A section that does not apply st
 9. `## Consequences and follow-on work`
 10. `## Rollback`: how the decision is reversed or superseded.
 11. `## References`
+
+</Steps>
 
 ## Writing rules
 

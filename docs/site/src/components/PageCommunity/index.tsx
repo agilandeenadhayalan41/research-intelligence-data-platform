@@ -1,24 +1,48 @@
 // Likes and comments at the end of a doc or blog post.
 //
-// Everything goes through the CommunityStore (useCommunityStore), which keeps
-// the data in this browser only (IndexedDB, else localStorage, else memory).
-// Other visitors do not see it, and the section says so.
+// Everything goes through the CommunityStore (useCommunityStore). With the
+// shared store (backend 'shared') likes and comments are kept in the site's
+// GitHub repository and everyone sees them. Guests come first: anyone can
+// like and comment right away, as "Guest" (the store sends this browser's
+// random guest id, so a guest can unlike and delete their own). A visitor
+// signed in with GitHub is shown by their verified GitHub name: the session
+// cookie tells the site's /api/community who they are, no token needed.
+// Where sign-in is not available, a typed username plus a GitHub token does
+// the same (the API checks the token with GitHub). Otherwise they are kept in
+// this browser only (IndexedDB, else localStorage, else memory). The section
+// says which.
+//
+// The like state and the Delete buttons follow the current identity
+// (useCommunityIdentity): when it changes (the profile loads, /api/auth/me
+// answers, Sign out) the page's likes and comments are read again.
+//
+// A quiet line under the form offers "Sign in with GitHub" (a plain link to
+// /api/auth/login that comes back to this page) for visitors who want their
+// GitHub name on what they post. Nothing here ever blocks reading or guest
+// writes.
 
 import React, {useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent} from 'react';
 import clsx from 'clsx';
 import Heading from '@theme/Heading';
 import useIsBrowser from '@docusaurus/useIsBrowser';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
-import {useGitHubUser} from '@site/src/lib/GitHubUserContext';
-import {useCommunityBackend, useCommunityStore, type CommunityBackend} from '@site/src/lib/CommunityStoreContext';
+import {useGitHubUser, useSignInClick, useSignInHref} from '@site/src/lib/GitHubUserContext';
+import {
+  useCommunityBackend,
+  useCommunityIdentity,
+  useCommunityStore,
+  type CommunityBackend,
+} from '@site/src/lib/CommunityStoreContext';
 import {
   canDeleteComment,
   COMMENT_LENGTH_ERROR,
   COMMENT_MAX_LENGTH,
+  CommunityApiError,
   type Comment,
   type Likes,
 } from '@site/src/lib/storage.mjs';
 import Avatar from '../GitHubUserNavbarItem/Avatar';
+import useOpenAccountMenu from '../GitHubUserNavbarItem/useOpenAccountMenu';
 import {formatDateTime, plural, profileUrl} from '../PageMetaBar/format';
 import styles from './styles.module.css';
 
@@ -32,10 +56,50 @@ type Props = {
 const NUMBER = new Intl.NumberFormat('en');
 
 function storageNote(backend: CommunityBackend | null): string {
+  if (backend === null) {
+    return ''; // not known yet: say nothing rather than the wrong thing
+  }
+  if (backend === 'shared') {
+    return "Shared with everyone. Saved in this site's GitHub repository.";
+  }
   if (backend === 'memory') {
     return 'This browser blocks site storage, so likes and comments last only until you leave the page. Other visitors do not see them.';
   }
   return 'Saved in this browser only. Other visitors do not see your likes and comments.';
+}
+
+/** "busy, try again" -> "Busy, try again." */
+function sentence(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const first = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  return /[.!?]$/.test(first) ? first : `${first}.`;
+}
+
+/**
+ * What to tell the visitor when a write to the shared store failed (null:
+ * not an API error, use the caller's wording).
+ */
+function apiFailure(error: unknown): string | null {
+  if (!(error instanceof CommunityApiError)) {
+    return null;
+  }
+  switch (error.status) {
+    case 0:
+      return 'Could not reach the site. Check your connection and try again.';
+    case 401:
+      return 'GitHub did not accept the token saved in the account menu. Replace it, or remove it to like and comment as a guest.';
+    case 413:
+      return 'That comment is too long to send.';
+    case 429:
+      return 'Too many changes from your network. Try again in a few minutes.';
+    default:
+      return error.message === COMMENT_LENGTH_ERROR
+        ? `A comment must be 1 to ${NUMBER.format(COMMENT_MAX_LENGTH)} characters.`
+        : sentence(error.message);
+  }
 }
 
 /** Characters as people count them (an emoji is one). */
@@ -89,6 +153,7 @@ function CommentItem({
           {author.login && author.login !== author.name && (
             <span className={styles.commentLogin}>@{author.login}</span>
           )}
+          {!author.login && canDelete && <span className={styles.commentLogin}>(you)</span>}
           {when && (
             <time className={styles.commentDate} dateTime={comment.createdAt} title={comment.createdAt}>
               {when}
@@ -115,15 +180,32 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
   const {i18n} = useDocusaurusContext();
   const store = useCommunityStore();
   const backend = useCommunityBackend();
-  const {user, userKey, status} = useGitHubUser();
+  const {user, userKey, status, verified, availability} = useGitHubUser();
+  const identity = useCommunityIdentity();
+  const openAccountMenu = useOpenAccountMenu();
+  const signInHref = useSignInHref();
+  const onSignInClick = useSignInClick();
+  const shared = backend === 'shared';
+  // Shared: who writes go as (the store does the same): the session's login
+  // (signed in with GitHub), the token's login (a typed username with a
+  // token), or a guest (null).
+  const writerLogin = shared ? identity.login : null;
+  const tokenLogin = shared && identity.kind === 'token' ? identity.login : null;
+  // GitHub sign-in can be offered (not on a deployment without it).
+  const canSignIn = availability === 'available' || availability === 'checking';
+  // Read once the saved profile is known, and again whenever the identity
+  // changes: it changes whose like and which comments are the visitor's.
+  const readAs = status === 'loading' ? null : identity.key;
 
   const [likes, setLikes] = useState<Likes | null>(null);
   const [comments, setComments] = useState<Comment[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [liking, setLiking] = useState(false);
+  const [likeError, setLikeError] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [posting, setPosting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState('');
   const textarea = useRef<HTMLTextAreaElement>(null);
 
@@ -132,6 +214,9 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
   const errorId = useId();
 
   useEffect(() => {
+    if (readAs === null) {
+      return undefined;
+    }
     let active = true;
     Promise.allSettled([store.getLikes(pageId), store.listComments(pageId)]).then(
       ([likesResult, commentsResult]) => {
@@ -144,18 +229,45 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
         if (commentsResult.status === 'fulfilled') {
           setComments(commentsResult.value);
         }
-        if (likesResult.status === 'rejected' || commentsResult.status === 'rejected') {
-          setLoadError('Could not read the likes and comments saved in this browser.');
+        if (likesResult.status === 'fulfilled' && commentsResult.status === 'fulfilled') {
+          setLoadError(null);
+        } else {
+          const failure =
+            likesResult.status === 'rejected'
+              ? likesResult.reason
+              : commentsResult.status === 'rejected'
+                ? commentsResult.reason
+                : null;
+          setLoadError(
+            failure instanceof CommunityApiError
+              ? 'Could not load the likes and comments. Try again later.'
+              : 'Could not read the likes and comments saved in this browser.',
+          );
         }
       },
     );
     return () => {
       active = false;
     };
-  }, [store, pageId]);
+  }, [store, pageId, readAs]);
 
-  const liked = likes ? likes.likedBy.includes(userKey) : false;
-  const ready = isBrowser && status !== 'loading';
+  // Whether the current identity likes the page. Shared: a token's login is in
+  // likedBy; for the session's user or a guest the API says (`liked`, worked
+  // out for whoever made the request; guests are only counted). Browser
+  // store: the userKey is in likedBy.
+  const likesThisPage = (value: Likes): boolean =>
+    !shared
+      ? value.likedBy.includes(userKey)
+      : tokenLogin
+        ? value.likedBy.includes(tokenLogin)
+        : value.liked === true;
+  const liked = likes ? likesThisPage(likes) : false;
+  const mayDelete = (comment: Comment): boolean =>
+    shared
+      ? comment.canDelete === true || (tokenLogin !== null && comment.author.login === tokenLogin)
+      : canDeleteComment(comment, userKey);
+  // Until the store knows whether it is shared, nothing can be written.
+  const ready = isBrowser && status !== 'loading' && backend !== null;
 
   // The buttons stay enabled while the store works (a disabled focused button
   // drops the keyboard focus to the page); the handlers ignore repeats.
@@ -167,9 +279,13 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
     try {
       const next = await store.toggleLike(pageId, userKey);
       setLikes(next);
-      setAnnouncement(next.likedBy.includes(userKey) ? 'You like this page.' : 'Like removed.');
-    } catch {
-      setAnnouncement('Could not save the like in this browser.');
+      setLikeError(null);
+      const nowLiked = likesThisPage(next);
+      setAnnouncement(nowLiked ? 'You like this page.' : 'Like removed.');
+    } catch (error) {
+      const message = apiFailure(error) ?? 'Could not save the like in this browser.';
+      setLikeError(shared ? message : null);
+      setAnnouncement(message);
     } finally {
       setLiking(false);
     }
@@ -206,9 +322,10 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
       setAnnouncement('Comment posted.');
     } catch (error) {
       setFormError(
-        error instanceof Error && error.message === COMMENT_LENGTH_ERROR
-          ? `A comment must be 1 to ${NUMBER.format(COMMENT_MAX_LENGTH)} characters.`
-          : 'Could not save the comment in this browser.',
+        apiFailure(error) ??
+          (error instanceof Error && error.message === COMMENT_LENGTH_ERROR
+            ? `A comment must be 1 to ${NUMBER.format(COMMENT_MAX_LENGTH)} characters.`
+            : 'Could not save the comment in this browser.'),
       );
     } finally {
       setPosting(false);
@@ -230,12 +347,21 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
       const deleted = await store.deleteComment(pageId, comment.id, userKey);
       if (deleted) {
         setComments((current) => (current ?? []).filter((item) => item.id !== comment.id));
+        setDeleteError(null);
         setAnnouncement('Comment deleted.');
       } else {
-        setAnnouncement('That comment could not be deleted.');
+        const message = 'That comment could not be deleted.';
+        setDeleteError(message);
+        setAnnouncement(message);
+        if (shared) {
+          // It may be gone already (deleted elsewhere): show the saved list.
+          store.listComments(pageId).then(setComments, () => {});
+        }
       }
-    } catch {
-      setAnnouncement('Could not delete the comment in this browser.');
+    } catch (error) {
+      const message = apiFailure(error) ?? 'Could not delete the comment in this browser.';
+      setDeleteError(message);
+      setAnnouncement(message);
     }
   };
 
@@ -258,6 +384,11 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
           {likeCount === null ? '' : plural(likeCount, 'like', 'likes')}
         </span>
         <span className={clsx('rid-muted-note', styles.note)}>{storageNote(backend)}</span>
+        {likeError && (
+          <p className={clsx(styles.error, styles.likeError)} role="alert">
+            {likeError}
+          </p>
+        )}
       </div>
 
       <Heading as="h2" id={id} className={styles.title}>
@@ -280,12 +411,18 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
             <CommentItem
               key={comment.id}
               comment={comment}
-              canDelete={canDeleteComment(comment, userKey)}
+              canDelete={mayDelete(comment)}
               onDelete={remove}
               locale={i18n.currentLocale}
             />
           ))}
         </ol>
+      )}
+
+      {deleteError && (
+        <p className={styles.error} role="alert">
+          {deleteError}
+        </p>
       )}
 
       <form className={styles.form} onSubmit={post} noValidate>
@@ -311,12 +448,61 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
         />
         <div className={styles.formRow}>
           <p id={hintId} className={clsx('rid-muted-note', styles.hint)}>
-            {user ? (
-              <>
-                Commenting as <strong>@{user.login}</strong>.
-              </>
+            {shared ? (
+              identity.kind === 'session' ? (
+                <>
+                  Commenting as <strong>@{writerLogin}</strong>. Everyone can read your comment.
+                </>
+              ) : tokenLogin ? (
+                <>
+                  Commenting as <strong>@{tokenLogin}</strong>, confirmed with your GitHub token. Everyone can
+                  read your comment.
+                </>
+              ) : user ? (
+                <>
+                  Commenting as a guest ·{' '}
+                  <button type="button" className={styles.linkButton} onClick={openAccountMenu}>
+                    Add a GitHub token
+                  </button>{' '}
+                  to comment as @{user.login}.
+                </>
+              ) : !canSignIn ? (
+                <>
+                  Commenting as a guest ·{' '}
+                  <button type="button" className={styles.linkButton} onClick={openAccountMenu}>
+                    Show your GitHub name
+                  </button>{' '}
+                  with a username and a token.
+                </>
+              ) : (
+                <>
+                  Commenting as a guest ·{' '}
+                  <a href={signInHref} onClick={onSignInClick}>
+                    Sign in with GitHub
+                  </a>{' '}
+                  to show your name.
+                </>
+              )
+            ) : user ? (
+              verified ? (
+                <>
+                  Commenting as <strong>@{user.login}</strong>.
+                </>
+              ) : (
+                <>
+                  Commenting as <strong>@{user.login}</strong> (not verified on this deployment).
+                </>
+              )
+            ) : availability === 'not-configured' ? (
+              <>Commenting as a guest.</>
             ) : (
-              <>Commenting as a guest. Sign in from the navbar to use your GitHub name.</>
+              <>
+                Commenting as a guest ·{' '}
+                <a href={signInHref} onClick={onSignInClick}>
+                  Sign in with GitHub
+                </a>{' '}
+                to show your name.
+              </>
             )}{' '}
             <span className={tooLong ? styles.overLimit : undefined}>
               {NUMBER.format(count)} / {NUMBER.format(COMMENT_MAX_LENGTH)}
@@ -344,7 +530,7 @@ function PageCommunityContent({pageId, id = 'page-comments'}: Props): React.JSX.
   );
 }
 
-/** Likes and comments of the page `pageId`, saved in this browser. */
+/** Likes and comments of the page `pageId` (shared, or saved in this browser). */
 export default function PageCommunity(props: Props): React.JSX.Element {
   // Another page starts with fresh state.
   return <PageCommunityContent key={props.pageId} {...props} />;

@@ -6,11 +6,27 @@
 // localStorage for an hour, the visitor's token if they set one) and shows the
 // GitHub accounts behind them. On any error (rate limit, offline) it keeps the
 // build-time data.
+//
+// Only people are credited. Commits by bots and AI tools (isAutomationAuthor
+// in src/lib/github.mjs, with customFields.pageHistory.excludeAuthors) are
+// left out of both sources: they never name anyone, they only date the last
+// change of a page that nobody but automation has changed yet.
 
 import {useEffect, useState} from 'react';
-import {fetchPageCommits, type CommitSummary, type PageCommitsResult} from '@site/src/lib/github.mjs';
+import {
+  fetchPageCommits,
+  preferGitHubHistory,
+  type CommitSummary,
+  type PageCommitsResult,
+} from '@site/src/lib/github.mjs';
 import {useGitHubUser} from '@site/src/lib/GitHubUserContext';
-import {usePageMeta, useRepoConfig, type PageMetaEntry, type RepoConfig} from '../PageMetaBar/usePageMeta';
+import {
+  useExcludedAuthors,
+  usePageMeta,
+  useRepoConfig,
+  type PageMetaEntry,
+  type RepoConfig,
+} from '../PageMetaBar/usePageMeta';
 import {commitUrl, fileHistoryUrl, profileUrl} from '../PageMetaBar/format';
 
 export type HistoryPerson = {
@@ -36,6 +52,13 @@ export type HistoryLastChange = {
   url: string | null;
 };
 
+/** The latest change of a page changed only by automation: no name. */
+export type HistoryAutomatedChange = {
+  date: string | null;
+  /** The commit. */
+  url: string | null;
+};
+
 export type PageHistory = {
   /** Where the people and the last change come from. */
   source: 'github' | 'build' | 'none';
@@ -43,9 +66,18 @@ export type PageHistory = {
   loading: boolean;
   /** Why GitHub could not be used, when it could not. */
   error: {error: string; message: string} | null;
+  /** The latest change by a person. */
   last: HistoryLastChange | null;
+  /** People only (never bots or AI tools). */
   people: HistoryPerson[];
-  /** Commits counted (GitHub returns at most 100). */
+  /**
+   * Set when the page has changes but none by a person: the latest of them,
+   * without a name. Null otherwise.
+   */
+  automatedOnly: HistoryAutomatedChange | null;
+  /** Commits by automation authors, not counted in `commits`. */
+  automationCommits: number;
+  /** Commits by people (GitHub returns at most 100 commits in all). */
   commits: number;
   /** True when GitHub's answer was cut at 100 commits. */
   commitsCapped: boolean;
@@ -71,8 +103,14 @@ function browserCache(): Storage | null {
   }
 }
 
-function loadCommits(repo: RepoConfig, path: string, token: string | null): Promise<PageCommitsResult> {
-  const key = `${repo.owner}/${repo.name}:${path}:${token ? 'token' : 'anonymous'}`;
+function loadCommits(
+  repo: RepoConfig,
+  path: string,
+  token: string | null,
+  excludeAuthors: readonly string[] | undefined,
+): Promise<PageCommitsResult> {
+  const exclude = excludeAuthors ? excludeAuthors.join(',') : 'default';
+  const key = `${repo.owner}/${repo.name}:${path}:${token ? 'token' : 'anonymous'}:${exclude}`;
   const now = Date.now();
   const known = requests.get(key);
   if (known && known.expires > now) {
@@ -85,6 +123,7 @@ function loadCommits(repo: RepoConfig, path: string, token: string | null): Prom
       path,
       token,
       cache: browserCache(),
+      excludeAuthors,
     }).catch(
       (): PageCommitsResult => ({
         ok: false,
@@ -131,7 +170,24 @@ function fromGitHub(summary: CommitSummary, repo: RepoConfig, path: string) {
     };
   }
   const commits = people.reduce((total, person) => total + person.commits, 0);
-  return {people, last, commits, commitsCapped: commits >= PER_PAGE};
+  const automation = summary.automation ?? null;
+  const automationCommits = automation?.commits ?? 0;
+  const automatedOnly: HistoryAutomatedChange | null =
+    !last && automation
+      ? {
+          date: automation.lastDate,
+          url: automation.htmlUrl ?? (automation.lastSha ? commitUrl(repo, automation.lastSha) : null),
+        }
+      : null;
+  return {
+    people,
+    last,
+    automatedOnly,
+    automationCommits,
+    commits,
+    // GitHub's answer holds at most PER_PAGE commits, people's and automation's together.
+    commitsCapped: commits + automationCommits >= PER_PAGE,
+  };
 }
 
 function fromBuild(meta: PageMetaEntry | null, repo: RepoConfig | null) {
@@ -157,7 +213,22 @@ function fromBuild(meta: PageMetaEntry | null, repo: RepoConfig | null) {
           url: repo && meta.lastSha ? commitUrl(repo, meta.lastSha) : null,
         }
       : null;
-  return {people, last, commits: meta?.commits ?? 0, commitsCapped: false};
+  const automation = meta?.automation ?? null;
+  const automatedOnly: HistoryAutomatedChange | null =
+    !last && automation
+      ? {
+          date: automation.lastDate,
+          url: repo && automation.lastSha ? commitUrl(repo, automation.lastSha) : null,
+        }
+      : null;
+  return {
+    people,
+    last,
+    automatedOnly,
+    automationCommits: automation?.commits ?? 0,
+    commits: meta?.commits ?? 0,
+    commitsCapped: false,
+  };
 }
 
 type Live =
@@ -174,6 +245,8 @@ export function usePageHistory(repoPath: string | null): PageHistory {
   const meta = usePageMeta(repoPath);
   const repo = useRepoConfig();
   const {token, status} = useGitHubUser();
+  const excludeAuthors = useExcludedAuthors();
+  const excludeKey = excludeAuthors ? excludeAuthors.join(',') : null;
   const [live, setLive] = useState<Live>({state: 'idle'});
 
   // Wait for the saved token to be read, so a visitor with a token does not
@@ -186,7 +259,7 @@ export function usePageHistory(repoPath: string | null): PageHistory {
     }
     let active = true;
     setLive({state: 'loading'});
-    loadCommits(repo, repoPath, token).then((result) => {
+    loadCommits(repo, repoPath, token, excludeAuthors).then((result) => {
       if (!active) {
         return;
       }
@@ -199,8 +272,9 @@ export function usePageHistory(repoPath: string | null): PageHistory {
     return () => {
       active = false;
     };
-    // repo is rebuilt on every render from the site config; its fields are the dependencies.
-  }, [repoPath, repo?.owner, repo?.name, repo?.branch, token, ready]);
+    // repo and excludeAuthors are rebuilt on every render from the site
+    // config; their contents (fields, excludeKey) are the dependencies.
+  }, [repoPath, repo?.owner, repo?.name, repo?.branch, token, ready, excludeKey]);
 
   const historyUrl = repo && repoPath ? fileHistoryUrl(repo, repoPath) : null;
   const build = fromBuild(meta, repo);
@@ -212,10 +286,16 @@ export function usePageHistory(repoPath: string | null): PageHistory {
   };
 
   // GitHub knows nothing of a file that is not on the default branch yet
-  // (a new page in a preview build): keep the build-time data then.
-  if (live.state === 'done' && repo && repoPath && live.summary.contributors.length > 0) {
+  // (a new page in a preview build): keep the build-time data then. GitHub's
+  // automation-only answer never hides people the build found (renames).
+  if (
+    live.state === 'done' &&
+    repo &&
+    repoPath &&
+    preferGitHubHistory(live.summary, {peopleCount: build.people.length, hasLast: build.last !== null})
+  ) {
     return {...base, source: 'github', ...fromGitHub(live.summary, repo, repoPath)};
   }
-  const hasBuild = build.people.length > 0 || build.last !== null;
+  const hasBuild = build.people.length > 0 || build.last !== null || build.automatedOnly !== null;
   return {...base, source: hasBuild ? 'build' : 'none', ...build};
 }

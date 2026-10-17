@@ -2,7 +2,9 @@ import {themes as prismThemes} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 
+import {jsxLinksAfter, jsxLinksBefore} from './src/remark/jsx-links.mjs';
 import repoLinks from './src/remark/repo-links.mjs';
+import {DEFAULT_EXCLUDED_AUTHORS} from './src/lib/github.mjs';
 
 // This file runs in Node.js at build time. Do not use browser APIs or JSX here.
 
@@ -55,9 +57,19 @@ const config: Config = {
   },
 
   markdown: {
-    // .md files are parsed as CommonMark (not MDX), so existing docs that
-    // contain "<" or "{" render as they do on GitHub. .mdx files stay MDX.
-    format: 'detect',
+    // Every doc and blog post is parsed as MDX, whatever its extension, so
+    // the .md files can use the site's components (src/theme/MDXComponents.tsx)
+    // without imports. The files keep their .md names: GitHub's per-file
+    // history (used by the page history) does not follow renames, and the
+    // tests, the register and cross-links name the .md paths. A literal "{" or
+    // "<" in prose is escaped as \{ or \<; `npm run check:mdx` checks every file.
+    format: 'mdx',
+    // HTML comments (<!-- ... -->) stay valid, as on GitHub, so they need no
+    // MDX {/* ... */} form (which GitHub would show as text in a .md file).
+    // The other MDX 1 compatibility options stay off.
+    mdx1Compat: {
+      comments: true,
+    },
     mermaid: true,
     hooks: {
       onBrokenMarkdownLinks: 'throw',
@@ -74,10 +86,22 @@ const config: Config = {
   // Read in the browser through useDocusaurusContext().siteConfig.customFields.
   customFields: {
     repo: REPO,
-    // Where likes, comments and editor drafts are kept: 'browser' stores them
-    // permanently in each visitor's own browser (IndexedDB). A remote adapter
-    // (an API plus a database) can be added later behind the same interface.
-    communityStore: 'browser',
+    // Where likes and comments are kept. 'shared': through the site's own
+    // /api/community function (api/community.mjs at the repository root), as
+    // JSON files on the repository's community-data branch, seen by every
+    // visitor; editor drafts stay in the visitor's browser. Without the
+    // function's server token (or with `npm start`) it keeps everything in
+    // the browser, like 'browser'. See README.md, "Likes and comments".
+    communityStore: 'shared',
+    // Page history ("Updated ... by", contributors, commit counts) credits
+    // people only. Commits whose GitHub login or git author name is in this
+    // list are left out, like GitHub bot accounts, "[bot]" names and
+    // @anthropic.com or "[bot]@users.noreply.github.com" author emails
+    // (always left out). Case, a trailing "[bot]", spaces, hyphens,
+    // underscores and dots are ignored. Remove the key for the default list.
+    pageHistory: {
+      excludeAuthors: [...DEFAULT_EXCLUDED_AUTHORS],
+    },
   },
 
   i18n: {
@@ -112,7 +136,10 @@ const config: Config = {
           editUrl: ({docPath}) => `${EDIT_URL_BASE}${docPath}`,
           // Must run before Docusaurus resolves Markdown links, so links that
           // leave docs/ become GitHub URLs instead of broken site links.
-          beforeDefaultRemarkPlugins: [repoLinks],
+          // jsxLinksBefore/After let a component's link attribute
+          // (<Card href="status.md">) be resolved like a Markdown link.
+          beforeDefaultRemarkPlugins: [jsxLinksBefore, repoLinks],
+          remarkPlugins: [jsxLinksAfter],
         },
         // Blog posts live in docs/site/blog (outside the docs plugin's folder
         // set, which excludes site/**). Editable in the browser at /blog/editor.
@@ -125,6 +152,8 @@ const config: Config = {
           editUrl: `${REPO_URL}/edit/main/docs/site/`,
           onInlineAuthors: 'ignore',
           onUntruncatedBlogPosts: 'ignore',
+          beforeDefaultRemarkPlugins: [jsxLinksBefore],
+          remarkPlugins: [jsxLinksAfter],
         },
         // React and MDX pages in src/pages: the home page and the blog editor.
         pages: {
