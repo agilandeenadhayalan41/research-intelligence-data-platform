@@ -546,3 +546,13 @@ Measured on 2026-10-11 (WSL, 4 cores, 7.7 GiB RAM): `large` took 288 s and
 `large` (0.7 GiB at `default`), reached in `export_snapshot_to_parquet`, which
 builds all 15 tables before writing any of them; free memory on that VM fell
 to 0.3-0.4 GB. Run `--scale large` on a host with at least 6 GB free.
+
+Note (DE-07, #128): the Silver release writer encodes one row group at a time
+inside parts of at most `rows_per_part` rows. Measured LOCAL on 2026-10-17 in a
+container (4 cores, 15.7 GiB RAM) at `default` (10,010 synthetic Works, largest
+table 142,297 rows), rendering every part from the in-memory snapshot added
+71 MiB of peak RSS at the default part and row-group sizes (500,000 and
+100,000 rows), against 151-154 MiB for `export_snapshot_to_parquet` on the same
+snapshot. The in-memory canonical store is still the bound. The #103 synthetic
+cycle still uses `export_snapshot_to_parquet`, so its `large` peak (5.3-5.4 GiB)
+is unchanged.

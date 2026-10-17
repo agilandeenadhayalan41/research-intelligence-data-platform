@@ -44,9 +44,10 @@ flowchart LR
 - Keep canonical schemas portable and independent of BigQuery or PostgreSQL.
   Object storage plus Parquet is the canonical data layer (lead §3.1 and §30);
   [ADR 0001 D1](../adr/0001-gcp-architecture-and-service-selection.md#d1-canonical-gcs-layout-and-release-manifests)
-  selects the Cloud Storage Parquet release layout, to be built in DE-07
-  (#128). Today canonical Parquet is only a local export. Preserve normalized
-  relationships.
+  selects the Cloud Storage Parquet release layout. DE-07 (#128) builds those
+  releases and tests them offline
+  ([canonical Parquet releases](openalex-canonical-model.md#canonical-parquet-releases-de-07-128));
+  no live run is recorded. Preserve normalized relationships.
 - Use BigQuery for analytical workloads and high-volume relationships. Base
   partitioning, clustering, and query design on measured workloads; bound queries
   and consider data scanned and cost.

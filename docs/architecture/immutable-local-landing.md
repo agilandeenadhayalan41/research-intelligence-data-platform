@@ -27,9 +27,10 @@ Immutable raw landing stores the exact bytes received from the source connector:
 
 JSONL.GZ is never rewritten as Parquet in this layer. Analytical Parquet is
 written separately, from mapped canonical rows, by the canonical Parquet
-exporter (`research_platform.canonical.openalex.export`, PRs #104/#105), so far
-only for the synthetic #103/#108 BigQuery loads. It never writes under
-raw-landing keys.
+exporter (`research_platform.canonical.openalex.export`, PRs #104/#105) for the
+synthetic #103/#108 BigQuery loads, and by the Silver release builder
+(`research_platform.canonical.openalex.publisher`, DE-07 #128) under
+`openalex/canonical/`. Neither writes under raw-landing keys.
 
 ## OpenAlex raw key layout
 
@@ -371,9 +372,11 @@ deferred until an issue lifts that cap.
 
 **Retention context.** Each manifest's `retention` object is a declaration, not
 evidence of a bucket control. `bronze_rule` names ADR 0001 D1: Bronze is
-retained in full until DE-10; the rule that keeps assets listed by a retained
-release manifest belongs to Silver (DE-07), and a landing manifest grants no
-retention of its own. `bucket_retention_policy_checked`, `object_holds_set` and
+retained in full until DE-10; every Silver release manifest lists its Bronze
+inputs (DE-07, #128). Keeping the assets that a retained release lists is a
+retention rule for bucket retention (DE-24, #145) and Silver garbage
+collection, which has no owner yet. A landing manifest grants no retention of
+its own. `bucket_retention_policy_checked`, `object_holds_set` and
 `storage_lifecycle_implements_source_deletions` are always false: this code
 neither reads nor sets bucket retention, holds or lifecycle rules (DE-24, #145),
 and OpenAlex deletions are canonical tombstones (D12 (d)). The canonical

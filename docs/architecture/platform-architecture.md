@@ -77,8 +77,10 @@ consumer, and every environment is
   these through the local ingestion transaction boundary. Object storage plus
   Parquet is the canonical data layer (lead §3.1, §30);
   [ADR 0001 D1](../adr/0001-gcp-architecture-and-service-selection.md#d1-canonical-gcs-layout-and-release-manifests)
-  selects immutable Parquet releases in Cloud Storage, to be built in DE-07
-  (#128). Today canonical Parquet is only a local export.
+  selects immutable Parquet releases in Cloud Storage. DE-07 (#128) builds them
+  from landed Bronze and tests them offline
+  ([canonical Parquet releases](openalex-canonical-model.md#canonical-parquet-releases-de-07-128));
+  no live run is recorded.
 - **Analytical layer:** BigQuery is the first GCP analytical implementation;
   DuckDB supports local analytical tests. `PostgreSQLWarehouse` is a synchronous
   read-query adapter for PostgreSQL ([details](postgres-warehouse.md)). It does

@@ -123,9 +123,8 @@ require separately scoped work and source-specific normalization.
 - Canonical models remain portable. Object storage plus Parquet is the
   canonical data layer (lead §3.1, §30);
   [ADR 0001 D1](../adr/0001-gcp-architecture-and-service-selection.md#d1-canonical-gcs-layout-and-release-manifests)
-  (status in the [ADR index](../adr/README.md)) selects the Cloud Storage Parquet release layout, to be
-  built in DE-07
-  (#128); today canonical Parquet is only a local export. High-volume
+  (status in the [ADR index](../adr/README.md)) selects the Cloud Storage Parquet release layout, which
+  DE-07 (#128) builds and tests offline; no live run is recorded. High-volume
   relationships are primarily analytical.
 - Materialize repeated expensive queries only when measured usage warrants it.
 - The Data Service/API is a domain-specific, storage-independent consumer

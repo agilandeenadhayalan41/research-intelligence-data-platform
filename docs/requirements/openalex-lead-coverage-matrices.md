@@ -1,6 +1,6 @@
 # OpenAlex lead coverage: traceability matrices
 
-> **Companion to the [lead coverage register](openalex-lead-coverage.md) for [#122] (DE-01).** Built from `main` @ `2e785fd186f70c9a591ca0d77387a4e8f52a9db9` on 2026-10-13; cells updated on 2026-10-14 for [#123] (DE-02); cells updated on 2026-10-17 for [#127] (DE-06). Each table walks one family of lead items (entities, fields, endpoints, routing examples, queries, aggregates) or the repository history, item by item. Evidence words use the register's vocabulary; the register rows are authoritative where a cell here is shorter.
+> **Companion to the [lead coverage register](openalex-lead-coverage.md) for [#122] (DE-01).** Built from `main` @ `2e785fd186f70c9a591ca0d77387a4e8f52a9db9` on 2026-10-13; cells updated on 2026-10-14 for [#123] (DE-02); cells updated on 2026-10-17 for [#127] (DE-06); cells updated on 2026-10-17 for [#128] (DE-07). Each table walks one family of lead items (entities, fields, endpoints, routing examples, queries, aggregates) or the repository history, item by item. Evidence words use the register's vocabulary; the register rows are authoritative where a cell here is shorter.
 
 ## Lead entities and analytical retention
 
@@ -258,7 +258,7 @@ Every one of the 334 paths in git ls-files at 2e785fd is counted in exactly one 
 | `src/research_platform/` (package root files only) | source code | 2 | — | `src/research_platform/__init__.py` and the `src/research_platform/py.typed` marker ([#1]) |
 | `src/research_platform/analytics/` | source code | 15 | 2, 5, 12, 19, 24, 26 | BigQuery table/query contracts ([#22]), Gold contracts and semantic build ([#55]), staging and synthetic generator ([#103]), sandbox job recorder `src/research_platform/analytics/bigquery/sandbox/live.py` ([#108]); DEFINED (DuckDB, fake BigQuery) |
 | `src/research_platform/benchmarks/` | source code | 6 | 6, 10, 11, 23, 25, 26 | Query-pattern registry loader/models, fan-out fixtures, DuckDB harness ([#19]); DEFINED; harness timings are FIXTURE_ONLY, not BigQuery evidence |
-| `src/research_platform/canonical/` | source code | 15 | 3, 4, 9, 18, 27 | Canonical PyArrow schemas, mapping, versioning, tombstones, in-memory store ([#15], [#20], [#21]); `src/research_platform/canonical/openalex/export.py` writes Parquet locally only ([#103]); DEFINED |
+| `src/research_platform/canonical/` | source code | 15 | 3, 4, 9, 18, 27 | Canonical PyArrow schemas, mapping, versioning, tombstones, in-memory store ([#15], [#20], [#21]); `src/research_platform/canonical/openalex/export.py` writes Parquet locally ([#103]); `src/research_platform/canonical/openalex/publisher.py` builds Silver releases from Bronze, tested offline only ([#128]); DEFINED |
 | `src/research_platform/common/` | source code | 2 | — | Structured JSON logging ([#6]); DEFINED |
 | `src/research_platform/config/` | source code | 3 | 27 | Frozen Pydantic settings and YAML loader with env substitution ([#5]); DEFINED |
 | `src/research_platform/control/` | source code | 8 | 17, 18 | Run, source-file, provenance and deletion-event models, lifecycle, claims, in-memory store ([#18], [#20], [#21]); DEFINED; production control state MISSING (DE-12) |
@@ -433,5 +433,6 @@ Every one of the 334 paths in git ls-files at 2e785fd is counted in exactly one 
 [#122]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/122
 [#123]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/123
 [#127]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/127
+[#128]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/issues/128
 [#158]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/158
 [#159]: https://github.com/agilandeenadhayalan41/research-intelligence-data-platform/pull/159
