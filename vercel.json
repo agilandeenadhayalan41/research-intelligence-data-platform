@@ -3,5 +3,10 @@
   "framework": null,
   "installCommand": "npm ci --prefix docs/site",
   "buildCommand": "npm run build --prefix docs/site",
-  "outputDirectory": "docs/site/build"
+  "outputDirectory": "docs/site/build",
+  "git": {
+    "deploymentEnabled": {
+      "community-data": false
+    }
+  }
 }

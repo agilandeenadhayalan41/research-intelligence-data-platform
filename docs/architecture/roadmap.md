@@ -4,11 +4,15 @@ This roadmap preserves completed work and sequences implementation from bounded
 source profiling through consumer delivery. It does not authorize work beyond an
 explicitly scoped task.
 
+<Callout type="info">
+
 **Steps 01–21 are complete.** Completion of the roadmap means the planned
 contracts, local validation, orchestration contracts, and readiness assessment
 are complete — **not** that GCP deployment is complete. Cloud runtime and
 deployment gaps remain explicitly documented; this does not mean
 production-ready.
+
+</Callout>
 
 Step 19 / #27 bounded E2E pipeline is complete (local `SEMANTIC_ONLY`).
 Step 20 / #25 orchestration contracts are complete (logical DAG + physical
@@ -33,6 +37,8 @@ PostgreSQLWarehouse (#7) implements read `Warehouse.query` and is
 `LOCAL_POSTGRES_VERIFIED` (#90: PostgreSQL 18.6, psycopg 3.2.13; local evidence
 only, not cloud/AlloyDB; see [details](postgres-warehouse.md#local-validation-evidence-90)).
 
+<Callout type="warning">
+
 Explicit remaining gaps (separately scoped; do not start automatically):
 
 - GCS beyond the operator-controlled sandbox and personal DEV/QA projects
@@ -47,6 +53,8 @@ Explicit remaining gaps (separately scoped; do not start automatically):
 - HTTP Data Service deployment
 - cloud IAM/WIF/secrets
 - monitoring/cost/network validation
+
+</Callout>
 
 ## Completed foundation
 

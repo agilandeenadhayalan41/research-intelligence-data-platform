@@ -216,3 +216,143 @@
 .token[open] .tokenSummary {
   margin-bottom: 0.25rem;
 }
+
+/* Signed out: "Sign in" and the menu arrow, joined (Infima .button-group) */
+
+.signInGroup {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+/* One shared border between the two halves. */
+.signInGroup > .optionsButton {
+  border-left-width: 0;
+}
+
+.signInGroup .trigger {
+  text-decoration: none;
+}
+
+.optionsButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding-right: 0.5rem;
+  padding-left: 0.5rem;
+}
+
+.chevron {
+  width: 1rem;
+  height: 1rem;
+  transition: transform var(--ifm-transition-fast) ease;
+}
+
+.optionsButton[aria-expanded='true'] .chevron {
+  transform: rotate(180deg);
+}
+
+/* A small amber dot after the username when the profile is not verified
+   on this deployment (local preview without the auth functions). */
+.unverifiedDot {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--ifm-color-warning);
+}
+
+.unverifiedBadge {
+  display: inline-block;
+  margin-right: 0.25rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--ifm-color-warning-dark);
+  border-radius: 999px;
+  color: var(--ifm-color-warning-darkest);
+  font-size: 0.6875rem;
+  font-weight: var(--ifm-font-weight-semibold);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  vertical-align: 0.1em;
+}
+
+[data-theme='dark'] .unverifiedBadge {
+  border-color: var(--ifm-color-warning-light);
+  color: var(--ifm-color-warning-lightest);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.actions a.button {
+  text-decoration: none;
+}
+
+.subheading {
+  color: var(--ifm-color-emphasis-800);
+  font-size: 0.8125rem;
+  font-weight: var(--ifm-font-weight-semibold);
+}
+
+.accounts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.account {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.accountText {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.accountName {
+  overflow: hidden;
+  font-size: 0.875rem;
+  font-weight: var(--ifm-font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountLogin {
+  overflow: hidden;
+  color: var(--ifm-color-emphasis-700);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fallbackSummary {
+  font-size: 0.875rem;
+  font-weight: var(--ifm-font-weight-semibold);
+  cursor: pointer;
+}
+
+.fallbackForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.heading:focus {
+  outline: none;
+}
+
+.fallback {
+  gap: 0;
+}

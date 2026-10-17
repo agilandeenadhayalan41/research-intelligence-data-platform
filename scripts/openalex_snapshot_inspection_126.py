@@ -2900,6 +2900,15 @@ def _quote_line(line: QuotedLine) -> str:
     return f"`{line.file}` line {line.line}: \"{line.text.strip()}\""
 
 
+_MDX_ESCAPES: Final = str.maketrans({"<": r"\<", "{": r"\{", "}": r"\}"})
+
+
+def _mdx_safe(line: str) -> str:
+    """Escape ``<``, ``{`` and ``}`` outside code spans: the docs site parses Markdown as MDX."""
+    parts = re.split(r"(`[^`\n]*`)", line)
+    return "".join(part if index % 2 else part.translate(_MDX_ESCAPES) for index, part in enumerate(parts))
+
+
 def _line_refs(lines: Sequence[QuotedLine]) -> str:
     """``README.txt`` lines 11, 12 and ``RELEASE_NOTES.txt`` line 4 (file order kept)."""
     by_file: dict[str, list[int]] = {}
@@ -3225,7 +3234,7 @@ def render_snapshot_evidence_section(evidence: SnapshotEvidence) -> str:
     ]
     lines += [f"- {item}" for item in e.limitations]
     lines.append("")
-    return "\n".join(lines) + "\n"
+    return "\n".join(_mdx_safe(line) for line in lines) + "\n"
 
 
 # =====================================================================================

@@ -2,6 +2,9 @@ name: Tests
 
 on:
   push:
+    # community-data holds only the docs site's likes and comments (JSON
+    # commits made by api/community.mjs); there is nothing to test there.
+    branches-ignore: [community-data]
   pull_request:
 
 permissions:
@@ -34,3 +37,25 @@ jobs:
         run: make test
       - name: Build package
         run: make build
+
+  site:
+    # The docs site and the api/ functions Vercel deploys with it: the unit
+    # tests (community API, sign-in sessions, shared store, MDX checks) and
+    # the type check. Vercel itself only runs the build.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+      - name: Install
+        run: npm ci --prefix docs/site
+      - name: Test
+        run: npm test --prefix docs/site
+      - name: Type check
+        run: npm run typecheck --prefix docs/site

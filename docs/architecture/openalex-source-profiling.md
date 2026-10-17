@@ -450,7 +450,7 @@ Combined-manifest versions (seen only in version listings; prior versions are ne
 
 ### T02: formats verified on real bytes
 
-Profiled pair `updated_date=2026-09-28/part_0000` (latest updated_date pair with both files <= 2,000,000 bytes and >= 1,000 records); each file was downloaded once and profiled from the verified local copy through the unchanged connector and profiler.
+Profiled pair `updated_date=2026-09-28/part_0000` (latest updated_date pair with both files \<= 2,000,000 bytes and >= 1,000 records); each file was downloaded once and profiled from the verified local copy through the unchanged connector and profiler.
 
 | Object | Bytes | Records | Framing | SHA-256 (first 16) | CRC64NVME S3 = local | MD5 = ETag | HEAD ETag = GET ETag |
 |---|---:|---:|---|---|---|---|---|
@@ -464,7 +464,7 @@ Profiled pair `updated_date=2026-09-28/part_0000` (latest updated_date pair with
 ### Fidelity: JSONL vs Parquet on the profiled pair
 
 - Paths: 243 sampled JSONL paths and 273 Parquet schema paths; JSONL paths missing in Parquet: 0; type conflicts: 0; Parquet paths not seen in the JSONL sample: 34.
-- Representation rules: `abstract_inverted_index` object -> JSON string; `ids` object -> map<string,string>.
+- Representation rules: `abstract_inverted_index` object -> JSON string; `ids` object -> map\<string,string>.
 - Values: 2,798 records joined by `id` over 51 top-level fields; same id set: yes; same row order: no; fields with value differences: 0; fields equal only after float32 rounding: `concepts` (795), `primary_topic` (178), `topics` (178); Parquet timestamps with sub-millisecond digits that JSONL shows only to milliseconds (truncation vs rounding not determined): `updated_date` (2,798).
 
 ### Canonical model compatibility

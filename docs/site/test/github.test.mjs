@@ -3,15 +3,21 @@ import {describe, test} from 'node:test';
 
 import {
   COMMITS_CACHE_TTL_MS,
+  DEFAULT_EXCLUDED_AUTHORS,
   GitHubError,
   LOGIN_PATTERN,
   commitsCacheKey,
   fetchPageCommits,
   fetchUser,
+  isAutomationAuthor,
+  isBlogPostPath,
   newPostTemplate,
+  normalizeExcludeList,
   normalizeLogin,
+  openBlogDeletePullRequest,
   openBlogPullRequest,
   postFileName,
+  preferGitHubHistory,
   repoPathForDoc,
   slugify,
   summarizeCommits,
@@ -960,5 +966,463 @@ describe('utf8ToBase64', () => {
     for (const sample of samples) {
       assert.equal(utf8ToBase64(sample), Buffer.from(sample, 'utf8').toString('base64'));
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Page history: people only, never bots or AI tools
+
+/** A commit whose author can be a bot: GitHub account type and git email. */
+function authored({sha, login = null, name, date, email = 'person@example.invalid', type = 'User'}) {
+  const item = commit({sha, login, name, date});
+  item.commit.author.email = email;
+  if (item.author) {
+    item.author.type = type;
+  }
+  return item;
+}
+
+describe('isAutomationAuthor', () => {
+  test('a GitHub Bot account is automation, whatever its name', () => {
+    assert.equal(isAutomationAuthor({login: 'some-helper', name: 'Helper', type: 'Bot'}), true);
+    assert.equal(isAutomationAuthor({login: 'Copilot', type: 'Bot'}), true);
+  });
+
+  test('a login or name ending in [bot] is automation', () => {
+    assert.equal(isAutomationAuthor({login: 'dependabot[bot]'}), true);
+    assert.equal(isAutomationAuthor({login: 'anything-new[BOT]', type: 'User'}), true);
+    assert.equal(isAutomationAuthor({login: null, name: 'release-helper[bot]'}), true);
+  });
+
+  test('the exclude list matches login or name case-insensitively, ignoring [bot] and separators', () => {
+    assert.equal(isAutomationAuthor({login: 'Claude'}), true);
+    assert.equal(isAutomationAuthor({name: 'CLAUDE'}), true);
+    assert.equal(isAutomationAuthor({name: 'Claude Code'}), true, 'matches claude-code');
+    assert.equal(isAutomationAuthor({name: 'Cursor Agent'}), true, 'matches cursoragent');
+    assert.equal(isAutomationAuthor({login: 'github-actions'}), true);
+    assert.equal(isAutomationAuthor({login: 'CodeRabbitAI'}), true);
+    assert.equal(isAutomationAuthor({name: 'Ada'}, ['ADA[bot]']), true, 'list entries are normalised too');
+    assert.equal(isAutomationAuthor({name: 'Claude'}, []), false, 'an empty list excludes no name');
+    assert.equal(isAutomationAuthor({name: 'Ada'}, ['grace']), false);
+  });
+
+  test('Anthropic and GitHub bot emails are automation; the email is only checked', () => {
+    assert.equal(isAutomationAuthor({name: 'Someone', email: 'noreply@anthropic.com'}), true);
+    assert.equal(isAutomationAuthor({name: 'Someone', email: 'Agent@Anthropic.com '}), true);
+    assert.equal(
+      isAutomationAuthor({name: 'Someone', email: '49699333+dependabot[bot]@users.noreply.github.com'}),
+      true,
+    );
+    assert.equal(isAutomationAuthor({name: 'Someone', email: '123+someone@users.noreply.github.com'}), false);
+    assert.equal(isAutomationAuthor({name: 'Someone', email: 'someone@anthropic.com.example'}), false);
+  });
+
+  test('people are kept', () => {
+    for (const author of [
+      {login: 'alice', name: 'Alice A', email: 'alice@example.invalid', type: 'User'},
+      {login: null, name: 'Bob B'},
+      {login: 'claudette', name: 'Claudette'},
+      {login: 'copilot-fan', name: 'Rob Bot'},
+      {},
+    ]) {
+      assert.equal(isAutomationAuthor(author), false, JSON.stringify(author));
+    }
+    assert.equal(isAutomationAuthor(null), false);
+    assert.equal(isAutomationAuthor(undefined), false);
+  });
+
+  test('normalizeExcludeList: default list, normalised entries, junk dropped', () => {
+    assert.deepEqual(normalizeExcludeList(undefined), normalizeExcludeList(DEFAULT_EXCLUDED_AUTHORS));
+    assert.ok(normalizeExcludeList(undefined).includes('claudecode'));
+    assert.deepEqual(normalizeExcludeList([' My-Bot[bot] ', 'my_bot', 7, '', null, 'Other']), ['mybot', 'other']);
+    assert.deepEqual(normalizeExcludeList([]), []);
+    assert.deepEqual(normalizeExcludeList('claude'), normalizeExcludeList(DEFAULT_EXCLUDED_AUTHORS));
+  });
+
+  test('the default list is the documented one', () => {
+    assert.deepEqual(
+      [...DEFAULT_EXCLUDED_AUTHORS],
+      [
+        'claude',
+        'claude-code',
+        'anthropic-claude',
+        'copilot',
+        'github-copilot',
+        'copilot-swe-agent',
+        'github-actions',
+        'dependabot',
+        'renovate',
+        'vercel',
+        'cursor',
+        'cursoragent',
+        'devin-ai-integration',
+        'codex',
+        'chatgpt-codex-connector',
+        'gemini-code-assist',
+        'sweep-ai',
+        'coderabbitai',
+      ],
+    );
+    assert.ok(Object.isFrozen(DEFAULT_EXCLUDED_AUTHORS));
+  });
+});
+
+describe('summarizeCommits without automation', () => {
+  const MIXED = [
+    authored({sha: 'm6', login: 'claude', name: 'Claude', date: '2026-10-16T12:00:00Z', email: 'noreply@anthropic.com'}),
+    authored({sha: 'm5', login: 'dependabot[bot]', name: 'dependabot[bot]', date: '2026-10-15T12:00:00Z', type: 'Bot'}),
+    authored({sha: 'm4', login: 'alice', name: 'Alice A', date: '2026-10-14T12:00:00Z'}),
+    authored({sha: 'm3', login: null, name: 'Claude', date: '2026-10-13T12:00:00Z', email: 'noreply@anthropic.com'}),
+    authored({sha: 'm2', login: 'helper', name: 'Helper', date: '2026-10-12T12:00:00Z', type: 'Bot'}),
+    authored({sha: 'm1', login: 'alice', name: 'Alice A', date: '2026-10-11T12:00:00Z'}),
+    authored({sha: 'm0', login: null, name: 'Bob B', date: '2026-10-10T12:00:00Z'}),
+  ];
+
+  test('credits people only; the last change is the latest commit by a person', () => {
+    const summary = summarizeCommits(MIXED);
+    assert.deepEqual(
+      summary.contributors.map((c) => [c.login, c.name, c.commits]),
+      [
+        ['alice', 'Alice A', 2],
+        [null, 'Bob B', 1],
+      ],
+    );
+    assert.equal(summary.last.login, 'alice');
+    assert.equal(summary.last.sha, 'm4');
+    assert.equal(summary.last.date, '2026-10-14T12:00:00Z');
+    assert.deepEqual(summary.automation, {
+      commits: 4,
+      lastDate: '2026-10-16T12:00:00Z',
+      lastSha: 'm6',
+      htmlUrl: 'https://github.com/o/r/commit/m6',
+    });
+    const text = JSON.stringify(summary);
+    for (const hidden of ['Claude', 'claude', 'dependabot', 'Helper', 'helper', 'anthropic', 'example.invalid']) {
+      assert.ok(!text.includes(hidden), `${hidden} must not appear in the summary`);
+    }
+  });
+
+  test('a page changed only by automation: no people, no last change, the date of the latest commit', () => {
+    const summary = summarizeCommits(MIXED.filter((item) => ['m6', 'm5', 'm3', 'm2'].includes(item.sha)));
+    assert.deepEqual(summary.contributors, []);
+    assert.equal(summary.last, null);
+    assert.equal(summary.automation.commits, 4);
+    assert.equal(summary.automation.lastDate, '2026-10-16T12:00:00Z');
+  });
+
+  test('a custom exclude list replaces the default one', () => {
+    const summary = summarizeCommits(MIXED, {excludeAuthors: ['alice']});
+    assert.deepEqual(
+      summary.contributors.map((c) => c.name),
+      ['Bob B'],
+      'Claude stays out by email, the Bot accounts by type, alice by the list',
+    );
+    const named = summarizeCommits(
+      [authored({sha: 'n1', login: null, name: 'Claude', date: '2026-10-16T12:00:00Z', email: 'c@example.invalid'})],
+      {excludeAuthors: []},
+    );
+    assert.equal(named.contributors[0].name, 'Claude', 'with an empty list only the bot rules apply');
+  });
+
+  test('fetchPageCommits filters, and does not reuse a summary cached with another exclude list', async () => {
+    const cache = new FakeStorage();
+    const url = `${API}/repos/o/r/commits?path=docs/x.md&per_page=100`;
+    const mock = scriptedFetch([
+      {expect: `GET ${url}`, body: MIXED},
+      {expect: `GET ${url}`, body: MIXED},
+    ]);
+    const options = {owner: 'o', repo: 'r', path: 'docs/x.md', fetchImpl: mock.fetchImpl, cache, now: () => 1000};
+
+    const first = await fetchPageCommits(options);
+    assert.equal(first.ok, true);
+    assert.deepEqual(first.data.contributors.map((c) => c.name), ['Alice A', 'Bob B']);
+    assert.equal(first.data.automation.commits, 4);
+    assert.equal((await fetchPageCommits(options)).cached, true, 'same list: cached');
+
+    const other = await fetchPageCommits({...options, excludeAuthors: ['bob b']});
+    assert.equal(other.cached, false, 'another list: asked again');
+    assert.deepEqual(other.data.contributors.map((c) => c.name), ['Alice A']);
+    mock.assertDone();
+    const cachedAgain = await fetchPageCommits({...options, excludeAuthors: ['bob b']});
+    assert.equal(cachedAgain.cached, true);
+    assert.deepEqual(cachedAgain.data.automation, other.data.automation);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Deleting a blog post through a pull request
+
+describe('openBlogDeletePullRequest', () => {
+  const POST_PATH = 'docs/site/blog/2026-10-16-welcome-post.md';
+  const NOW = () => new Date('2026-10-16T09:30:05Z');
+  const BRANCH = 'blog/delete-2026-10-16-welcome-post-20261016093005';
+  const POST_SHA = 'd'.repeat(40);
+  const UPSTREAM_CONTENTS = `${API}/repos/o/r/contents/docs/site/blog/2026-10-16-welcome-post.md`;
+  const FORK_CONTENTS = `${API}/repos/contrib/r-fork/contents/docs/site/blog/2026-10-16-welcome-post.md`;
+  const AT_BASE = `?ref=${BASE_SHA}`;
+
+  const options = (mock, extra = {}) => ({
+    owner: 'o',
+    repo: 'r',
+    base: 'main',
+    token: TOKEN,
+    path: POST_PATH,
+    title: 'Welcome post',
+    body: 'Deletes the welcome post.',
+    fetchImpl: mock.fetchImpl,
+    now: NOW,
+    sleep: async () => {},
+    ...extra,
+  });
+
+  const repoStep = (push) => ({expect: `GET ${API}/repos/o/r`, body: {permissions: {push}}});
+  const refStep = {expect: `GET ${API}/repos/o/r/git/ref/heads/main`, body: {object: {sha: BASE_SHA}}};
+  const fileStep = {
+    expect: `GET ${UPSTREAM_CONTENTS}${AT_BASE}`,
+    body: {type: 'file', path: POST_PATH, sha: POST_SHA},
+  };
+
+  function assertOnlyGitHubWithToken(mock) {
+    for (const call of mock.calls) {
+      assert.ok(call.url.startsWith(`${API}/`), call.url);
+      assert.equal(call.authorization, `Bearer ${TOKEN}`, call.url);
+      assert.ok(!call.url.includes(TOKEN));
+      assert.ok(!JSON.stringify(call.body ?? null).includes(TOKEN));
+    }
+  }
+
+  test('push access: finds the post, branches in the repository, deletes it, opens the pull request', async () => {
+    const mock = scriptedFetch([
+      repoStep(true),
+      refStep,
+      fileStep,
+      {expect: `POST ${API}/repos/o/r/git/refs`, status: 201, body: {ref: `refs/heads/${BRANCH}`}},
+      {expect: `DELETE ${UPSTREAM_CONTENTS}`, status: 200, body: {content: null, commit: {sha: 'c'.repeat(40)}}},
+      {expect: `POST ${API}/repos/o/r/pulls`, status: 201, body: {html_url: 'https://github.com/o/r/pull/21', number: 21}},
+    ]);
+    const result = await openBlogDeletePullRequest(options(mock));
+    mock.assertDone();
+    assert.deepEqual(result, {
+      url: 'https://github.com/o/r/pull/21',
+      number: 21,
+      branch: BRANCH,
+      head: BRANCH,
+      forked: false,
+    });
+    const [, , , createRef, remove, pull] = mock.calls;
+    assert.deepEqual(createRef.body, {ref: `refs/heads/${BRANCH}`, sha: BASE_SHA});
+    assert.deepEqual(remove.body, {
+      message: 'Delete blog post 2026-10-16-welcome-post.md',
+      sha: POST_SHA,
+      branch: BRANCH,
+    });
+    assert.equal(remove.headers.get('content-type'), 'application/json');
+    assert.deepEqual(pull.body, {
+      title: 'Delete blog post: Welcome post',
+      head: BRANCH,
+      base: 'main',
+      body: 'Deletes the welcome post.',
+    });
+    assertOnlyGitHubWithToken(mock);
+  });
+
+  test('no push access: fork, wait for it, sync, branch and delete on the fork, PR from the fork', async () => {
+    const sleeps = [];
+    const mock = scriptedFetch([
+      repoStep(false),
+      refStep,
+      fileStep,
+      {expect: `POST ${API}/repos/o/r/forks`, status: 202, body: {name: 'r-fork', owner: {login: 'contrib'}}},
+      {expect: `GET ${API}/repos/contrib/r-fork/git/ref/heads/main`, status: 409, body: {message: 'Git Repository is empty.'}},
+      {expect: `GET ${API}/repos/contrib/r-fork/git/ref/heads/main`, body: {object: {sha: BASE_SHA}}},
+      {expect: `POST ${API}/repos/contrib/r-fork/merge-upstream`, status: 409, body: {message: 'Merge conflict'}},
+      {expect: `POST ${API}/repos/contrib/r-fork/git/refs`, status: 201, body: {}},
+      {expect: `DELETE ${FORK_CONTENTS}`, status: 200, body: {}},
+      {expect: `POST ${API}/repos/o/r/pulls`, status: 201, body: {html_url: 'https://github.com/o/r/pull/22', number: 22}},
+    ]);
+    const result = await openBlogDeletePullRequest(
+      options(mock, {title: undefined, body: undefined, forkPollIntervalMs: 750, sleep: async (ms) => void sleeps.push(ms)}),
+    );
+    mock.assertDone();
+    assert.deepEqual(result, {
+      url: 'https://github.com/o/r/pull/22',
+      number: 22,
+      branch: BRANCH,
+      head: `contrib:${BRANCH}`,
+      forked: true,
+    });
+    assert.deepEqual(sleeps, [750]);
+    assert.deepEqual(mock.calls[3].body, {default_branch_only: true});
+    assert.deepEqual(mock.calls[7].body, {ref: `refs/heads/${BRANCH}`, sha: BASE_SHA});
+    assert.deepEqual(mock.calls[8].body, {
+      message: 'Delete blog post 2026-10-16-welcome-post.md',
+      sha: POST_SHA,
+      branch: BRANCH,
+    });
+    const pull = mock.calls[9].body;
+    assert.equal(pull.title, 'Delete blog post: 2026-10-16-welcome-post.md', 'no title: the file name');
+    assert.equal(pull.head, `contrib:${BRANCH}`);
+    assert.equal(pull.maintainer_can_modify, true);
+    assert.match(pull.body, /docs\/site\/blog\/2026-10-16-welcome-post\.md/);
+    assertOnlyGitHubWithToken(mock);
+  });
+
+  test('a post that is not on the base branch: "post not found on main", and no branch is made', async () => {
+    const mock = scriptedFetch([
+      repoStep(true),
+      refStep,
+      {expect: `GET ${UPSTREAM_CONTENTS}${AT_BASE}`, status: 404, body: {message: `Not Found ${TOKEN}`}},
+    ]);
+    await assert.rejects(openBlogDeletePullRequest(options(mock)), (error) => {
+      assert.ok(error instanceof GitHubError);
+      assert.match(error.message, /post not found on main/);
+      assert.equal(error.status, 404);
+      assertNoToken(error);
+      return true;
+    });
+    mock.assertDone();
+  });
+
+  test('a folder, or an answer without a sha, stops before the branch is made', async () => {
+    for (const body of [[{type: 'file', sha: POST_SHA}], {type: 'dir', sha: POST_SHA}, {type: 'file'}]) {
+      const mock = scriptedFetch([repoStep(true), refStep, {expect: `GET ${UPSTREAM_CONTENTS}${AT_BASE}`, body}]);
+      await assert.rejects(openBlogDeletePullRequest(options(mock)), (error) => {
+        assert.ok(error instanceof GitHubError, JSON.stringify(body));
+        assert.match(error.message, /is a folder|no version of/);
+        assertNoToken(error);
+        return true;
+      });
+      mock.assertDone();
+    }
+  });
+
+  test('errors are clear and never contain the token', async () => {
+    const cases = [
+      {
+        name: 'bad credentials',
+        steps: [{expect: `GET ${API}/repos/o/r`, status: 401, body: {message: `Bad credentials ${TOKEN}`}}],
+        message: /GitHub rejected the token/,
+      },
+      {
+        name: 'GitHub echoes the token when the delete is refused',
+        steps: [
+          repoStep(true),
+          refStep,
+          fileStep,
+          {expect: `POST ${API}/repos/o/r/git/refs`, status: 201, body: {}},
+          {expect: `DELETE ${UPSTREAM_CONTENTS}`, status: 409, body: {message: `sha does not match (${TOKEN})`}},
+        ],
+        message: /Deleting the post on the branch failed: GitHub answered HTTP 409 \(sha does not match \(\[token\]\)\)/,
+      },
+      {
+        name: 'network failure whose message contains the token',
+        steps: [repoStep(true), {expect: `GET ${API}/repos/o/r/git/ref/heads/main`, throws: new TypeError(`bad header Bearer ${TOKEN}`)}],
+        message: /could not reach GitHub/,
+      },
+      {
+        name: 'pull request already exists',
+        steps: [
+          repoStep(true),
+          refStep,
+          fileStep,
+          {expect: `POST ${API}/repos/o/r/git/refs`, status: 201, body: {}},
+          {expect: `DELETE ${UPSTREAM_CONTENTS}`, status: 200, body: {}},
+          {expect: `POST ${API}/repos/o/r/pulls`, status: 422, body: {message: 'Validation Failed'}},
+        ],
+        message: /Opening the pull request failed: GitHub answered HTTP 422/,
+      },
+    ];
+    for (const item of cases) {
+      const mock = scriptedFetch(item.steps);
+      await assert.rejects(openBlogDeletePullRequest(options(mock)), (error) => {
+        assert.ok(error instanceof GitHubError, item.name);
+        assert.match(error.message, item.message, item.name);
+        assertNoToken(error);
+        return true;
+      });
+      mock.assertDone();
+    }
+  });
+
+  test('only blog posts can be deleted; every input is checked before any request', async () => {
+    const mock = scriptedFetch([]);
+    const invalid = [
+      [{path: 'docs/architecture/roadmap.md'}, /Only blog posts can be deleted/],
+      [{path: 'docs/site/blog/'}, /Only blog posts can be deleted/],
+      [{path: 'docs/site/blog/x.txt'}, /Only blog posts can be deleted/],
+      [{path: 'docs/site/blog/../../README.md'}, /Only blog posts can be deleted/],
+      [{path: 'docs/site/blog/./x.md'}, /Only blog posts can be deleted/],
+      [{path: '/docs/site/blog/x.md'}, /Only blog posts can be deleted/],
+      [{path: 'docs\\site\\blog\\x.md'}, /Only blog posts can be deleted/],
+      [{path: 'Docs/site/blog/x.md'}, /Only blog posts can be deleted/],
+      [{path: 'docs/site/blogger/x.md'}, /Only blog posts can be deleted/],
+      [{path: undefined}, /Only blog posts can be deleted/],
+      [{token: ''}, /A GitHub token is required.*account menu/],
+      [{token: `${TOKEN} extra`}, /not allowed/],
+      [{owner: 'o/../x'}, /owner and name/],
+      [{base: '../main'}, /not a valid branch name/],
+    ];
+    for (const [extra, message] of invalid) {
+      await assert.rejects(openBlogDeletePullRequest(options(mock, extra)), (error) => {
+        assert.ok(error instanceof GitHubError);
+        assert.match(error.message, message, JSON.stringify(extra));
+        assertNoToken(error);
+        return true;
+      });
+    }
+    assert.equal(mock.calls.length, 0);
+  });
+
+  test('isBlogPostPath', () => {
+    assert.equal(isBlogPostPath('docs/site/blog/2026-10-16-welcome-to-the-blog.md'), true);
+    assert.equal(isBlogPostPath('docs/site/blog/folder/post.mdx'), true);
+    assert.equal(isBlogPostPath('docs/site/blog/post.MD'), true);
+    for (const path of ['docs/site/blog/', 'docs/site/blog/x.js', 'docs/overview/status.md', 'docs/site/blog/../x.md', 42, null]) {
+      assert.equal(isBlogPostPath(path), false, String(path));
+    }
+  });
+
+  test('a long or multi-line title is cleaned up for the pull request title', async () => {
+    const mock = scriptedFetch([
+      repoStep(true),
+      refStep,
+      fileStep,
+      {expect: `POST ${API}/repos/o/r/git/refs`, status: 201, body: {}},
+      {expect: `DELETE ${UPSTREAM_CONTENTS}`, status: 200, body: {}},
+      {expect: `POST ${API}/repos/o/r/pulls`, status: 201, body: {html_url: 'https://github.com/o/r/pull/23', number: 23}},
+    ]);
+    await openBlogDeletePullRequest(options(mock, {title: `  A\n\ttitle ${'x'.repeat(300)}  `}));
+    mock.assertDone();
+    const {title} = mock.calls[5].body;
+    assert.ok(title.startsWith('Delete blog post: A title xxx'), title);
+    assert.ok(title.length <= 'Delete blog post: '.length + 200, String(title.length));
+    assert.ok(!/[\n\t]/.test(title));
+  });
+});
+
+describe('preferGitHubHistory', () => {
+  const person = {login: 'ada', name: 'Ada', commits: 1};
+  const bots = {commits: 2, lastDate: '2026-10-16T10:00:00Z', lastSha: 'c'.repeat(40), htmlUrl: null};
+  const noBuild = {peopleCount: 0, hasLast: false};
+
+  test('GitHub wins when it names people, whatever the build has', () => {
+    assert.equal(preferGitHubHistory({contributors: [person]}, noBuild), true);
+    assert.equal(preferGitHubHistory({contributors: [person], automation: bots}, {peopleCount: 3, hasLast: true}), true);
+  });
+
+  test('automation-only GitHub data wins only when the build names nobody', () => {
+    assert.equal(preferGitHubHistory({contributors: [], automation: bots}, noBuild), true);
+  });
+
+  test('automation-only GitHub data never hides people found at build time (rename, capped page)', () => {
+    assert.equal(preferGitHubHistory({contributors: [], automation: bots}, {peopleCount: 2, hasLast: true}), false);
+    assert.equal(preferGitHubHistory({contributors: [], automation: bots}, {peopleCount: 0, hasLast: true}), false);
+    assert.equal(preferGitHubHistory({contributors: [], automation: bots}, {peopleCount: 1, hasLast: false}), false);
+  });
+
+  test('an empty GitHub answer (file not on the default branch) keeps the build', () => {
+    assert.equal(preferGitHubHistory({contributors: []}, noBuild), false);
+    assert.equal(preferGitHubHistory({contributors: [], automation: null}, noBuild), false);
+    assert.equal(preferGitHubHistory({contributors: [], automation: {...bots, commits: 0}}, noBuild), false);
   });
 });

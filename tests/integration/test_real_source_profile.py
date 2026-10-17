@@ -637,6 +637,14 @@ def test_profiling_doc_real_snapshot_section_matches_the_evidence(evidence: Any)
     assert section == m.render_snapshot_evidence_section(evidence)
 
 
+def test_rendered_section_is_mdx_safe_outside_code_spans(evidence: Any) -> None:
+    # The docs site parses Markdown as MDX: a bare "<", "{" or "}" in prose breaks the build.
+    section = m.render_snapshot_evidence_section(evidence)
+    prose = re.sub(r"`[^`\n]*`", "", section)
+    assert not re.search(r"(?<!\\)[<{}]", prose)
+    assert m._mdx_safe("a <= b {c} `x <= {y}`") == r"a \<= b \{c\} `x <= {y}`"
+
+
 def test_evidence_json_is_in_canonical_form(evidence: Any, digest: Any, sample: Any) -> None:
     assert EVIDENCE.read_text(encoding="utf-8") == m.canonical_json(evidence)
     assert DIGEST.read_text(encoding="utf-8") == m.canonical_json(digest)
