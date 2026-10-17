@@ -9,8 +9,10 @@ Authoritative public OpenAlex snapshot contract (Help Center “Sync”, 2026):
 - Equivalent file also exists under ``data/parquet/works/``; we do **not** accept
   that path as an alternate identity in this slice (one canonical URI).
 - CSV columns: ``work_id,deleted_date``
-- Cumulative Works deletion ledger (~160 MB compressed / tens of millions of
-  rows in production). Local development remains bounded at
+- Works deletion ledger, documented as cumulative. Observed in the DE-05 LOCAL
+  bounded inspection (#126): 234,102,326 bytes for the 2026-10-14 release and
+  168,365,444 bytes for the 2026-09-23 version; "cumulative" is documented and
+  consistent with that growth, not proven. Local development remains bounded at
   ``max_file_size_bytes <= 25_000_000`` and does **not** ingest the full public
   ledger.
 

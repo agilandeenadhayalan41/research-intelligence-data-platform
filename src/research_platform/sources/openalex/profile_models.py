@@ -17,6 +17,8 @@ MAX_FILE_SIZE_BYTES = 25_000_000
 MAX_PROFILE_RECORDS = 100
 MAX_DECODED_SAMPLE_BYTES = 25_000_000
 _MAX_PROFILE_RECORDS_CEILING = 10_000
+MAX_DRAIN_DECODED_BYTES = 250_000_000
+_MAX_DRAIN_DECODED_CEILING = 1_000_000_000
 
 
 class EvidenceType(StrEnum):
@@ -85,6 +87,14 @@ class ProfilingLimits(BaseModel):
     max_parquet_footer_bytes: int = Field(
         default=1_000_000, strict=True, gt=0, le=25_000_000
     )
+    drain_jsonl_to_eof: bool = Field(default=False, strict=True)
+    """When true, JSONL is read to EOF after the sample: lines are counted (not
+    parsed), gzip CRC32/ISIZE are verified, and size/count/sha256 become exact."""
+    max_drain_decoded_bytes: int = Field(
+        default=MAX_DRAIN_DECODED_BYTES, strict=True, gt=0, le=_MAX_DRAIN_DECODED_CEILING
+    )
+    parquet_values: Literal["sample", "footer_only"] = "sample"
+    """``footer_only`` keeps the exact footer facts and reads no Parquet values."""
 
     def sample_selection(self) -> SampleSelectionConfig:
         return SampleSelectionConfig(
@@ -187,6 +197,8 @@ EVIDENCE_FIELDS = (
     "statistics_available",
     "parquet_created_by",
     "sampled_record_count",
+    "sha256",
+    "sampled_duplicate_key_records",
 )
 
 
@@ -217,6 +229,10 @@ class OpenAlexSourceProfile(BaseModel):
     statistics_available: Literal["all", "partial", "none"] | None
     parquet_created_by: str | None
     sampled_record_count: int = Field(ge=0)
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    """SHA-256 of every retrieved byte; only when the whole file was read and verified."""
+    sampled_duplicate_key_records: int | None = Field(default=None, strict=True, ge=0)
+    """JSONL sample records whose abstract_inverted_index repeated a word key."""
     limits: ProfilingLimits
     evidence: dict[str, EvidenceType]
     limitations: tuple[str, ...]
@@ -234,6 +250,16 @@ class OpenAlexSourceProfile(BaseModel):
             raise ValueError("sampled_record_count exceeds the configured record bound")
         if self.evidence["sampled_record_count"] is not EvidenceType.SAMPLED_OBSERVATION:
             raise ValueError("sampled_record_count is always a sampled observation")
+        if self.sha256 is not None and (
+            self.evidence["sha256"] is not EvidenceType.EXACT_FILE_METADATA
+            or self.observed_size_bytes is None
+        ):
+            raise ValueError("sha256 is exact only for a fully read and verified file")
+        if self.sampled_duplicate_key_records is not None and (
+            self.evidence["sampled_duplicate_key_records"]
+            is not EvidenceType.SAMPLED_OBSERVATION
+        ):
+            raise ValueError("sampled_duplicate_key_records is a sampled observation")
         return self
 
 

@@ -35,9 +35,25 @@ https://openalex.org/W4245566371,2026-08-14
 
 ### Cumulative ledger
 
-`deleted_ids.csv.gz` is a **cumulative** Works deletion ledger, not a daily
-delta. The latest snapshot file is the whole truth. Public size is roughly
-**160 MB compressed / tens of millions of rows**.
+`deleted_ids.csv.gz` is documented as a **cumulative** Works deletion ledger,
+not a daily delta, so the latest snapshot file is the whole truth. A LOCAL bounded
+inspection on 2026-10-16 (#126; sandbox container, not cloud evidence) observed:
+
+- identical bytes under both trees (`data/jsonl/works/` and `data/parquet/works/`;
+  equal size, ETag and CRC64NVME, two distinct S3 objects):
+  234,102,326 bytes for the 2026-10-14 release (multipart ETag `-4`), up from
+  168,365,444 bytes for the 2026-09-23 version;
+- header exactly `work_id,deleted_date`, rows shaped
+  `https://openalex.org/W<digits>,YYYY-MM-DD`, read only from an If-Match Range
+  prefix of 65,536 bytes because the object is above the 25,000,000-byte cap; the
+  total row count is therefore UNKNOWN;
+- no deletion or merge object for any other entity in a full listing of `data/`.
+
+"Cumulative" is documented and consistent with that growth, not proven. The legacy
+`legacy-data/merged_ids/{authors,institutions,publishers,sources,works}/` files
+(header `merge_date,id,merge_into_id` in research) belong to the frozen pre-2026
+layout (`README.txt`: "legacy-data/ is the frozen pre-2026 layout (incl.
+merged_ids/) and is not updated"); merge handling stays with DE-11 (#132).
 
 This local Step 13 runner **does not** ingest the full public ledger. Default
 local safety remains `max_file_size_bytes <= 25_000_000`. Full-scale ledger

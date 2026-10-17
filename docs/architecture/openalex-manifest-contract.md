@@ -34,8 +34,9 @@ redirects, and does not invoke AWS credential discovery.
 The selected JSON Lines manifest is expected to declare `jsonl`; its payload files
 are gzip-compressed `.gz` files. Selecting `parquet` instead reads that format's
 separate Works manifest and expects Snappy-compressed `.parquet` files. These are
-codec expectations from OpenAlex documentation, not a claim about payload bytes
-downloaded or decoded by this connector.
+codec expectations from OpenAlex documentation. Until 2026-10-16 they were not a
+claim about payload bytes downloaded or decoded by this connector; the LOCAL
+inspection below then verified gzip and SNAPPY on one real pair.
 
 Independent public metadata observations on **2026-10-06** verified anonymous
 access. At 23:43:11 UTC, anonymous `HEAD` requests to both endpoints returned the
@@ -46,13 +47,19 @@ following:
 | `https://openalex.s3.amazonaws.com/data/jsonl/works/manifest.json` | HTTP 200, Content-Length 383359, `binary/octet-stream` | `Range: bytes=0-4095` observed `format: jsonl`, `entity: works` |
 | `https://openalex.s3.amazonaws.com/data/parquet/works/manifest.json` | HTTP 200, Content-Length 397668, `binary/octet-stream` | `Range: bytes=0-4095` observed `format: parquet`, `entity: works` |
 
+These sizes predate the 2026-10-14 release: the JSONL version listing recorded on
+2026-10-16 shows 383,359 bytes as the 2026-09-23 version, and the 2026-10-14 Works
+manifests were 357,013 (JSONL) and 370,414 (Parquet) bytes.
+
 The bounded requests disabled curl configuration, redirects, and non-HTTPS
 protocols, used 10-second connect / 20-second total timeouts, and capped response
 size at 4096 bytes. A 1024-byte JSONL prefix also confirmed the per-entity schema:
 `date`, `format`, `entity`, `record_count`, `content_length`, `files`, `url`, and
 `meta`. No snapshot payload object was requested. Thus the **live
 manifest-declared formats** and anonymous metadata access are verified, while gzip
-and Snappy remain documented codec expectations only.
+and Snappy remain documented codec expectations only (as of 2026-10-06; superseded
+by the 2026-10-16 LOCAL inspection below, which verified gzip and SNAPPY on one
+real pair).
 
 The opt-in command was separately attempted in the Copilot cloud environment and
 could not obtain an HTTP response because that environment's DNS firewall blocked
@@ -63,6 +70,32 @@ manifest cap. This does not contradict the independent successful anonymous
 observations. It means the command could not verify connectivity from that
 restricted runtime. The firewall was not changed, and no credentials or
 authenticated fallback were used.
+
+A **LOCAL bounded inspection** on **2026-10-16** (sandbox container, anonymous
+HTTPS, DE-05 / #126; not cloud or enterprise evidence) read the snapshot's own
+files and both Works manifests whole and verified both payload formats on one
+downloaded JSONL/Parquet pair. The observed layout (from the generated
+[real snapshot evidence](openalex-source-profiling.md#real-snapshot-evidence-2026-10-14),
+except where marked):
+
+- The bucket root holds `LICENSE.txt` (CC0 1.0), `README.txt`,
+  `RELEASE_NOTES.txt`, `browse.html`, `data/` and `legacy-data/`.
+- `data/jsonl/` and `data/parquet/` are two complete copies. Each has a combined
+  `manifest.json` (keys `date`, `format`, `meta`, `entities`) and 21 entity
+  prefixes, each with its own per-entity `manifest.json`. The combined manifest is
+  not a Works manifest: the strict parser rejects it (same-day pre-PR research
+  run; not in the generated evidence), and the DE-05 script summarises it
+  separately.
+- The per-entity Works manifests at the two endpoints above are accepted by the
+  unchanged parser (1,898 files each for the 2026-10-14 release). A full key
+  listing of each tree matched every manifest URL with an equal size; the only
+  unreferenced objects are the combined manifest, the 21 entity manifests and
+  `works/deleted_ids.csv.gz`.
+- Manifests carry no checksum. S3 publishes a full-object CRC64NVME per object
+  (HEAD with `x-amz-checksum-mode: ENABLED`), and single-part ETags equal the MD5.
+- "Pre-2026 legacy layouts" now sit under `legacy-data/`, which `README.txt`
+  describes as frozen and not updated. The old `data/works/manifest` key returns
+  404 (same-day pre-PR research run; not in the generated evidence).
 
 The typed model deliberately represents the manifest's declared `format`
 (`jsonl` or `parquet`), not the compression codec. Thus, a gzip-compressed JSONL
@@ -248,7 +281,16 @@ underlying read is bounded, cumulative actual returned bytes cannot exceed the
 configured limit, and a one-byte probe detects overflow rather than silently
 truncating. Declared lengths are checked for truncation. EOF, explicit close, and
 all error paths close the response; after a stream is returned, failures are
-reported and never retried from byte zero.
+reported and never retried from byte zero. Compensation is a whole-object restart
+by the caller: local ingestion lands nothing from an interrupted stream, a later
+run re-fetches from byte zero, and identical replays are idempotent (DE-05 tests in
+`tests/integration/test_real_source_profile.py`). Range resume is deferred to
+DE-06 (#127). Its preconditions, from the 2026-10-16 LOCAL inspection: S3 serves
+anonymous `Range` reads and object versions, and releases rewrite keys in place,
+so every range must be pinned with `If-Match` (or a `versionId`), the 206 ETag must
+equal the pinned ETag, and the reassembled object must match the S3 full-object
+CRC64NVME and the manifest size and record count. The stream also exposes the
+validated S3 `etag` and `version_id` for that purpose.
 
 The default selector limits are `max_files=1` and
 `max_file_size_bytes=25_000_000`. Each HTTP attempt uses a monotonic deadline,
@@ -288,5 +330,6 @@ storage are implemented by the `ObjectStore` adapters (Step 09
 `LocalObjectStore`, #9 `GCSObjectStore`), the Step 12/13 local ingestion
 runners land source bytes through `LocalObjectStore`, and the DuckDB,
 PostgreSQL and BigQuery `Warehouse` adapters (#8, #7, #10) run queries. That
-path has run only on synthetic payloads: no real OpenAlex payload has been
-retrieved or landed by repository code (tracked in #126).
+path has run only on synthetic payloads: no real OpenAlex payload has been landed
+by repository code. A real Works pair was retrieved and profiled only in the
+2026-10-16 LOCAL bounded inspection (#126), which landed and mapped nothing.

@@ -1,8 +1,11 @@
 """Supported / deferred / unmapped OpenAlex Work field catalog.
 
 Evidence basis: public OpenAlex Works API documentation and repository Step 08
-notes. Real payload profiling remains pending public network access; this catalog
-must not invent entities beyond documented public schema.
+notes. Real payloads were profiled only in the DE-05 LOCAL bounded inspection
+(#126; see "Real snapshot evidence" in docs/architecture/openalex-source-profiling.md):
+real Works have 15 top-level keys not listed here and no ``grants``. Catalog
+changes are deferred to DE-10 (#131); this catalog must not invent entities
+beyond documented public schema.
 """
 
 from __future__ import annotations

@@ -67,7 +67,7 @@ Explicit remaining gaps (separately scoped; do not start automatically):
 | 05 | Bounded public OpenAlex connector | Complete |
 | 06 | OpenAlex Works manifest parser | Complete |
 | 07 | Bounded deterministic development sample selector | Complete |
-| 08 | Bounded OpenAlex source profiling ([details](openalex-source-profiling.md)) | Implemented; real payload profile pending public network access |
+| 08 | Bounded OpenAlex source profiling ([details](openalex-source-profiling.md)) | Implemented; real payload profiled only in a LOCAL bounded inspection (#126), not in any cloud environment |
 | 09 | Immutable local raw landing ([details](immutable-local-landing.md)) | `LocalObjectStore` delivered; `GCSObjectStore` via #9 (offline tests; live sandbox bucket verified in #91) |
 | 10 | Pipeline control and provenance contracts ([details](pipeline-control.md)) | Models, lifecycle, `ControlStore` protocol, DDL specs; local Postgres adapter in Step 12 |
 | 11 | Canonical OpenAlex logical model ([details](openalex-canonical-model.md)) | Normalized entities/relationships, PyArrow schemas, mapping |

@@ -116,10 +116,10 @@ The sample selector then picks at most **1 file of at most 25,000,000 bytes**
 (the defaults). Ranking is deterministic, smallest first, and every excluded
 file gets one reason code. A file of unknown size is excluded rather than
 treated as zero. A separate, opt-in profiler can inspect one selected file and
-label every fact with an evidence class. No real payload has been profiled yet:
-the opt-in run was blocked by a DNS firewall in the cloud environment where it
-was tried. Only the manifests' metadata was verified, anonymously, on
-2026-10-06.
+label every fact with an evidence class. A real JSONL/Parquet Works pair was
+profiled only in a LOCAL bounded inspection from a sandbox container on
+2026-10-16 (#126), with byte caps enforced in code; the earlier opt-in run in a
+cloud environment was blocked by its DNS firewall.
 
 Details: [OpenAlex discovery and manifest contract](../architecture/openalex-manifest-contract.md),
 [Source profiling](../architecture/openalex-source-profiling.md),
@@ -203,8 +203,10 @@ The model is strict about gaps. Array fields carry `MISSING` / `NULL` / `EMPTY`
 / `PRESENT` presence flags. Malformed Work IDs fail mapping, identifiers are
 never invented, and dates must be exact `YYYY-MM-DD`. Version precedence and the
 reconciliation of shared entities are deterministic. The mapping is based on
-OpenAlex's public documentation, because no real payload has been profiled
-yet.
+OpenAlex's public documentation. The 2026-10-16 LOCAL inspection (#126) found
+that it rejected all 2,798 records of the profiled 2026-09-28 file (ISO
+timestamps, institution hosts); that gap is handed to DE-10 (#131) and DE-08
+(#129).
 
 Details: [OpenAlex canonical model](../architecture/openalex-canonical-model.md).
 
@@ -226,14 +228,16 @@ failure rolls back every row. The raw bytes stay, and a retry reruns only the
 database transaction. The docs are explicit that raw storage and PostgreSQL
 are **not** one distributed ACID transaction.
 
-**Deletions** come from OpenAlex's cumulative `deleted_ids.csv.gz` ledger,
+**Deletions** come from OpenAlex's `deleted_ids.csv.gz` ledger (documented as
+cumulative; not proven),
 which is landed immutably like any other file and applied in one transaction.
 Deleted Works are **tombstoned** (`activity_state = DELETED`), never physically
 removed. Each row's `deleted_date` decides precedence. A newer active record
 after a tombstone raises an error that requires an explicit restore, instead
 of silently bringing the Work back. The relationship rows of a deleted Work
 are kept and filtered out through the parent Work ("Policy A"). The full
-public ledger, about 160 MB compressed, is not ingested by the local runner.
+public ledger, 234,102,326 bytes for the 2026-10-14 release (LOCAL bounded
+inspection, #126), is not ingested by the local runner.
 
 Details: [Local Works ingestion](../architecture/local-works-ingestion.md),
 [OpenAlex deletions](../architecture/openalex-deletions.md).

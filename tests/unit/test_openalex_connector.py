@@ -762,3 +762,72 @@ def test_connectivity_cli_does_not_swallow_unexpected_errors(
 def test_request_configuration_has_hard_upper_bounds(settings: dict[str, object]) -> None:
     with pytest.raises(ValueError):
         OpenAlexConnector(**settings)  # type: ignore[arg-type]
+
+
+# DE-05 (#126): ETag / version id on the payload stream; GET/HEAD transport guard
+
+
+def test_payload_stream_exposes_validated_etag_and_version_id() -> None:
+    good = FakeResponse(
+        b"abc",
+        headers={
+            "Content-Length": "3",
+            "ETag": '"5a9dae0b74c245ee8eeb8f2b53b71135"',
+            "x-amz-version-id": "nBMr88vXthKZEkhzlJkQFSOQ9WxZwCMt",
+        },
+    )
+    stream = connector(FakeClient(good)).fetch(asset())
+    assert (stream.etag, stream.version_id) == (
+        "5a9dae0b74c245ee8eeb8f2b53b71135", "nBMr88vXthKZEkhzlJkQFSOQ9WxZwCMt"
+    )
+    stream.close()
+    multipart = FakeResponse(b"abc", headers={"ETag": '"16a79750d09c2c5e77e5808c26e798f5-12"'})
+    stream = connector(FakeClient(multipart)).fetch(asset())
+    assert stream.etag == "16a79750d09c2c5e77e5808c26e798f5-12"
+    stream.close()
+    malformed = FakeResponse(
+        b"abc", headers={"ETag": '"not-an-etag"', "x-amz-version-id": "bad id\r\n"}
+    )
+    stream = connector(FakeClient(malformed)).fetch(asset())
+    assert (stream.etag, stream.version_id) == (None, None)
+    stream.close()
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("PUT", "/data/jsonl/works/manifest.json"),
+        ("DELETE", "/LICENSE.txt"),
+        ("GET", "relative/path"),
+        ("GET", "/with space"),
+        ("GET", "/café"),
+        ("HEAD", "/control\x01"),
+    ],
+)
+def test_open_https_rejects_other_methods_and_unsafe_paths(
+    monkeypatch: pytest.MonkeyPatch, method: str, path: str
+) -> None:
+    install_fake_https(monkeypatch, b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+    with pytest.raises(OpenAlexEndpointUnavailableError):
+        connector_module._open_https(method, path, timeout=3, headers={})
+    assert FakeHTTPSConnection.instances == []
+
+
+def test_head_response_is_parsed_with_head_semantics(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Body bytes follow the headers on the wire: parsed with GET semantics, the
+    # response would return them; with HEAD semantics it must return none.
+    install_fake_https(
+        monkeypatch,
+        b"HTTP/1.1 200 OK\r\nContent-Length: 224592\r\nETag: \"abc\"\r\n\r\n" + b"x" * 10,
+    )
+    response = connector_module._open_https(
+        "HEAD", "/data/jsonl/works/manifest.json", timeout=3, headers={"x-amz-checksum-mode": "ENABLED"}
+    )
+    connection = FakeHTTPSConnection.instances[0]
+    assert connection.request_args == (
+        "HEAD", "/data/jsonl/works/manifest.json", {"x-amz-checksum-mode": "ENABLED"}
+    )
+    assert response.headers["Content-Length"] == "224592"
+    assert response.read(10) == b""
+    response.close()
+    assert connection.closed

@@ -102,19 +102,39 @@ class AnonymousOpenAlexHTTPClient:
         timeout: float,
         headers: dict[str, str],
     ) -> _Response:
-        path = _public_path(uri)
-        deadline = time.monotonic() + timeout
-        connection = http.client.HTTPSConnection(_PUBLIC_HOST, timeout=timeout)
-        try:
-            connection.request("GET", path, headers=headers)
-            response = http.client.HTTPResponse(
-                _DeadlineSocket(connection.sock, deadline), method="GET"
-            )
-            response.begin()
-        except Exception:
-            connection.close()
-            raise
-        return _HTTPResponse(response, connection)
+        return _open_https("GET", _public_path(uri), timeout=timeout, headers=headers)
+
+
+def _open_https(
+    method: str,
+    path: str,
+    *,
+    timeout: float,
+    headers: dict[str, str],
+) -> _Response:
+    """Open one anonymous request to the fixed public host; never follows redirects.
+
+    ``path`` must already be validated by the caller (``_public_path`` for Works
+    objects, or the DE-05 inspection allow-list). Only ``GET`` and ``HEAD`` exist.
+    """
+    if method not in {"GET", "HEAD"}:
+        raise OpenAlexEndpointUnavailableError("OpenAlex transport supports GET and HEAD only")
+    if not path.startswith("/") or not path.isascii() or any(
+        ord(character) < 33 or ord(character) == 127 for character in path
+    ):
+        raise OpenAlexEndpointUnavailableError("OpenAlex request path is unsafe")
+    deadline = time.monotonic() + timeout
+    connection = http.client.HTTPSConnection(_PUBLIC_HOST, timeout=timeout)
+    try:
+        connection.request(method, path, headers=headers)
+        response = http.client.HTTPResponse(
+            _DeadlineSocket(connection.sock, deadline), method=method
+        )
+        response.begin()
+    except Exception:
+        connection.close()
+        raise
+    return _HTTPResponse(response, connection)
 
 
 class _DeadlineSocket:
@@ -269,10 +289,16 @@ class OpenAlexPayloadStream(io.BufferedReader):
         *,
         content_type: str | None,
         content_length: int | None,
+        etag: str | None = None,
+        version_id: str | None = None,
     ) -> None:
         super().__init__(raw, buffer_size=_CHUNK_SIZE)
         self.content_type = content_type
         self.content_length = content_length
+        self.etag = etag
+        """Validated S3 ``ETag`` without quotes; multipart ETags keep their ``-N``."""
+        self.version_id = version_id
+        """Validated ``x-amz-version-id``, or ``None`` when absent or malformed."""
 
 
 class OpenAlexConnector(SourceConnector):
@@ -356,6 +382,8 @@ class OpenAlexConnector(SourceConnector):
                     content_type.split(";", 1)[0].strip().lower() if content_type else None
                 ),
                 content_length=expected_bytes,
+                etag=parse_etag(_header(response, "ETag")),
+                version_id=parse_version_id(_header(response, "x-amz-version-id")),
             )
         except Exception:
             response.close()
@@ -536,6 +564,26 @@ def _validate_source_asset(asset: SourceAsset) -> str:
     ):
         raise OpenAlexFormatError("OpenAlex source URI has an unsupported namespace or format")
     return parts[2]
+
+
+_ETAG = re.compile(r'"?([0-9a-f]{32}(?:-[1-9][0-9]{0,4})?)"?')
+_VERSION_ID = re.compile(r"[A-Za-z0-9._-]{1,1024}")
+
+
+def parse_etag(value: str | None) -> str | None:
+    """Return an S3 ETag (MD5 hex, optionally ``-<parts>``) without quotes, else ``None``."""
+    if value is None:
+        return None
+    match = _ETAG.fullmatch(value.strip())
+    return match.group(1) if match else None
+
+
+def parse_version_id(value: str | None) -> str | None:
+    """Return a safe-looking S3 object version id, else ``None``."""
+    if value is None:
+        return None
+    value = value.strip()
+    return value if _VERSION_ID.fullmatch(value) else None
 
 
 def _header(response: _Response, name: str) -> str | None:

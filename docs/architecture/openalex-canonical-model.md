@@ -29,8 +29,14 @@ synthetic data (PRs #104/#105).
 ## Evidence basis
 
 Mapping follows public OpenAlex Works API documentation and repository Step 08
-notes. Real payload profiling is still pending public network access (tracked
-in #126). Fields that cannot be mapped confidently are not guessed.
+notes. Real payloads were profiled only in a LOCAL bounded inspection on
+2026-10-16 (#126; sandbox container, not cloud evidence). That inspection found
+that the unchanged mapper rejected all 2,798 records of the profiled 2026-09-28
+file: `created_date` and `updated_date` are ISO timestamps, not `YYYY-MM-DD`, and some
+`host_organization` values are institution (`I…`) ids; both are handed to DE-10
+(#131) and DE-08 (#129). Real Works also carry 15 top-level keys that
+`FIELD_CATALOG` does not list, and the catalogued `grants` is absent (DE-10,
+#131). Fields that cannot be mapped confidently are not guessed.
 `FIELD_CATALOG` classifies the source fields it knows about (supported,
 deferred and source-only), but it is reference data: the mapper does not read
 it, and source fields it does not list, such as `primary_topic`, are ignored

@@ -1182,3 +1182,232 @@ def test_main_prints_safe_structured_summary(capsys, monkeypatch) -> None:
     assert output["profiles"][0]["source_format"] == "jsonl"
     assert output["profiles"][0]["evidence"]["schema_fields"] == "SAMPLED_OBSERVATION"
     assert output["limits"]["max_files"] == 1
+
+
+# DE-05 (#126): drain to EOF, sha256, duplicate abstract keys, footer-only Parquet
+
+
+def drained(**overrides: Any) -> ProfilingLimits:
+    return ProfilingLimits(drain_jsonl_to_eof=True, **overrides)
+
+
+def test_jsonl_drain_reports_exact_rows_size_and_sha256() -> None:
+    body = gz(jsonl([{"id": f"W{index}", "n": index} for index in range(25)]))
+    result, response = profile_jsonl_bytes(
+        body, drained(max_profile_records=3), record_count=25
+    )
+    assert result.sampled_record_count == 3
+    assert result.row_count == 25
+    assert result.observed_size_bytes == len(body)
+    assert result.sha256 == hashlib.sha256(body).hexdigest()
+    assert result.evidence["sha256"] is EvidenceType.EXACT_FILE_METADATA
+    assert result.evidence["row_count"] is EvidenceType.EXACT_FILE_METADATA
+    assert any("drained to EOF" in item for item in result.limitations)
+    assert response.closed
+
+
+def test_jsonl_drain_detects_truncation_after_the_sample() -> None:
+    body = gz(jsonl([{"id": f"W{index}"} for index in range(200)]))[:-12]
+    response = FakeResponse(body)
+    with pytest.raises(OpenAlexDecompressionError):
+        profiling.profile_openalex_asset(
+            connector(FakeClient(response)), asset(body), drained(max_profile_records=2)
+        )
+    assert response.closed
+
+
+def test_jsonl_drain_is_bounded_by_max_drain_decoded_bytes() -> None:
+    content = jsonl([{"id": f"W{index}", "pad": "x" * 100} for index in range(100)])
+    with pytest.raises(OpenAlexProfileLimitError, match="drain exceeds"):
+        sample_jsonl(
+            io.BytesIO(content), compression=None, max_records=2,
+            max_decoded_bytes=10_000, drain_to_eof=True, max_drain_decoded_bytes=1_000,
+        )
+    sample = sample_jsonl(
+        io.BytesIO(content), compression=None, max_records=2,
+        max_decoded_bytes=10_000, drain_to_eof=True, max_drain_decoded_bytes=len(content),
+    )
+    assert (sample.total_record_count, sample.total_decoded_bytes) == (100, len(content))
+    assert sample.reached_eof and sample.drained
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b'{"a":1}\n{"a":2}\n\n',
+        b'{"a":1}\n\n{"a":2}\n',
+        b'{"a":1}\n{"a":2}\n\r\n{"a":3}\n',
+        b'{"a":1}\n' + b'{"a":2}\n' * 20_000 + b'\n{"a":3}\n',
+    ],
+    ids=["trailing", "right-after-sample", "crlf", "deep-in-drain"],
+)
+def test_jsonl_drain_rejects_a_blank_line_instead_of_counting_it(content: bytes) -> None:
+    with pytest.raises(OpenAlexMalformedJSONLError, match="blank line"):
+        sample_jsonl(io.BytesIO(content), compression=None, max_records=1,
+                     max_decoded_bytes=1_000, drain_to_eof=True)
+    with pytest.raises(OpenAlexMalformedJSONLError, match="blank line"):
+        sample_jsonl(io.BytesIO(gz(content)), compression="gzip", max_records=1,
+                     max_decoded_bytes=1_000, drain_to_eof=True)
+
+
+def test_jsonl_drain_detects_a_blank_line_across_chunk_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(jsonl_module, "_DRAIN_CHUNK", 1)
+    for content in (b'{"a":1}\n{"a":2}\n\n{"a":3}\n', b'{"a":1}\n{"a":2}\n\r\n{"a":3}\n'):
+        with pytest.raises(OpenAlexMalformedJSONLError, match="blank line"):
+            sample_jsonl(io.BytesIO(content), compression=None, max_records=1,
+                         max_decoded_bytes=1_000, drain_to_eof=True)
+    clean = b'{"a":1}\r\n{"a":2}\r\n{"a":3}\r\n'
+    sample = sample_jsonl(io.BytesIO(clean), compression=None, max_records=1,
+                          max_decoded_bytes=1_000, drain_to_eof=True)
+    assert sample.total_record_count == 3
+
+
+def test_jsonl_drain_counts_an_unterminated_final_line() -> None:
+    content = b'{"a":1}\n{"a":2}\n{"a":3}'
+    sample = sample_jsonl(io.BytesIO(content), compression=None, max_records=1,
+                          max_decoded_bytes=1_000, drain_to_eof=True)
+    assert (sample.total_record_count, sample.unterminated_final_line, sample.total_decoded_bytes) == (
+        3, True, len(content))
+    assert sample.drained
+    terminated = sample_jsonl(io.BytesIO(content + b"\n"), compression=None, max_records=1,
+                              max_decoded_bytes=1_000, drain_to_eof=True)
+    assert (terminated.total_record_count, terminated.unterminated_final_line) == (3, False)
+    body = gz(content)
+    result, _ = profile_jsonl_bytes(body, drained(max_profile_records=1), record_count=3)
+    assert result.row_count == 3
+    assert "The final line has no newline terminator; it was counted as one record." in result.limitations
+    with pytest.raises(OpenAlexSizeMismatchError, match="record count"):
+        profile_jsonl_bytes(body, drained(max_profile_records=1), record_count=2)
+
+
+def test_sample_jsonl_validates_drain_parameters_through_profiling_limits() -> None:
+    content = jsonl([{"id": f"W{index}"} for index in range(10)])
+    for bad in (10**15, 0, -1, True, "100"):
+        with pytest.raises(ValueError):
+            sample_jsonl(io.BytesIO(content), compression=None, max_records=2, max_decoded_bytes=1_000,
+                         drain_to_eof=True, max_drain_decoded_bytes=bad)
+    with pytest.raises(ValidationError):
+        ProfilingLimits(max_drain_decoded_bytes=10**15)
+    from_limits = sample_jsonl(io.BytesIO(content), compression=None, max_records=2,
+                               max_decoded_bytes=1_000, limits=drained())
+    assert from_limits.drained and from_limits.total_record_count == 10
+    overridden = sample_jsonl(io.BytesIO(content), compression=None, max_records=2,
+                              max_decoded_bytes=1_000, limits=drained(), drain_to_eof=False)
+    assert not overridden.drained and overridden.total_record_count is None
+    with pytest.raises(OpenAlexProfileLimitError, match="drain exceeds"):
+        sample_jsonl(io.BytesIO(content), compression=None, max_records=2, max_decoded_bytes=1_000,
+                     limits=drained(max_drain_decoded_bytes=10))
+
+
+def test_jsonl_profile_without_drain_reports_no_sha256() -> None:
+    body = gz(jsonl([{"id": f"W{index}"} for index in range(10)]))
+    result, _ = profile_jsonl_bytes(body, ProfilingLimits(max_profile_records=2))
+    assert result.row_count is None
+    assert result.sha256 is None
+    assert result.evidence["sha256"] is EvidenceType.UNKNOWN
+    with pytest.raises(ValidationError):
+        OpenAlexSourceProfile.model_validate(
+            {**result.model_dump(), "sha256": "0" * 64,
+             "evidence": {**result.evidence, "sha256": EvidenceType.EXACT_FILE_METADATA}}
+        )
+
+
+def test_duplicate_keys_allowed_only_inside_abstract_inverted_index() -> None:
+    allowed = (
+        b'{"id": "W1", "abstract_inverted_index": {"is": [1], "a": [0], "is": [2]}}\n'
+        b'{"id": "W2", "abstract_inverted_index": {"b": [0]}}\n'
+    )
+    result, _ = profile_jsonl_bytes(gz(allowed))
+    assert result.sampled_duplicate_key_records == 1
+    assert result.evidence["sampled_duplicate_key_records"] is EvidenceType.SAMPLED_OBSERVATION
+    assert any("repeat a word key" in item for item in result.limitations)
+    for rejected in (
+        b'{"id": "W1", "id": "W2"}\n',
+        b'{"id": "W1", "ids": {"doi": "a", "doi": "b"}}\n',
+        b'{"id": "W1", "x": {"abstract_inverted_index": {"a": [0], "a": [1]}}}\n',
+    ):
+        with pytest.raises(OpenAlexMalformedJSONLError, match="duplicate key outside"):
+            profile_jsonl_bytes(gz(rejected))
+
+
+def test_parquet_footer_only_reports_exact_schema_without_values(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "values.parquet"
+    pq.write_table(
+        pa.table({"value": ["x" * 50_000], "n": pa.array([1], pa.int32())}), path,
+        compression="gzip", use_dictionary=False,
+    )
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("footer_only must not read values")
+
+    monkeypatch.setattr(pq.ParquetFile, "iter_batches", forbidden)
+    limits = ProfilingLimits(max_decoded_sample_bytes=1000, parquet_values="footer_only")
+    inspection = inspect_parquet(path, max_records=100, limits=limits)
+    assert inspection.row_count == 1
+    assert inspection.sampled_record_count == 0
+    assert inspection.values_read is False
+    assert [f.path for f in inspection.fields] == ["n", "value"]
+    assert all(f.sampled_present_count is None for f in inspection.fields)
+    with pytest.raises(OpenAlexProfileLimitError):
+        inspect_parquet(path, max_records=100, limits=ProfilingLimits(max_decoded_sample_bytes=1000))
+
+
+def test_parquet_profile_reports_sha256_after_full_read(tmp_path: Path) -> None:
+    body = write_parquet(tmp_path / "s.parquet", pa.table({"id": ["W1", "W2"]}))
+    result, _ = profile_parquet_bytes(body, ProfilingLimits(parquet_values="footer_only"), record_count=2)
+    assert result.sha256 == hashlib.sha256(body).hexdigest()
+    assert result.evidence["sha256"] is EvidenceType.EXACT_FILE_METADATA
+    assert result.sampled_record_count == 0
+    assert result.sampled_duplicate_key_records is None
+    assert any("footer_only" in item for item in result.limitations)
+    guards = [item for item in result.limitations if "guards" in item]
+    assert guards == [
+        "Footer byte/Thrift and schema/work guards apply; the dictionary-expansion and "
+        "batch-byte guards were not applied because no values were read (footer_only). "
+        "Footer declarations are not a hard native-memory sandbox, and cooperative "
+        "deadlines cannot interrupt native Arrow calls."
+    ]
+    sampled, _ = profile_parquet_bytes(body, record_count=2)
+    assert next(item for item in sampled.limitations if "guards" in item).startswith(
+        "Footer byte/Thrift, schema/work, conservative dictionary-expansion, and batch-byte guards apply."
+    )
+
+
+def test_inspect_parquet_footer_matches_full_file_metadata(tmp_path: Path) -> None:
+    from research_platform.sources.openalex.profile_parquet import inspect_parquet_footer
+
+    table = pa.table({
+        "id": [f"W{i}" for i in range(50)],
+        "nested": [{"a": i, "b": [str(i)]} for i in range(50)],
+    })
+    path = tmp_path / "full.parquet"
+    pq.write_table(table, path, row_group_size=10, compression="snappy")
+    body = path.read_bytes()
+    footer_len = int.from_bytes(body[-8:-4], "little")
+    tail = body[-(footer_len + 8 + 100):]
+    from_tail = inspect_parquet_footer(tail, file_size=len(body))
+    full = inspect_parquet(path, max_records=10, limits=ProfilingLimits(parquet_values="footer_only"))
+    assert from_tail.fields == full.fields
+    assert (from_tail.row_count, from_tail.row_group_count) == (50, 5)
+    assert from_tail.compression == full.compression == "SNAPPY"
+    assert from_tail.values_read is False
+
+
+def test_inspect_parquet_footer_rejects_truncated_or_oversized_tails(tmp_path: Path) -> None:
+    from research_platform.sources.openalex.profile_parquet import inspect_parquet_footer
+
+    path = tmp_path / "t.parquet"
+    pq.write_table(pa.table({"id": ["W1"]}), path)
+    body = path.read_bytes()
+    footer_len = int.from_bytes(body[-8:-4], "little")
+    with pytest.raises(OpenAlexMalformedParquetError, match="truncated"):
+        inspect_parquet_footer(body[-8:], file_size=len(body))
+    with pytest.raises(OpenAlexMalformedParquetError, match="truncated"):
+        inspect_parquet_footer(body[-(footer_len + 4):], file_size=len(body))
+    with pytest.raises(OpenAlexMalformedParquetError, match="truncated"):
+        inspect_parquet_footer(body[-(footer_len + 8):-1] + b"X", file_size=len(body))
+    with pytest.raises(OpenAlexProfileLimitError, match="footer exceeds"):
+        inspect_parquet_footer(
+            body[-(footer_len + 8):], file_size=len(body),
+            limits=ProfilingLimits(max_parquet_footer_bytes=footer_len - 1),
+        )
